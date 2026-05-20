@@ -1,5 +1,16 @@
 <%- include('../partials/header', { title }) %>
 
+<%
+// 项目总数:在 EJS 里直接算,避免改 Agent A 的 dashboard handler
+let projectCount = 0
+try {
+  const dbRef = (typeof req !== 'undefined' && req && req.app && req.app.locals && req.app.locals.db) ? req.app.locals.db : null
+  if (dbRef) {
+    projectCount = dbRef.prepare('SELECT COUNT(*) AS c FROM projects').get().c || 0
+  }
+} catch (_) { projectCount = 0 }
+%>
+
 <section class="space-y-6">
   <div>
     <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin</p>
@@ -7,7 +18,7 @@
     <p class="mt-1 text-sm text-slate-500">欢迎,<%= user.display_name || user.email %></p>
   </div>
 
-  <div class="grid gap-4 sm:grid-cols-3">
+  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
     <div class="rounded-xl border border-slate-200 bg-white p-5">
       <p class="text-xs font-medium uppercase text-slate-400">总用户</p>
       <p class="mt-2 text-2xl font-semibold"><%= stats.userCount %></p>
@@ -20,15 +31,26 @@
       <p class="text-xs font-medium uppercase text-slate-400">未使用邀请码</p>
       <p class="mt-2 text-2xl font-semibold"><%= stats.inviteCount %></p>
     </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">项目总数</p>
+      <p class="mt-2 text-2xl font-semibold"><%= projectCount %></p>
+    </div>
   </div>
 
-  <div class="grid gap-4 md:grid-cols-3">
+  <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
     <a
       href="/admin/users"
       class="block rounded-xl border border-slate-200 bg-white p-5 transition hover:border-slate-400 hover:shadow-sm"
     >
       <p class="text-base font-semibold text-slate-800">用户管理</p>
       <p class="mt-1 text-xs text-slate-500">查看、邀请、停启、改角色、设配额</p>
+    </a>
+    <a
+      href="/admin/projects"
+      class="block rounded-xl border border-slate-200 bg-white p-5 transition hover:border-slate-400 hover:shadow-sm"
+    >
+      <p class="text-base font-semibold text-slate-800">全部项目</p>
+      <p class="mt-1 text-xs text-slate-500">只读查看所有用户的项目(支持 / 审计用途)</p>
     </a>
     <a
       href="/admin/usage"

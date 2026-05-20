@@ -1,0 +1,118 @@
+<%- include('../../partials/header', { title }) %>
+
+<section class="space-y-6">
+  <div>
+    <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin · 只读</p>
+    <h1 class="mt-1 text-2xl font-semibold tracking-tight">
+      <% if (scopeUser) { %>
+        <%= scopeUser.display_name || scopeUser.email %> 的项目
+      <% } else { %>
+        全部项目
+      <% } %>
+    </h1>
+    <p class="mt-1 text-sm text-slate-500">
+      <% if (scopeUser) { %>
+        <a href="/admin/users/<%= encodeURIComponent(scopeUser.id) %>" class="underline hover:text-slate-900">返回用户详情</a> · 共 <%= rows.length %> 个项目(只读)
+      <% } else { %>
+        共 <%= rows.length %> 个项目(最多显示 100,管理员只读视图)
+      <% } %>
+    </p>
+  </div>
+
+  <!-- 警示条 -->
+  <div class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    <strong>管理员只读视图</strong> · 你正在以管理员身份查看其他用户的项目。所有访问均已记录到审计日志。
+  </div>
+
+  <!-- 过滤器 -->
+  <form action="<%= scopeUser ? `/admin/users/${encodeURIComponent(scopeUser.id)}/projects` : '/admin/projects' %>" method="get" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div class="grid gap-3 sm:grid-cols-4">
+      <% if (!scopeUser) { %>
+        <div>
+          <label class="block text-xs font-medium text-slate-600">用户(email 或 id)</label>
+          <input type="text" name="user" value="<%= filters.userQuery || '' %>"
+            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+            placeholder="user@example.com">
+        </div>
+      <% } %>
+      <div>
+        <label class="block text-xs font-medium text-slate-600">状态</label>
+        <select name="status" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900">
+          <option value="">全部</option>
+          <% allowedStatus.forEach(function(s) { %>
+            <option value="<%= s %>" <%= filters.status === s ? 'selected' : '' %>><%= s %></option>
+          <% }) %>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-600">关键词(标题 / 主题 / 学科)</label>
+        <input type="text" name="q" value="<%= filters.q || '' %>"
+          class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+          placeholder="machine learning">
+      </div>
+      <div class="flex items-end">
+        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">筛选</button>
+      </div>
+    </div>
+  </form>
+
+  <!-- 项目表格 -->
+  <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <table class="min-w-full divide-y divide-slate-200 text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-3 text-left font-medium">标题</th>
+          <th class="px-4 py-3 text-left font-medium">归属</th>
+          <th class="px-4 py-3 text-left font-medium">状态</th>
+          <th class="px-4 py-3 text-right font-medium">Records</th>
+          <th class="px-4 py-3 text-right font-medium">协议</th>
+          <th class="px-4 py-3 text-right font-medium">草稿</th>
+          <th class="px-4 py-3 text-left font-medium">创建</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <% if (rows.length === 0) { %>
+          <tr><td colspan="8" class="px-4 py-6 text-center text-sm text-slate-500">没有匹配的项目</td></tr>
+        <% } %>
+        <% rows.forEach(function(p) { %>
+          <tr class="hover:bg-slate-50">
+            <td class="px-4 py-3">
+              <div class="font-medium text-slate-800"><%= p.title %></div>
+              <% if (p.discipline) { %>
+                <div class="text-xs text-slate-500"><%= p.discipline %></div>
+              <% } %>
+            </td>
+            <td class="px-4 py-3 text-xs">
+              <% if (p.owner_email) { %>
+                <a href="/admin/users/<%= encodeURIComponent(p.user_id) %>" class="text-slate-700 underline hover:text-slate-900"><%= p.owner_email %></a>
+              <% } else { %>
+                <span class="text-slate-400">—</span>
+              <% } %>
+              <% if (p.owner_name) { %>
+                <div class="text-slate-500"><%= p.owner_name %></div>
+              <% } %>
+            </td>
+            <td class="px-4 py-3">
+              <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"><%= p.status %></span>
+            </td>
+            <td class="px-4 py-3 text-right font-mono text-xs text-slate-700"><%= p.records_count %></td>
+            <td class="px-4 py-3 text-right font-mono text-xs text-slate-700">
+              <%= p.protocol_versions %>
+              <% if (p.approved_protocols > 0) { %>
+                <span class="ml-1 rounded bg-emerald-100 px-1 py-0.5 text-[10px] font-medium text-emerald-700">✓</span>
+              <% } %>
+            </td>
+            <td class="px-4 py-3 text-right font-mono text-xs text-slate-700"><%= p.draft_section_count %></td>
+            <td class="px-4 py-3 text-xs text-slate-500"><%= p.created_at %></td>
+            <td class="px-4 py-3 text-right">
+              <a href="/admin/projects/<%= encodeURIComponent(p.id) %>" class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100">查看</a>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<%- include('../../partials/footer') %>

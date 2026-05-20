@@ -1,5 +1,24 @@
 <%- include('../partials/header', { title }) %>
 
+<%
+// 该用户的项目卡片(只读),admin Agent P 注入,不改 Agent A 的 handler
+let userProjects = []
+try {
+  const dbRef = (typeof req !== 'undefined' && req && req.app && req.app.locals && req.app.locals.db) ? req.app.locals.db : null
+  if (dbRef) {
+    userProjects = dbRef.prepare(`
+      SELECT p.id, p.title, p.status, p.created_at, p.updated_at,
+             (SELECT COUNT(*) FROM records r WHERE r.project_id = p.id) AS records_count,
+             (SELECT COUNT(*) FROM protocols pr WHERE pr.project_id = p.id AND pr.approved_by_user = 1) AS approved_protocols
+      FROM projects p
+      WHERE p.user_id = ?
+      ORDER BY p.updated_at DESC
+      LIMIT 50
+    `).all(target.id)
+  }
+} catch (_) { userProjects = [] }
+%>
+
 <section class="space-y-6">
   <div>
     <a href="/admin/users" class="text-xs text-slate-500 hover:text-slate-900">← 返回用户列表</a>
@@ -209,6 +228,44 @@
         class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
       >保存配额</button>
     </form>
+  </div>
+
+  <!-- 该用户的项目(管理员只读视图)-->
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div class="flex items-center justify-between gap-2">
+      <div>
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">该用户的项目</h2>
+        <p class="mt-1 text-xs text-slate-500">共 <%= userProjects.length %> 个项目(管理员只读)</p>
+      </div>
+      <a href="/admin/users/<%= encodeURIComponent(target.id) %>/projects"
+         class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100">
+        以列表打开 →
+      </a>
+    </div>
+    <% if (userProjects.length === 0) { %>
+      <p class="mt-4 text-sm text-slate-500">该用户尚未创建任何项目</p>
+    <% } else { %>
+      <ul class="mt-4 grid gap-3 sm:grid-cols-2">
+        <% userProjects.forEach(function(p) { %>
+          <li>
+            <a href="/admin/projects/<%= encodeURIComponent(p.id) %>"
+               class="block rounded-lg border border-slate-200 bg-slate-50 p-3 transition hover:border-slate-400 hover:bg-white">
+              <div class="flex items-center justify-between gap-2">
+                <span class="truncate font-medium text-slate-800"><%= p.title %></span>
+                <span class="shrink-0 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-700"><%= p.status %></span>
+              </div>
+              <div class="mt-1 flex gap-3 text-xs text-slate-500">
+                <span><%= p.records_count %> records</span>
+                <% if (p.approved_protocols > 0) { %>
+                  <span class="text-emerald-700">协议已批</span>
+                <% } %>
+                <span class="ml-auto"><%= p.updated_at %></span>
+              </div>
+            </a>
+          </li>
+        <% }) %>
+      </ul>
+    <% } %>
   </div>
 </section>
 

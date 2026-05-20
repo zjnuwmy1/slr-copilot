@@ -12,6 +12,7 @@ import authRouter from './routes/auth.js'
 import adminUsersRouter from './routes/admin/users.js'
 import adminUsageRouter from './routes/admin/usage.js'
 import adminAuditRouter from './routes/admin/audit.js'
+import adminProjectsRouter from './routes/admin/projects.js'
 import credentialsRouter from './routes/account/credentials.js'
 import oauthRouter from './routes/account/oauth.js'
 import llmRouter from './routes/account/llm.js'
@@ -120,6 +121,7 @@ app.get('/account', requireUser, (req, res) => {
 // 管理员后台(/admin/*)— 更具体的子路径先挂,Express 按注册顺序匹配
 app.use('/admin/usage', requireAdmin, adminUsageRouter)
 app.use('/admin/audit', requireAdmin, adminAuditRouter)
+app.use('/admin/projects', requireAdmin, adminProjectsRouter)
 app.use('/admin', requireAdmin, adminUsersRouter)
 
 // 404 fallback

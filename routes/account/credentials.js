@@ -30,6 +30,7 @@ import {
   listSharesOfCredential,
   listSharedWithUser,
 } from '../../services/credentials.js'
+import { listCredentialsSharedToUser } from '../../services/credential-sharing.js'
 
 const router = Router()
 
@@ -50,6 +51,15 @@ router.get('/', (req, res) => {
     credentials,
     sharedWithMe,
   })
+})
+
+// ============== GET /shared-with-me.json — 共享给当前用户的凭证 JSON ==============
+// 注意:必须放在 GET /:id 前面,否则会被 :id 截胡。
+
+router.get('/shared-with-me.json', (req, res) => {
+  const db = req.app.locals.db
+  const rows = listCredentialsSharedToUser(db, req.user.id)
+  res.json({ ok: true, items: rows })
 })
 
 // ============== GET /new — 表单 ==============

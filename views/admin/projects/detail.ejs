@@ -1,0 +1,387 @@
+<%- include('../../partials/header', { title }) %>
+
+<section class="space-y-6">
+  <!-- 顶部:返回 + 标题 + admin 警示 -->
+  <div>
+    <a href="/admin/projects" class="text-xs text-slate-500 hover:text-slate-900">← 返回全部项目</a>
+    <h1 class="mt-1 text-2xl font-semibold tracking-tight"><%= project.title %></h1>
+    <p class="mt-1 text-sm text-slate-500">
+      项目 ID:<code class="font-mono text-xs"><%= project.id %></code>
+    </p>
+  </div>
+
+  <!-- 显眼的 read-only 警示 -->
+  <div class="rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-3 text-sm">
+    <div class="font-semibold text-amber-900">管理员只读模式 — 这是
+      <% if (owner.email) { %>
+        <a href="/admin/users/<%= encodeURIComponent(owner.id) %>" class="underline hover:text-amber-700"><%= owner.email %></a>
+      <% } else { %>
+        用户(<%= owner.id %>)
+      <% } %>
+      的项目
+    </div>
+    <p class="mt-1 text-xs text-amber-800">
+      你正在以管理员身份只读查看此项目,所有访问已记录到审计日志(<code>admin_viewed_project</code>)。
+      此页面不允许任何写操作,如需协助用户请联系本人或在本人授权下进行。
+    </p>
+  </div>
+
+  <!-- 项目元数据 -->
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">项目元数据</h2>
+    <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+      <div>
+        <dt class="text-xs text-slate-500">归属用户</dt>
+        <dd class="mt-0.5 text-slate-700">
+          <% if (owner.email) { %>
+            <a href="/admin/users/<%= encodeURIComponent(owner.id) %>" class="underline hover:text-slate-900"><%= owner.email %></a>
+            <% if (owner.display_name) { %> · <%= owner.display_name %><% } %>
+            <% if (!owner.is_active) { %>
+              <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">已停用</span>
+            <% } %>
+          <% } else { %>
+            <span class="text-slate-400">(owner 已删除)</span>
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">状态</dt>
+        <dd class="mt-0.5">
+          <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"><%= project.status %></span>
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">综述类型</dt>
+        <dd class="mt-0.5 text-slate-700"><%= project.review_type || '—' %></dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">学科</dt>
+        <dd class="mt-0.5 text-slate-700"><%= project.discipline || '—' %></dd>
+      </div>
+      <div class="sm:col-span-2">
+        <dt class="text-xs text-slate-500">主题</dt>
+        <dd class="mt-0.5 whitespace-pre-wrap text-slate-700"><%= project.topic %></dd>
+      </div>
+      <% if (project.goal) { %>
+        <div class="sm:col-span-2">
+          <dt class="text-xs text-slate-500">目标</dt>
+          <dd class="mt-0.5 whitespace-pre-wrap text-slate-700"><%= project.goal %></dd>
+        </div>
+      <% } %>
+      <div>
+        <dt class="text-xs text-slate-500">年份范围</dt>
+        <dd class="mt-0.5 text-slate-700">
+          <% if (project.year_start || project.year_end) { %>
+            <%= project.year_start || '*' %> – <%= project.year_end || '*' %>
+          <% } else { %>—<% } %>
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">数据库</dt>
+        <dd class="mt-0.5 text-slate-700">
+          <% if (project.databases.length) { %><%= project.databases.join(', ') %><% } else { %>—<% } %>
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">语言</dt>
+        <dd class="mt-0.5 text-slate-700">
+          <% if (project.language_limits.length) { %><%= project.language_limits.join(', ') %><% } else { %>—<% } %>
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">文献类型</dt>
+        <dd class="mt-0.5 text-slate-700">
+          <% if (project.document_types.length) { %><%= project.document_types.join(', ') %><% } else { %>—<% } %>
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">创建</dt>
+        <dd class="mt-0.5 text-xs text-slate-500"><%= project.created_at %></dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">更新</dt>
+        <dd class="mt-0.5 text-xs text-slate-500"><%= project.updated_at %></dd>
+      </div>
+    </dl>
+  </div>
+
+  <!-- 进度 stepper(只读) -->
+  <% if (progress && progress.stepStatus) { %>
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">工作流进度(只读)</h2>
+      <% if (progress.prismaProgress) { %>
+        <p class="mt-1 text-xs text-slate-500">
+          PRISMA 27 项:<%= progress.prismaProgress.done %>/<%= progress.prismaProgress.total %> 已完成
+          (<%= progress.prismaProgress.donePct %>%)
+        </p>
+      <% } %>
+      <ol class="mt-4 grid gap-2 sm:grid-cols-2">
+        <%
+        const stepLabels = {
+          protocol: '1. 协议',
+          search: '2. 检索式',
+          screening: '3. 筛选',
+          extraction: '4. 抽取',
+          rob: '5. 偏倚风险',
+          synthesis: '6. 综合',
+          certainty: '7. 证据强度',
+          report: '8. 报告',
+        }
+        const colorFor = {
+          done: 'border-emerald-300 bg-emerald-50 text-emerald-800',
+          in_progress: 'border-blue-300 bg-blue-50 text-blue-800',
+          not_started: 'border-slate-200 bg-white text-slate-600',
+          locked: 'border-slate-200 bg-slate-50 text-slate-400',
+        }
+        %>
+        <% Object.keys(stepLabels).forEach(function(key) { %>
+          <% const st = progress.stepStatus[key] || { status: 'not_started', summary: '—' } %>
+          <li class="rounded-lg border <%= colorFor[st.status] || colorFor.not_started %> px-3 py-2 text-sm">
+            <div class="flex items-center justify-between">
+              <span class="font-medium"><%= stepLabels[key] %></span>
+              <span class="text-xs uppercase tracking-wider"><%= st.status %></span>
+            </div>
+            <div class="mt-0.5 text-xs"><%= st.summary || '—' %></div>
+          </li>
+        <% }) %>
+      </ol>
+    </div>
+  <% } %>
+
+  <!-- 协议版本 -->
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div class="flex items-baseline justify-between">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">协议版本</h2>
+      <span class="text-xs text-slate-500"><%= protocols.length %> 个版本</span>
+    </div>
+    <% if (protocols.length === 0) { %>
+      <p class="mt-4 text-sm text-slate-500">尚未生成协议</p>
+    <% } else { %>
+      <ul class="mt-4 space-y-3">
+        <% protocols.forEach(function(p) { %>
+          <li class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span class="font-semibold text-slate-800">v<%= p.version %></span>
+                <span class="rounded bg-slate-200 px-2 py-0.5 text-[10px] font-medium uppercase text-slate-700"><%= p.generated_by %></span>
+                <% if (p.approved_by_user) { %>
+                  <span class="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">已审批</span>
+                <% } %>
+              </div>
+              <span class="text-xs text-slate-500"><%= p.created_at %></span>
+            </div>
+            <% if (p.model) { %>
+              <p class="mt-1 text-xs text-slate-500">模型:<code class="font-mono"><%= p.model %></code></p>
+            <% } %>
+            <% if (p.research_questions && p.research_questions.length) { %>
+              <div class="mt-2 text-xs text-slate-700">
+                <div class="font-medium text-slate-500">研究问题(<%= p.research_questions.length %>)</div>
+                <ul class="ml-4 mt-1 list-disc space-y-0.5">
+                  <% p.research_questions.slice(0, 5).forEach(function(q) { %>
+                    <li><%= q %></li>
+                  <% }) %>
+                  <% if (p.research_questions.length > 5) { %>
+                    <li class="text-slate-400">…(共 <%= p.research_questions.length %> 条)</li>
+                  <% } %>
+                </ul>
+              </div>
+            <% } %>
+            <% if (p.inclusion_criteria && p.inclusion_criteria.length) { %>
+              <div class="mt-2 text-xs text-slate-700">
+                <span class="font-medium text-slate-500">纳入标准:</span> <%= p.inclusion_criteria.length %> 条
+              </div>
+            <% } %>
+            <% if (p.exclusion_criteria && p.exclusion_criteria.length) { %>
+              <div class="text-xs text-slate-700">
+                <span class="font-medium text-slate-500">排除标准:</span> <%= p.exclusion_criteria.length %> 条
+              </div>
+            <% } %>
+          </li>
+        <% }) %>
+      </ul>
+    <% } %>
+  </div>
+
+  <!-- 检索式 -->
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div class="flex items-baseline justify-between">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">检索式</h2>
+      <span class="text-xs text-slate-500"><%= searchStrategies.length %> 条</span>
+    </div>
+    <% if (searchStrategies.length === 0) { %>
+      <p class="mt-4 text-sm text-slate-500">尚未生成检索式</p>
+    <% } else { %>
+      <ul class="mt-4 space-y-2">
+        <% searchStrategies.forEach(function(s) { %>
+          <li class="rounded border border-slate-200 bg-slate-50 p-3 text-xs">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span class="font-semibold text-slate-800"><%= s.database_name %></span>
+                <span class="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] uppercase text-slate-600"><%= s.query_type %></span>
+                <span class="text-slate-400">v<%= s.version %></span>
+                <% if (s.result_count != null) { %>
+                  <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"><%= s.result_count %> hits</span>
+                <% } %>
+              </div>
+              <span class="text-slate-400"><%= s.created_at %></span>
+            </div>
+            <pre class="mt-2 whitespace-pre-wrap break-all rounded bg-white p-2 font-mono text-[11px] text-slate-700"><%= s.query_text %></pre>
+          </li>
+        <% }) %>
+      </ul>
+    <% } %>
+  </div>
+
+  <!-- Records 计数 + Zotero 包 -->
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">Records</h2>
+      <dl class="mt-3 grid grid-cols-3 gap-3 text-sm">
+        <div>
+          <dt class="text-xs text-slate-500">总数</dt>
+          <dd class="mt-0.5 text-xl font-semibold text-slate-800"><%= recordsStats.total || 0 %></dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-500">含 PDF</dt>
+          <dd class="mt-0.5 text-xl font-semibold text-slate-800"><%= recordsStats.with_pdf || 0 %></dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-500">重复</dt>
+          <dd class="mt-0.5 text-xl font-semibold text-slate-800"><%= recordsStats.duplicates || 0 %></dd>
+        </div>
+      </dl>
+      <div class="mt-4 flex gap-3 text-xs">
+        <a href="/admin/projects/<%= encodeURIComponent(project.id) %>/records.json" class="text-slate-700 underline hover:text-slate-900">records.json →</a>
+        <a href="/admin/projects/<%= encodeURIComponent(project.id) %>/audit.json" class="text-slate-700 underline hover:text-slate-900">audit.json →</a>
+      </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">Zotero 包</h2>
+      <% if (packages.length === 0) { %>
+        <p class="mt-3 text-sm text-slate-500">未上传过 Zotero 包</p>
+      <% } else { %>
+        <ul class="mt-3 space-y-2 text-xs">
+          <% packages.forEach(function(pk) { %>
+            <li class="rounded border border-slate-200 bg-slate-50 p-2">
+              <div class="flex items-center justify-between">
+                <span class="font-mono text-slate-700"><%= pk.source_filename || pk.id %></span>
+                <span class="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] uppercase text-slate-700"><%= pk.status %></span>
+              </div>
+              <div class="mt-1 text-slate-500">
+                <%= pk.total_records || 0 %> 条 · PDF <%= pk.total_with_pdf || 0 %> · DOI <%= pk.total_with_doi || 0 %> · 重复 <%= pk.total_duplicates || 0 %>
+              </div>
+            </li>
+          <% }) %>
+        </ul>
+      <% } %>
+    </div>
+  </div>
+
+  <!-- 筛选 / 抽取统计 -->
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">筛选(Screening)</h2>
+      <% if (screeningStats.length === 0) { %>
+        <p class="mt-3 text-sm text-slate-500">尚无筛选数据</p>
+      <% } else { %>
+        <table class="mt-3 w-full text-xs">
+          <thead class="text-slate-500">
+            <tr>
+              <th class="py-1 text-left font-normal">阶段</th>
+              <th class="py-1 text-right font-normal">总</th>
+              <th class="py-1 text-right font-normal">纳入</th>
+              <th class="py-1 text-right font-normal">排除</th>
+              <th class="py-1 text-right font-normal">不确定</th>
+              <th class="py-1 text-right font-normal">AI 已跑</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% screeningStats.forEach(function(s) { %>
+              <tr class="border-t border-slate-100">
+                <td class="py-1 font-medium text-slate-700"><%= s.stage %></td>
+                <td class="py-1 text-right font-mono"><%= s.total %></td>
+                <td class="py-1 text-right font-mono text-emerald-700"><%= s.included %></td>
+                <td class="py-1 text-right font-mono text-red-700"><%= s.excluded %></td>
+                <td class="py-1 text-right font-mono text-amber-700"><%= s.uncertain %></td>
+                <td class="py-1 text-right font-mono text-slate-600"><%= s.ai_done %></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">抽取(Extraction)</h2>
+      <dl class="mt-3 grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <dt class="text-xs text-slate-500">已抽取</dt>
+          <dd class="mt-0.5 text-xl font-semibold text-slate-800"><%= extractionStats.total || 0 %></dd>
+        </div>
+        <div>
+          <dt class="text-xs text-slate-500">人工已核</dt>
+          <dd class="mt-0.5 text-xl font-semibold text-slate-800"><%= extractionStats.verified || 0 %></dd>
+        </div>
+      </dl>
+    </div>
+  </div>
+
+  <!-- 综述初稿 -->
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div class="flex items-baseline justify-between">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">综述初稿</h2>
+      <span class="text-xs text-slate-500"><%= drafts.length %> 条</span>
+    </div>
+    <% if (drafts.length === 0) { %>
+      <p class="mt-3 text-sm text-slate-500">尚无草稿</p>
+    <% } else { %>
+      <table class="mt-3 w-full text-xs">
+        <thead class="text-slate-500">
+          <tr>
+            <th class="py-1 text-left font-normal">章节</th>
+            <th class="py-1 text-right font-normal">版本</th>
+            <th class="py-1 text-right font-normal">字符</th>
+            <th class="py-1 text-left font-normal">用户编辑</th>
+            <th class="py-1 text-left font-normal">模型</th>
+            <th class="py-1 text-left font-normal">更新</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% drafts.forEach(function(d) { %>
+            <tr class="border-t border-slate-100">
+              <td class="py-1 font-medium text-slate-700"><%= d.section_name %></td>
+              <td class="py-1 text-right font-mono">v<%= d.version %></td>
+              <td class="py-1 text-right font-mono"><%= d.content_len || 0 %></td>
+              <td class="py-1">
+                <% if (d.user_edited) { %>
+                  <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">是</span>
+                <% } else { %>
+                  <span class="text-slate-400">否</span>
+                <% } %>
+              </td>
+              <td class="py-1 font-mono text-[10px] text-slate-500"><%= d.model || '—' %></td>
+              <td class="py-1 text-[10px] text-slate-500"><%= d.updated_at %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+
+  <!-- 操作区域(只读 / disabled) -->
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-6">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">操作</h2>
+    <p class="mt-2 text-xs text-slate-500">以下操作在管理员只读模式下不可用。如需协助用户,请联系本人。</p>
+    <div class="mt-4 flex flex-wrap gap-2">
+      <button disabled class="cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-400" title="只读模式不可用">生成协议(只读)</button>
+      <button disabled class="cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-400" title="只读模式不可用">编辑协议(只读)</button>
+      <button disabled class="cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-400" title="只读模式不可用">审批协议(只读)</button>
+      <button disabled class="cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-400" title="只读模式不可用">生成检索式(只读)</button>
+      <button disabled class="cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-400" title="只读模式不可用">运行筛选(只读)</button>
+      <button disabled class="cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-400" title="只读模式不可用">运行抽取(只读)</button>
+    </div>
+  </div>
+</section>
+
+<%- include('../../partials/footer') %>

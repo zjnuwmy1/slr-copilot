@@ -18,6 +18,7 @@
 import { Router } from 'express'
 import { generateInviteCode } from '../../services/crypto.js'
 import { audit } from '../../services/audit.js'
+import { listProjectsForUser } from './projects.js'
 
 const router = Router()
 
@@ -350,6 +351,49 @@ router.post('/users/:id/quota', (req, res) => {
 
   flash(req, 'success', '配额已更新')
   res.redirect(`/admin/users/${encodeURIComponent(id)}`)
+})
+
+// ============== 该用户的项目(只读列表)==============
+
+router.get('/users/:id/projects', (req, res) => {
+  const db = req.app.locals.db
+  const id = String(req.params.id)
+  const user = db
+    .prepare(`SELECT id, email, display_name, role, is_active FROM users WHERE id = ?`)
+    .get(id)
+  if (!user) {
+    return res.status(404).render('error', { title: 'Not Found', message: '用户不存在' })
+  }
+
+  const filters = {
+    status: req.query.status ? String(req.query.status) : '',
+    q: req.query.q ? String(req.query.q).slice(0, 200) : '',
+  }
+  const rows = listProjectsForUser(db, user.id, filters, 200)
+
+  audit(db, req, {
+    eventType: 'admin_listed_user_projects',
+    userId: req.user.id,
+    actorUserId: req.user.id,
+    targetUserId: user.id,
+    payload: {
+      admin_email: req.user.email,
+      target_email: user.email,
+      filters: { status: filters.status || null, q: filters.q || null },
+      result_count: rows.length,
+    },
+  })
+
+  res.render('admin/projects/list', {
+    title: `${user.display_name || user.email} 的项目`,
+    rows,
+    filters: { userQuery: '', status: filters.status, q: filters.q },
+    allowedStatus: [
+      'draft','protocol_pending','protocol_approved','searching','screening',
+      'extracting','synthesizing','complete','archived',
+    ],
+    scopeUser: user,
+  })
 })
 
 export default router

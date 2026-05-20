@@ -1,5 +1,17 @@
 <%- include('../partials/header', { title }) %>
 
+<%
+// 项目数:每个用户的 project_count(在 EJS 注入,不改 Agent A 的 handler)
+let projectCountByUser = new Map()
+try {
+  const dbRef = (typeof req !== 'undefined' && req && req.app && req.app.locals && req.app.locals.db) ? req.app.locals.db : null
+  if (dbRef) {
+    const counts = dbRef.prepare('SELECT user_id, COUNT(*) AS c FROM projects GROUP BY user_id').all()
+    for (const r of counts) projectCountByUser.set(r.user_id, r.c)
+  }
+} catch (_) { /* keep empty map */ }
+%>
+
 <section class="space-y-6">
   <div class="flex items-end justify-between gap-4">
     <div>
@@ -23,6 +35,7 @@
           <th class="px-4 py-3 text-left font-medium">状态</th>
           <th class="px-4 py-3 text-left font-medium">创建</th>
           <th class="px-4 py-3 text-left font-medium">最后登录</th>
+          <th class="px-4 py-3 text-right font-medium">项目</th>
           <th class="px-4 py-3"></th>
         </tr>
       </thead>
@@ -51,6 +64,14 @@
             </td>
             <td class="px-4 py-3 text-xs text-slate-500"><%= u.created_at %></td>
             <td class="px-4 py-3 text-xs text-slate-500"><%= u.last_login_at || '—' %></td>
+            <td class="px-4 py-3 text-right font-mono text-xs text-slate-700">
+              <% const pc = projectCountByUser.get(u.id) || 0 %>
+              <% if (pc > 0) { %>
+                <a href="/admin/users/<%= encodeURIComponent(u.id) %>/projects" class="underline hover:text-slate-900"><%= pc %></a>
+              <% } else { %>
+                <span class="text-slate-400">0</span>
+              <% } %>
+            </td>
             <td class="px-4 py-3 text-right">
               <a href="/admin/users/<%= encodeURIComponent(u.id) %>" class="text-xs text-slate-700 underline hover:text-slate-900">详情</a>
             </td>
