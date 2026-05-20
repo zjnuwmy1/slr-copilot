@@ -10,8 +10,9 @@
  *   step_model.drafting            — 章节写作
  *
  * 值可以是 model alias('heavy' / 'light')或具体模型名:
- *   anthropic: claude-sonnet-4-7 / -4-6 / claude-haiku-4-5 / claude-opus-4-7 / -4-6
- *   openai:    gpt-5 / gpt-5-mini / o3 / gpt-4o
+ *   anthropic: claude-opus-{4-7,4-6,4-5} / claude-sonnet-4-6 / claude-haiku-4-5
+ *              (Sonnet/Haiku 4-7 不存在,实测 404)
+ *   openai:    gpt-5.5 / gpt-5.4 / gpt-5.4-mini / gpt-5.3-codex / gpt-5.3-codex-spark / gpt-5.2
  *
  * llm.js 在 runLlm 入口先调 resolveStepModel(),按用户已绑凭证 provider 选合适模型。
  */
@@ -20,20 +21,25 @@
 // 可选模型清单 — Admin UI 用,LLM router 也用作"用户没绑该 provider 时降级"
 // ============================================================
 
+// 实测验证(2026-05-20 用 Claude Max 订阅 + ChatGPT Pro 订阅 + 各自 CLI 实测)
+// Anthropic:claude-sonnet-4-7 / claude-haiku-4-7 都 404,Anthropic 目前只有 Opus 升到 4.7
+// OpenAI:gpt-5 / o3 / gpt-4o 系列已被 gpt-5.x 取代
 export const AVAILABLE_MODELS = {
   anthropic: [
-    { id: 'claude-opus-4-7',   label: 'Claude Opus 4.7 (最强最新)',          tier: 'flagship' },
-    { id: 'claude-opus-4-6',   label: 'Claude Opus 4.6 (上一代旗舰)',        tier: 'flagship' },
-    { id: 'claude-sonnet-4-7', label: 'Claude Sonnet 4.7 (推荐,最新平衡)',  tier: 'standard' },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (上一代平衡)',      tier: 'standard' },
-    { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5 (快且便宜)',         tier: 'light' },
+    { id: 'claude-opus-4-7',          label: 'Claude Opus 4.7 (旗舰 · 1M 上下文 / 64K 输出)', tier: 'flagship' },
+    { id: 'claude-opus-4-6',          label: 'Claude Opus 4.6 (上一代旗舰)',                  tier: 'flagship' },
+    { id: 'claude-opus-4-5',          label: 'Claude Opus 4.5 (更早旗舰)',                    tier: 'flagship' },
+    { id: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6 (推荐 · 600K 上下文)',        tier: 'standard' },
+    { id: 'claude-haiku-4-5',         label: 'Claude Haiku 4.5 (快且便宜)',                   tier: 'light' },
+    { id: 'claude-haiku-4-5-20251001',label: 'Claude Haiku 4.5 (snapshot 20251001)',          tier: 'light' },
   ],
   openai: [
-    { id: 'gpt-5',       label: 'GPT-5 (最强)',           tier: 'flagship' },
-    { id: 'gpt-5-mini',  label: 'GPT-5 mini (平衡)',      tier: 'standard' },
-    { id: 'o3',          label: 'o3 (推理强)',            tier: 'flagship' },
-    { id: 'gpt-4o',      label: 'GPT-4o (上一代标杆)',    tier: 'standard' },
-    { id: 'gpt-4o-mini', label: 'GPT-4o mini (快/便宜)',  tier: 'light' },
+    { id: 'gpt-5.5',              label: 'GPT-5.5 (旗舰最新)',                tier: 'flagship' },
+    { id: 'gpt-5.4',              label: 'GPT-5.4 (推荐 / 平衡)',             tier: 'standard' },
+    { id: 'gpt-5.4-mini',         label: 'GPT-5.4 mini (快/便宜)',            tier: 'light' },
+    { id: 'gpt-5.3-codex',        label: 'GPT-5.3 Codex (代码专长)',          tier: 'flagship' },
+    { id: 'gpt-5.3-codex-spark',  label: 'GPT-5.3 Codex Spark (Pro 预览)',    tier: 'flagship' },
+    { id: 'gpt-5.2',              label: 'GPT-5.2 (上一代)',                  tier: 'standard' },
   ],
 }
 
@@ -82,14 +88,14 @@ export const STEP_KEYS = Object.keys(STEP_SPECS)
 
 const DEFAULT_BY_PROVIDER_AND_TIER = {
   anthropic: {
-    flagship: 'claude-opus-4-7',
-    standard: 'claude-sonnet-4-7',
-    light:    'claude-haiku-4-5',
+    flagship: 'claude-opus-4-7',     // 实测可用,1M context
+    standard: 'claude-sonnet-4-6',   // Sonnet 4-7 不存在,4-6 仍是 standard
+    light:    'claude-haiku-4-5',    // Haiku 4-7 不存在
   },
   openai: {
-    flagship: 'gpt-5',
-    standard: 'gpt-5-mini',
-    light:    'gpt-4o-mini',
+    flagship: 'gpt-5.5',
+    standard: 'gpt-5.4',
+    light:    'gpt-5.4-mini',
   },
 }
 
