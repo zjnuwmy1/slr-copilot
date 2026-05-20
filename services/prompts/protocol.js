@@ -30,6 +30,14 @@ export const PROTOCOL_SYSTEM = `你是系统性文献综述(SLR)方法学专家�
 5. inclusion / exclusion 各 4-7 条,清晰互斥。
 6. clarification_questions 列出你认为模糊、需要用户进一步确认的点(0-4 条)。
 7. **只输出 JSON**,不要前后加解释、Markdown、代码围栏。
+
+写作风格(所有给用户看的中文字段都要遵守:research_questions / inclusion_criteria /
+exclusion_criteria / clarification_questions / rationale):
+- **用日常学术中文**,不堆砌生僻术语,不要"赋能 / 范式 / 解构 / 构建 / 驱动 / 路径 / 机制"这类八股套话。
+- 必要的学科术语可以保留,但要让本科生读得懂;有更通俗的同义词时优先用通俗的。
+- 一句话能说清的不绕长句、不嵌套从句;每条 RQ / 纳排标准 ≤ 35 个汉字为宜。
+- 不要"探究 / 探讨 / 旨在 / 拟"这类八股开头,直接陈述要查什么、要纳入什么。
+- **英文 concept_groups.terms 不受此约束**,英文术语用学术规范名(MeSH / Scopus 关键词)。
 `
 
 /**
