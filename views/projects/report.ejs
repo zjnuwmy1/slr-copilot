@@ -5,11 +5,16 @@
   <%- include('partials/stepper', { project, progress, currentStep: 'report' }) %>
 
   <section class="space-y-6">
-    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-      <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 8 of 8 · <%= stepLabel %></p>
+    <!-- Step 8 是综述输出 — PRISMA 在这里要前台,因为最终成稿必须 PRISMA 合规 -->
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3">
+      <p class="text-xs font-medium uppercase tracking-wider text-emerald-700">第 8 步 / 共 8 步</p>
+      <h1 class="mt-1 text-lg font-semibold text-slate-900">写成可投稿的综述</h1>
       <p class="mt-1 text-sm text-slate-600">
-        覆盖 PRISMA
-        <% stepItems.forEach((it, i) => { %><span class="font-mono">#<%= it.item_number %></span><%= i < stepItems.length - 1 ? ' · ' : '' %><% }) %>
+        最终成稿环节 — 整文必须 PRISMA 2020 合规。下方会:① 生成 9 章节,每个事实陈述带 [record_id] 占位 + 强校验;② 自动算 PRISMA flow diagram(从筛选日志);③ 导出 Markdown 时把 PRISMA 27 项清单作为附录。
+      </p>
+      <p class="mt-2 text-xs text-emerald-700">
+        ✓ 覆盖 PRISMA
+        <% (stepItems || []).forEach((it, i) => { %><span class="font-mono">#<%= it.item_number %></span><%= i < (stepItems||[]).length - 1 ? ' · ' : '' %><% }) %>
       </p>
     </div>
 

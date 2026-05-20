@@ -37,18 +37,17 @@
   <%- include('partials/stepper', { project, progress: progress || { stepStatus: {}, prismaProgress: { donePct: 0, done: 0, total: 42 } }, currentStep: 'screening' }) %>
 
   <section class="space-y-6 min-w-0">
-    <!-- 顶部标题 -->
-    <div class="flex items-start justify-between gap-4">
-      <div class="min-w-0">
-        <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Screening · 标题/摘要初筛</p>
-        <h2 class="mt-1 text-xl font-semibold text-slate-900">AI 初筛 · 三态决定</h2>
-        <p class="mt-1 text-sm text-slate-500">
-          基于已审批协议的纳排标准,对每条文献的标题/摘要/关键词跑一次 AI(haiku 4.5),给出 include / exclude / uncertain 建议;
-          你再做最终人工决定。覆盖 PRISMA #8(筛选过程)+ #9(筛选记录)。
-        </p>
-      </div>
+    <%- include('partials/step-banner', {
+      stepNum: 3,
+      stepTitle: '挑出真正相关的',
+      stepIntro: 'AI 读每篇的标题/摘要,按你的纳入排除标准给出 include / exclude / 待定建议。你做最终人工决定 — 这一步过滤掉大部分不相关的,后面只对纳入的细读。',
+      prismaItems: '#9a Selection process · #16a Study selection · #16b Reasons for exclusion',
+    }) %>
+
+    <!-- 顶部操作栏 -->
+    <div class="flex justify-end">
       <a href="<%= filterBase %>/export.csv"
-         class="flex-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100">
+         class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100">
         导出 CSV 筛选 log
       </a>
     </div>

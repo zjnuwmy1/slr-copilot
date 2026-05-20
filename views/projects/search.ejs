@@ -14,12 +14,16 @@
 
   <section class="space-y-6 min-w-0">
 
-    <!-- 顶部标题 + 操作栏 -->
+    <%- include('partials/step-banner', {
+      stepNum: 2,
+      stepTitle: '准备检索关键词',
+      stepIntro: 'AI 帮你把协议里的概念组扩展成可直接粘到 Web of Science / Scopus / PubMed 的检索式 — 三库 × 高召回/平衡/高精确 共 9 条。',
+      prismaItems: '#6 Information sources · #7 Search strategy',
+    }) %>
+
+    <!-- 顶部操作栏 -->
     <div class="flex items-start justify-between gap-4">
-      <div>
-        <h2 class="text-xl font-semibold text-slate-900">检索式</h2>
-        <p class="mt-1 text-sm text-slate-500">基于已审批协议,生成 Web of Science / Scopus / PubMed 三库 × 三版本(高召回 / 平衡 / 高精确)的检索式。覆盖 PRISMA #6(信息来源)+ #7(检索策略)。</p>
-      </div>
+      <div></div>
       <% if (latestVersion != null) { %>
         <a href="/projects/<%= project.id %>/search/export.md"
            class="flex-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100">

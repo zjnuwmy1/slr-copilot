@@ -26,12 +26,12 @@
 
   <section class="space-y-6 min-w-0">
     <!-- 顶部说明 -->
-    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-      <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 4 of 8 · <%= stepLabel %></p>
-      <p class="mt-1 text-sm text-slate-600">
-        对筛选通过(include)且含 PDF 的文献,跑 AI 全文结构化抽取:研究特征 / 干预 / 结果 / 关键发现 / 局限。每条 finding 会反向锚定到具体段落(chunk),便于后续 synthesis 跨论文聚类。
-      </p>
-    </div>
+    <%- include('partials/step-banner', {
+      stepNum: 4,
+      stepTitle: '从论文里提取数据',
+      stepIntro: '对你筛选通过的文献,让 AI 帮你读完整 PDF 抽取关键信息:研究设计 / 样本 / 方法 / 发现 / 局限。每条发现都会标出对应原文段落。',
+      prismaItems: '#10a Data collection · #10b Data items · #12 Effect measures · #18 Risk of bias data',
+    }) %>
 
     <!-- 统计卡 -->
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">

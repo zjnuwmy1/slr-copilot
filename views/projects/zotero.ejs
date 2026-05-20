@@ -6,13 +6,15 @@
 
   <section class="space-y-6 min-w-0">
     <!-- 顶部介绍 -->
-    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-      <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 3 of 8 · <%= stepLabel %></p>
-      <p class="mt-1 text-sm text-slate-600">
-        从 Zotero 导出 RDF 包后上传到这里。系统会解析所有文献元数据、PDF 附件、笔记,并自动去重。
-        完成后进入 <a href="/projects/<%= project.id %>/records" class="text-blue-600 hover:underline">records 列表</a> 进行筛选。
-      </p>
-    </div>
+    <%- include('partials/step-banner', {
+      stepNum: 3,
+      stepTitle: '把检索结果导进来',
+      stepIntro: '在 Zotero 导出 RDF 包(含 PDF + 笔记),传到这里。系统自动解析元数据、关联 PDF、去重。',
+      prismaItems: '#8 Search · #9a Selection process · #16a Study selection · #16b Reasons for exclusion',
+    }) %>
+    <p class="text-xs text-slate-500 px-1">
+      完成后进入 <a href="/projects/<%= project.id %>/records" class="text-slate-700 hover:underline">文献列表</a> 开始筛选。
+    </p>
 
     <!-- 已有的包 -->
     <% if (packages && packages.length > 0) { %>

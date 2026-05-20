@@ -543,6 +543,65 @@ router.get('/:id/report/export.md', (req, res) => {
   parts.push(exportReferencesSection(included, { style: 'apa' }))
   parts.push('')
 
+  // ─── Appendix: PRISMA 2020 27-item Checklist ───────────────────────
+  // 投稿强制要求,自动从 DB 拉清单 + 用户的状态/笔记
+  try {
+    const checklist = db
+      .prepare(
+        `SELECT item_number, section, item_title, recommendation,
+                workflow_step, status, notes, evidence_url
+         FROM prisma_checklist
+         WHERE project_id = ?
+         ORDER BY CAST(SUBSTR(item_number, 1, INSTR(item_number || 'x', LENGTH(item_number) > 1 ? SUBSTR(item_number, -1) : 'x') - 1) AS INTEGER), item_number`
+      )
+      .all(project.id)
+    if (checklist.length > 0) {
+      parts.push('---')
+      parts.push('')
+      parts.push('## Appendix A. PRISMA 2020 Checklist')
+      parts.push('')
+      parts.push('| # | Section | Item | Status | Notes |')
+      parts.push('|---|---|---|---|---|')
+      const statusIcon = { done: '✓', in_progress: '◐', not_applicable: 'N/A', not_started: '○' }
+      for (const it of checklist) {
+        const status = statusIcon[it.status] || '○'
+        const notes = (it.notes || '').replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 200)
+        parts.push(`| ${it.item_number} | ${it.section || ''} | ${it.item_title || ''} | ${status} | ${notes} |`)
+      }
+      parts.push('')
+    }
+  } catch (e) {
+    console.error('[report/export.md] PRISMA checklist appendix failed:', e.message)
+  }
+
+  // ─── Appendix: search strategies ───────────────────────────────────
+  try {
+    const strategies = db
+      .prepare(
+        `SELECT database_name, query_type, query_text, result_count, search_date
+         FROM search_strategies
+         WHERE project_id = ?
+         ORDER BY database_name, query_type`
+      )
+      .all(project.id)
+    if (strategies.length > 0) {
+      parts.push('---')
+      parts.push('')
+      parts.push('## Appendix B. Search Strategies (verbatim)')
+      parts.push('')
+      for (const s of strategies) {
+        parts.push(`### ${s.database_name} · ${s.query_type}${s.search_date ? ' · ' + s.search_date : ''}${s.result_count != null ? ` · ${s.result_count} records` : ''}`)
+        parts.push('')
+        parts.push('```')
+        parts.push(s.query_text || '')
+        parts.push('```')
+        parts.push('')
+      }
+    }
+  } catch (e) {
+    console.error('[report/export.md] search appendix failed:', e.message)
+  }
+
   const md = parts.join('\n')
 
   res.setHeader('Content-Type', 'text/markdown; charset=utf-8')

@@ -10,13 +10,12 @@
   <%- include('partials/stepper', { project, progress, currentStep: 'certainty' }) %>
 
   <section class="space-y-6">
-    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-      <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 7 of 8 · <%= stepLabel %></p>
-      <p class="mt-1 text-sm text-slate-600">
-        覆盖 PRISMA
-        <% stepItems.forEach((it, i) => { %><span class="font-mono">#<%= it.item_number %></span><%= i < stepItems.length - 1 ? ' · ' : '' %><% }) %>
-      </p>
-    </div>
+    <%- include('partials/step-banner', {
+      stepNum: 7,
+      stepTitle: '证据有多可信',
+      stepIntro: '对每个主题打个分:你对这条发现有多大把握?强 / 中 / 弱?这是审稿人会问的关键问题。',
+      prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
+    }) %>
 
     <!-- 简版:列出主题的证据强度,人工调整 -->
     <%

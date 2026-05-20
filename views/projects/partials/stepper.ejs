@@ -9,15 +9,17 @@
 %>
 <aside class="space-y-3">
   <%
+    // 8 步 — 以"你正在做什么"为主线,不再以 PRISMA 术语开头。
+    // PRISMA 在 Step 8 报告时再前台展示(本文件最下方的 PRISMA 链接保留入口)。
     const steps = [
-      { id: 'protocol',   label: '协议',         sub: 'Protocol' },
-      { id: 'search',     label: '检索式',       sub: 'Search' },
-      { id: 'screening',  label: '筛选',         sub: 'Screening' },
-      { id: 'extraction', label: '抽取',         sub: 'Extraction' },
-      { id: 'rob',        label: '偏倚风险',     sub: 'Risk of Bias' },
-      { id: 'synthesis',  label: '综合',         sub: 'Synthesis' },
-      { id: 'certainty',  label: '证据强度',     sub: 'Certainty' },
-      { id: 'report',     label: '报告',         sub: 'Report' },
+      { id: 'protocol',   label: '理清研究问题',     sub: '研究目标 / 纳入排除标准' },
+      { id: 'search',     label: '准备检索关键词',   sub: 'WoS / Scopus / PubMed' },
+      { id: 'screening',  label: '挑出真正相关的',   sub: '看标题摘要决定要不要细读' },
+      { id: 'extraction', label: '从论文里提取数据', sub: '研究设计 / 样本 / 发现' },
+      { id: 'rob',        label: '看每篇质量如何',   sub: '偏倚 / 局限' },
+      { id: 'synthesis',  label: '整合发现成主题',   sub: '一致 / 矛盾 / 空白' },
+      { id: 'certainty',  label: '证据有多可信',     sub: '强 / 中 / 弱' },
+      { id: 'report',     label: '写成可投稿的综述', sub: 'Markdown 全文 + PRISMA flow' },
     ]
     const prismaProgress = (progress && progress.prismaProgress) || { donePct: 0, done: 0, total: 42 }
     const stepStatus = (progress && progress.stepStatus) || {}
@@ -31,16 +33,26 @@
     }
   %>
 
-  <!-- 顶部 PRISMA 进度条 -->
+  <!-- 顶部:你的进度(以"做完几步"为主,PRISMA 缩为脚注链接) -->
+  <%
+    const stepsTotal = 8
+    const stepsDone = ['protocol','search','screening','extraction','rob','synthesis','certainty','report']
+      .filter((k) => (stepStatus[k] && stepStatus[k].status === 'done')).length
+    const stepPct = Math.round(stepsDone / stepsTotal * 100)
+  %>
   <div class="rounded-2xl border border-slate-200 bg-white p-4">
     <div class="flex items-center justify-between text-xs">
-      <span class="font-medium uppercase tracking-wider text-slate-400">PRISMA 2020</span>
-      <span class="font-mono text-slate-600"><%= prismaProgress.donePct %>%</span>
+      <span class="font-medium uppercase tracking-wider text-slate-400">进度</span>
+      <span class="font-mono text-slate-600"><%= stepsDone %>/<%= stepsTotal %> 步</span>
     </div>
     <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-      <div class="h-full bg-emerald-500" style="width: <%= prismaProgress.donePct %>%"></div>
+      <div class="h-full bg-emerald-500" style="width: <%= stepPct %>%"></div>
     </div>
-    <p class="mt-2 text-xs text-slate-500"><%= prismaProgress.done %>/<%= prismaProgress.total %> 项已完成</p>
+    <p class="mt-2 text-[11px] text-slate-400">
+      <a href="/projects/<%= project.id %>/prisma" class="hover:text-slate-600 underline decoration-dotted">
+        PRISMA 合规追踪:<%= prismaProgress.done %>/<%= prismaProgress.total %>
+      </a>
+    </p>
   </div>
 
   <!-- 8 个 step 卡片 -->

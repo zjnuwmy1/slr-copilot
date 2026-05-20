@@ -5,11 +5,12 @@
   <%- include('partials/stepper', { project, progress, currentStep: 'protocol' }) %>
 
   <section class="space-y-6">
-    <!-- 面包屑 -->
-    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-      <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 1 of 8 · 协议(Protocol)</p>
-      <p class="mt-1 text-sm text-slate-600">覆盖 PRISMA #3 Rationale · #4 Objectives · #5 Eligibility · #24a-c Registration</p>
-    </div>
+    <%- include('partials/step-banner', {
+      stepNum: 1,
+      stepTitle: '理清研究问题',
+      stepIntro: '把你想做的综述拆成研究问题(RQ)+ 纳入/排除标准 + 关键概念组。后面所有 step 都要靠这一步定下的基准。',
+      prismaItems: '#3 Rationale · #4 Objectives · #5 Eligibility · #24a-c Registration',
+    }) %>
 
     <!-- 项目元信息 -->
     <div class="rounded-2xl border border-slate-200 bg-white p-6">

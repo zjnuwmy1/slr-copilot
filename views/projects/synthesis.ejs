@@ -5,13 +5,12 @@
   <%- include('partials/stepper', { project, progress, currentStep: 'synthesis' }) %>
 
   <section class="space-y-6">
-    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-      <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 6 of 8 · <%= stepLabel %></p>
-      <p class="mt-1 text-sm text-slate-600">
-        覆盖 PRISMA
-        <% stepItems.forEach((it, i) => { %><span class="font-mono">#<%= it.item_number %></span><%= i < stepItems.length - 1 ? ' · ' : '' %><% }) %>
-      </p>
-    </div>
+    <%- include('partials/step-banner', {
+      stepNum: 6,
+      stepTitle: '整合发现成主题',
+      stepIntro: '跨论文找规律 — 哪些发现一致?哪些矛盾?哪里有空白?AI 帮你聚类成主题,你审阅 + 调整。',
+      prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
+    }) %>
 
     <!-- 运行聚类卡 -->
     <div class="rounded-2xl border border-slate-200 bg-white p-6">

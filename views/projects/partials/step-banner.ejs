@@ -1,0 +1,22 @@
+<%#
+  step-banner.ejs — 每个 step 页顶部统一横幅
+  Locals:
+    stepNum     : 1..8
+    stepTitle   : 用户视角的标题(中文,如"理清研究问题")
+    stepIntro   : 一两句话讲"这一步你要干什么"
+    prismaItems : (可选) 字符串,如 "#3 Rationale · #4 Objectives · #5 Eligibility"
+                  用于折叠的"这一步覆盖的 PRISMA 项",默认隐藏
+%>
+<div class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+  <p class="text-xs font-medium uppercase tracking-wider text-slate-400">第 <%= stepNum %> 步 / 共 8 步</p>
+  <h1 class="mt-1 text-lg font-semibold text-slate-900"><%= stepTitle %></h1>
+  <% if (typeof stepIntro !== 'undefined' && stepIntro) { %>
+    <p class="mt-1 text-sm text-slate-600"><%= stepIntro %></p>
+  <% } %>
+  <% if (typeof prismaItems !== 'undefined' && prismaItems) { %>
+    <details class="mt-2 text-xs">
+      <summary class="cursor-pointer text-slate-400 hover:text-slate-600">这一步覆盖了哪些 PRISMA 项 ▾</summary>
+      <p class="mt-1 pl-1 font-mono text-[11px] text-slate-500"><%= prismaItems %></p>
+    </details>
+  <% } %>
+</div>
