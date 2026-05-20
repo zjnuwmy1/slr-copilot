@@ -1,0 +1,270 @@
+<%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
+<%- include('partials/project-header', { project }) %>
+
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('partials/stepper', { project, progress, currentStep: 'screening' }) %>
+
+  <section class="space-y-6 min-w-0">
+    <!-- 顶部介绍 -->
+    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+      <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 3 of 8 · <%= stepLabel %></p>
+      <p class="mt-1 text-sm text-slate-600">
+        从 Zotero 导出 RDF 包后上传到这里。系统会解析所有文献元数据、PDF 附件、笔记,并自动去重。
+        完成后进入 <a href="/projects/<%= project.id %>/records" class="text-blue-600 hover:underline">records 列表</a> 进行筛选。
+      </p>
+    </div>
+
+    <!-- 已有的包 -->
+    <% if (packages && packages.length > 0) { %>
+      <div class="rounded-2xl border border-slate-200 bg-white">
+        <div class="border-b border-slate-200 px-5 py-3 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-900">已导入的包 (<%= packages.length %>)</h2>
+          <span class="text-xs text-slate-500">最新的在最上面</span>
+        </div>
+        <ul class="divide-y divide-slate-100">
+          <% packages.forEach(p => {
+               const statusCfg = ({
+                 uploaded: ['bg-slate-100 text-slate-600', '已上传'],
+                 parsing:  ['bg-amber-100 text-amber-700', '解析中'],
+                 parsed:   ['bg-blue-100 text-blue-700',   '已解析'],
+                 ingested: ['bg-emerald-100 text-emerald-700', '已入库'],
+                 failed:   ['bg-rose-100 text-rose-700',   '失败'],
+               })[p.status] || ['bg-slate-100 text-slate-600', p.status]
+          %>
+            <li class="px-5 py-3">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <a href="/projects/<%= project.id %>/zotero/<%= p.id %>"
+                       class="text-sm font-medium text-slate-900 hover:underline">
+                      <%= p.source_filename || p.id %>
+                    </a>
+                    <span class="rounded-full px-2 py-0.5 text-[10px] font-medium <%= statusCfg[0] %>"><%= statusCfg[1] %></span>
+                    <% if (p.source_kind === 'admin_staging') { %>
+                      <span class="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] text-purple-700">staging</span>
+                    <% } %>
+                  </div>
+                  <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                    <% if (p.size_bytes) { %><span>大小:<%= formatBytes(p.size_bytes) %></span><% } %>
+                    <% if (p.rdf_filename) { %><span>RDF:<span class="font-mono"><%= p.rdf_filename %></span></span><% } %>
+                    <% if (p.total_records != null) { %><span><%= p.total_records %> 条记录</span><% } %>
+                    <% if (p.total_with_pdf != null) { %><span><%= p.total_with_pdf %> 含 PDF</span><% } %>
+                    <% if (p.total_duplicates != null) { %><span><%= p.total_duplicates %> 重复</span><% } %>
+                    <span>创建于 <%= p.created_at %></span>
+                  </div>
+                  <% if (p.error_message) { %>
+                    <p class="mt-1 text-xs text-rose-600 truncate">错误:<%= p.error_message %></p>
+                  <% } %>
+                </div>
+                <a href="/projects/<%= project.id %>/zotero/<%= p.id %>"
+                   class="flex-none rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                  查看详情
+                </a>
+              </div>
+            </li>
+          <% }) %>
+        </ul>
+      </div>
+    <% } %>
+
+    <!-- 上传卡 -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <h2 class="text-base font-semibold text-slate-900">上传 Zotero RDF 包</h2>
+      <p class="mt-1 text-sm text-slate-500">支持 .zip(推荐,包含 PDF 和笔记)或单个 .rdf 文件。最大 <%= maxUploadMb %> MB。</p>
+
+      <form id="upload-form"
+            method="post"
+            action="/projects/<%= project.id %>/zotero/upload"
+            enctype="multipart/form-data"
+            class="mt-4">
+        <label id="dropzone"
+               for="package_file"
+               class="flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50/50 px-6 py-10 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/30 transition">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-10 w-10 text-slate-400">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+          <p class="text-sm font-medium text-slate-700">拖入 <span class="font-mono text-slate-900">.zip</span>(Zotero RDF with files and notes 导出)</p>
+          <p class="text-xs text-slate-500">或 <span class="text-blue-600 underline">点击此处选择文件</span></p>
+          <p id="picked-file" class="mt-1 hidden text-xs text-emerald-700"></p>
+          <input id="package_file"
+                 type="file"
+                 name="package_file"
+                 accept=".zip,.rdf,application/zip,application/x-zip-compressed"
+                 class="sr-only" />
+        </label>
+
+        <div class="mt-4 flex items-center justify-between gap-3">
+          <details class="text-xs text-slate-600 flex-1">
+            <summary class="cursor-pointer text-slate-500 hover:text-slate-700">怎样从 Zotero 导出 RDF 包?</summary>
+            <ol class="mt-2 list-decimal list-inside space-y-1 text-xs text-slate-600">
+              <li>在 Zotero 桌面端选中目标 collection</li>
+              <li>菜单:<span class="font-mono">File → Export Library…</span></li>
+              <li>Format 选 <strong>Zotero RDF</strong></li>
+              <li>勾选 ☑ <strong>Export Files</strong> + ☑ <strong>Export Notes</strong></li>
+              <li>导出后会得到一个文件夹,里面有 <span class="font-mono">.rdf</span> + 一个 <span class="font-mono">files/</span> 子目录,把整个文件夹打包成 zip 上传即可</li>
+            </ol>
+          </details>
+          <button id="upload-btn"
+                  type="submit"
+                  disabled
+                  class="flex-none rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:bg-slate-300 disabled:cursor-not-allowed">
+            开始上传
+          </button>
+        </div>
+
+        <div id="upload-progress" class="hidden mt-4">
+          <div class="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+            <div id="upload-bar" class="h-full bg-blue-500 transition-all" style="width: 0%"></div>
+          </div>
+          <p id="upload-pct" class="mt-1 text-xs text-slate-500">上传中… 0%</p>
+        </div>
+      </form>
+    </div>
+
+    <!-- Admin 快捷:从 staging 导入 -->
+    <% if (user && user.role === 'admin') { %>
+      <details class="rounded-2xl border border-amber-200 bg-amber-50/40 p-5" <%= packages && packages.length === 0 ? 'open' : '' %>>
+        <summary class="cursor-pointer text-sm font-semibold text-amber-900">
+          [管理员快捷] 从服务器 staging 目录导入
+          <% if (stagingDirs && stagingDirs.length) { %>
+            <span class="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-700"><%= stagingDirs.length %> 个可用</span>
+          <% } %>
+        </summary>
+        <div class="mt-3 text-xs text-amber-900/80">
+          扫描目录 <span class="font-mono">/var/lib/slr/uploads/staging/</span> 下含有 .rdf 文件的子目录,选一个直接导入(不复制,直接以原路径作为 storage_path)。
+        </div>
+
+        <% if (stagingError) { %>
+          <p class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            读取 staging 失败:<%= stagingError %>
+          </p>
+        <% } %>
+
+        <% if (!stagingDirs || stagingDirs.length === 0) { %>
+          <p class="mt-3 text-xs text-amber-800/70">
+            staging 目录下没有含 .rdf 的子目录。把准备好的包放到
+            <span class="font-mono">/var/lib/slr/uploads/staging/&lt;name&gt;/</span> 后刷新本页。
+          </p>
+        <% } else { %>
+          <ul class="mt-3 divide-y divide-amber-200 rounded-lg border border-amber-200 bg-white">
+            <% stagingDirs.forEach(d => { %>
+              <li class="px-4 py-3 flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-mono text-slate-900 truncate"><%= d.dirname %></p>
+                  <div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                    <span>RDF:<span class="font-mono"><%= d.rdf_filename %></span></span>
+                    <span><%= d.file_count %> 个文件</span>
+                    <span><%= formatBytes(d.size_bytes) %></span>
+                  </div>
+                </div>
+                <form method="post" action="/projects/<%= project.id %>/zotero/admin-staging" class="flex-none">
+                  <input type="hidden" name="staging_dirname" value="<%= d.dirname %>">
+                  <button type="submit"
+                          class="rounded-md bg-amber-600 px-3 py-1.5 text-xs text-white hover:bg-amber-500">
+                    导入
+                  </button>
+                </form>
+              </li>
+            <% }) %>
+          </ul>
+        <% } %>
+      </details>
+    <% } %>
+
+    <div class="flex justify-between">
+      <a href="/projects/<%= project.id %>/search" class="text-xs text-slate-500 hover:text-slate-700">← 返回检索式</a>
+      <a href="/projects/<%= project.id %>" class="text-xs text-slate-500 hover:text-slate-700">回到项目首页</a>
+    </div>
+  </section>
+</div>
+
+<script>
+  (function () {
+    const input = document.getElementById('package_file');
+    const dropzone = document.getElementById('dropzone');
+    const btn = document.getElementById('upload-btn');
+    const picked = document.getElementById('picked-file');
+    const form = document.getElementById('upload-form');
+    const bar = document.getElementById('upload-bar');
+    const pct = document.getElementById('upload-pct');
+    const progressBox = document.getElementById('upload-progress');
+
+    function formatBytes(n) {
+      if (!isFinite(n) || n < 0) return '';
+      if (n < 1024) return n + ' B';
+      if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+      if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+      return (n / 1073741824).toFixed(2) + ' GB';
+    }
+
+    function showFile(f) {
+      picked.classList.remove('hidden');
+      picked.textContent = '已选:' + f.name + ' · ' + formatBytes(f.size);
+      btn.disabled = false;
+    }
+
+    input.addEventListener('change', () => {
+      if (input.files && input.files[0]) showFile(input.files[0]);
+    });
+
+    // 拖入支持
+    ['dragenter', 'dragover'].forEach(evt => {
+      dropzone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.add('border-blue-500', 'bg-blue-50/60');
+      });
+    });
+    ['dragleave', 'drop'].forEach(evt => {
+      dropzone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.remove('border-blue-500', 'bg-blue-50/60');
+      });
+    });
+    dropzone.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      if (dt && dt.files && dt.files[0]) {
+        input.files = dt.files;
+        showFile(dt.files[0]);
+      }
+    });
+
+    // 提交时用 XHR 走进度条(form 仍作为 fallback)
+    form.addEventListener('submit', (e) => {
+      if (!input.files || !input.files[0]) return;
+      e.preventDefault();
+      btn.disabled = true;
+      btn.textContent = '上传中…';
+      progressBox.classList.remove('hidden');
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', form.action, true);
+      xhr.upload.addEventListener('progress', (ev) => {
+        if (ev.lengthComputable) {
+          const p = Math.round(ev.loaded * 100 / ev.total);
+          bar.style.width = p + '%';
+          pct.textContent = '上传中… ' + p + '% (' + formatBytes(ev.loaded) + ' / ' + formatBytes(ev.total) + ')';
+        }
+      });
+      xhr.onload = () => {
+        // 服务端发了 302 → XHR 会自动跟随到 manifest 页(GET),响应 URL 改变
+        if (xhr.responseURL) {
+          window.location.href = xhr.responseURL;
+        } else {
+          // 兜底:回到 zotero 主页
+          window.location.href = '/projects/<%= project.id %>/zotero';
+        }
+      };
+      xhr.onerror = () => {
+        alert('上传失败,网络错误。请重试。');
+        btn.disabled = false;
+        btn.textContent = '开始上传';
+      };
+      const fd = new FormData(form);
+      xhr.send(fd);
+    });
+  })();
+</script>
+
+<%- include('../partials/footer') %>

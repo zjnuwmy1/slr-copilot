@@ -1,0 +1,223 @@
+<%- include('../../partials/header', { title }) %>
+<%- include('../partials/project-header', { project }) %>
+
+<%
+  function fmtBytes(n) {
+    if (!Number.isFinite(n) || n <= 0) return '—'
+    if (n < 1024) return `${n} B`
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+    return `${(n / 1024 / 1024).toFixed(1)} MB`
+  }
+  const kindLabel = {
+    pdf: 'PDF',
+    html: 'HTML',
+    snapshot: '快照',
+    other: '其它',
+  }
+%>
+
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('../partials/stepper', { project, progress: progress || { stepStatus: {}, prismaProgress: { donePct: 0, done: 0, total: 42 } }, currentStep: 'screening' }) %>
+
+  <section class="space-y-6 min-w-0">
+    <!-- 面包屑 -->
+    <div class="flex items-center justify-between text-sm">
+      <a href="/projects/<%= project.id %>/records"
+         class="text-slate-500 hover:text-slate-900">← 返回文献列表</a>
+      <div class="flex items-center gap-2 text-xs">
+        <% if (record.is_duplicate) { %>
+          <span class="rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-500">已合并副本</span>
+        <% } %>
+        <% if (record.item_type) { %>
+          <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600"><%= record.item_type %></span>
+        <% } %>
+      </div>
+    </div>
+
+    <!-- 标题 + 元信息 -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <h1 class="text-xl font-semibold leading-snug text-slate-900"><%= record.title %></h1>
+
+      <% if ((record.authors_list || []).length) { %>
+        <p class="mt-3 text-sm text-slate-700">
+          <%
+            const authors = record.authors_list
+            const shown = authors.slice(0, 5)
+          %>
+          <% shown.forEach((a, i) => {
+               const full = a.full || `${a.surname || ''} ${a.givenName || ''}`.trim() || ''
+          %>
+            <span><%= full %></span><%= i < shown.length - 1 ? ', ' : '' %>
+          <% }) %>
+          <% if (authors.length > 5) { %>
+            <span class="text-slate-500">… 共 <%= authors.length %> 位作者</span>
+          <% } %>
+        </p>
+      <% } else if (record.authors_text) { %>
+        <p class="mt-3 text-sm text-slate-700"><%= record.authors_text %></p>
+      <% } %>
+
+      <!-- meta 网格 -->
+      <dl class="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+        <% if (record.year || record.date_text) { %>
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wider text-slate-400">年份</dt>
+            <dd class="mt-0.5 text-slate-800"><%= record.year || record.date_text %></dd>
+          </div>
+        <% } %>
+        <% if (record.journal) { %>
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wider text-slate-400">期刊 / 来源</dt>
+            <dd class="mt-0.5 text-slate-800"><%= record.journal %></dd>
+          </div>
+        <% } %>
+        <% if (record.publisher) { %>
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wider text-slate-400">出版方</dt>
+            <dd class="mt-0.5 text-slate-800"><%= record.publisher %></dd>
+          </div>
+        <% } %>
+        <% if (record.doi) { %>
+          <div class="min-w-0">
+            <dt class="text-xs font-medium uppercase tracking-wider text-slate-400">DOI</dt>
+            <dd class="mt-0.5 break-all text-slate-800">
+              <a href="https://doi.org/<%= encodeURIComponent(record.doi) %>" target="_blank" rel="noopener"
+                 class="text-blue-700 hover:underline"><%= record.doi %></a>
+            </dd>
+          </div>
+        <% } %>
+        <% if (record.url) { %>
+          <div class="min-w-0 sm:col-span-2">
+            <dt class="text-xs font-medium uppercase tracking-wider text-slate-400">URL</dt>
+            <dd class="mt-0.5 break-all text-slate-800">
+              <a href="<%= record.url %>" target="_blank" rel="noopener"
+                 class="text-blue-700 hover:underline"><%= record.url %></a>
+            </dd>
+          </div>
+        <% } %>
+        <% if (record.zotero_item_id) { %>
+          <div>
+            <dt class="text-xs font-medium uppercase tracking-wider text-slate-400">Zotero ID</dt>
+            <dd class="mt-0.5 font-mono text-xs text-slate-600"><%= record.zotero_item_id %></dd>
+          </div>
+        <% } %>
+      </dl>
+
+      <!-- 关键词 -->
+      <% if ((record.keywords_list || []).length) { %>
+        <div class="mt-5">
+          <p class="text-xs font-medium uppercase tracking-wider text-slate-400">关键词</p>
+          <div class="mt-2 flex flex-wrap gap-1.5">
+            <% record.keywords_list.forEach(k => { %>
+              <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700"><%= k %></span>
+            <% }) %>
+          </div>
+        </div>
+      <% } %>
+    </div>
+
+    <!-- 左右分栏:abstract+notes / attachments -->
+    <div class="grid gap-6 lg:grid-cols-[1fr_280px]">
+      <div class="space-y-6 min-w-0">
+        <!-- Abstract -->
+        <div class="rounded-2xl border border-slate-200 bg-white p-6">
+          <h2 class="text-sm font-medium uppercase tracking-wider text-slate-400">Abstract</h2>
+          <% if (record.abstract && record.abstract.trim()) { %>
+            <p class="mt-3 whitespace-pre-line text-sm leading-relaxed text-slate-800"><%= record.abstract %></p>
+          <% } else { %>
+            <p class="mt-3 text-sm italic text-slate-400">(未提供摘要)</p>
+          <% } %>
+        </div>
+
+        <!-- Notes(Zotero annotation,可能含中文) -->
+        <% if (record.has_notes) { %>
+          <div class="rounded-2xl border border-violet-200 bg-violet-50/40 p-6">
+            <h2 class="text-sm font-medium uppercase tracking-wider text-violet-700">Zotero 笔记</h2>
+            <p class="mt-3 whitespace-pre-line text-sm leading-relaxed text-slate-800"><%= record.notes %></p>
+          </div>
+        <% } %>
+
+        <!-- 重复信息 -->
+        <% if (mergedInto) { %>
+          <div class="rounded-2xl border border-slate-300 bg-slate-50/60 p-5">
+            <p class="text-sm font-medium text-slate-700">此条目已合并到:</p>
+            <a href="/projects/<%= project.id %>/records/<%= mergedInto.id %>"
+               class="mt-2 block rounded-lg border border-slate-300 bg-white p-3 text-sm hover:border-slate-500">
+              <p class="font-medium text-slate-900"><%= mergedInto.title %></p>
+              <p class="mt-1 text-xs text-slate-500">
+                <%= mergedInto.year || '—' %>
+                <% if (mergedInto.journal) { %> · <%= mergedInto.journal %><% } %>
+                <% if (mergedInto.doi) { %> · DOI <%= mergedInto.doi %><% } %>
+              </p>
+            </a>
+          </div>
+        <% } %>
+
+        <% if ((duplicateGroup || []).length) { %>
+          <div class="rounded-2xl border border-slate-200 bg-white p-5">
+            <h2 class="text-sm font-medium uppercase tracking-wider text-slate-400">同组重复条目 (<%= duplicateGroup.length %>)</h2>
+            <ul class="mt-3 space-y-2">
+              <% duplicateGroup.forEach(d => { %>
+                <li>
+                  <a href="/projects/<%= project.id %>/records/<%= d.id %>"
+                     class="block rounded-lg border border-slate-200 p-3 text-sm hover:border-slate-400">
+                    <div class="flex items-start justify-between gap-3">
+                      <p class="min-w-0 truncate font-medium text-slate-800"><%= d.title %></p>
+                      <% if (!d.duplicate_of_record_id) { %>
+                        <span class="flex-none rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">主</span>
+                      <% } else { %>
+                        <span class="flex-none rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">副</span>
+                      <% } %>
+                    </div>
+                    <p class="mt-1 text-xs text-slate-500">
+                      <%= d.year || '—' %>
+                      <% if (d.journal) { %> · <%= d.journal %><% } %>
+                    </p>
+                  </a>
+                </li>
+              <% }) %>
+            </ul>
+          </div>
+        <% } %>
+      </div>
+
+      <!-- 右侧附件列表 -->
+      <aside class="space-y-3">
+        <div class="rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 class="text-sm font-medium uppercase tracking-wider text-slate-400">附件</h2>
+          <% if (!attachments.length) { %>
+            <p class="mt-3 text-sm italic text-slate-400">无附件</p>
+          <% } else { %>
+            <ul class="mt-3 space-y-2">
+              <% attachments.forEach(a => { %>
+                <li class="rounded-lg border border-slate-200 p-3">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                      <%= kindLabel[a.attachment_kind] || a.attachment_kind %>
+                    </span>
+                    <span class="text-[11px] text-slate-400"><%= fmtBytes(a.size_bytes) %></span>
+                  </div>
+                  <p class="mt-1.5 break-all text-xs text-slate-700"><%= a.filename || '(未命名)' %></p>
+                  <a href="/projects/<%= project.id %>/attachments/<%= a.id %>/download"
+                     target="_blank" rel="noopener"
+                     class="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700">
+                    <% if (a.attachment_kind === 'pdf') { %>预览 PDF<% } else { %>下载<% } %>
+                  </a>
+                </li>
+              <% }) %>
+            </ul>
+          <% } %>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 text-xs text-slate-500">
+          <p class="font-medium text-slate-700">下一步</p>
+          <p class="mt-1">完成所有条目检视后,进入双盲筛选:决定纳入 / 排除。</p>
+          <a href="/projects/<%= project.id %>/screening"
+             class="mt-2 inline-block text-blue-700 hover:underline">前往筛选 →</a>
+        </div>
+      </aside>
+    </div>
+  </section>
+</div>
+
+<%- include('../../partials/footer') %>

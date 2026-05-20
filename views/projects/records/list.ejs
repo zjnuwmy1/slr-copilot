@@ -1,0 +1,261 @@
+<%- include('../../partials/header', { title }) %>
+<%- include('../partials/project-header', { project }) %>
+
+<%
+  // helpers
+  function escAttr(v) { return v == null ? '' : String(v) }
+  // 当前 query 用于"清空过滤"或表单回填
+  const q = filters.q || ''
+  const yearFrom = filters.year_from || ''
+  const yearTo = filters.year_to || ''
+  const hideDup = !!filters.hide_duplicates
+  const onlyPdf = !!filters.has_pdf
+  const onlyDoi = !!filters.has_doi
+
+  const hasAnyFilter = !!(q || yearFrom || yearTo || onlyPdf || onlyDoi || !hideDup)
+  const recordsBase = `/projects/${project.id}/records`
+%>
+
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('../partials/stepper', { project, progress: progress || { stepStatus: {}, prismaProgress: { donePct: 0, done: 0, total: 42 } }, currentStep: 'screening' }) %>
+
+  <section class="space-y-6 min-w-0">
+    <!-- 顶部标题 -->
+    <div class="flex items-start justify-between gap-4">
+      <div class="min-w-0">
+        <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Records · 文献条目</p>
+        <h2 class="mt-1 text-xl font-semibold text-slate-900">文献条目浏览</h2>
+        <p class="mt-1 text-sm text-slate-500">
+          从 Zotero RDF 解析得到的全部条目;在这里检视、过滤,准备进入双盲筛选。
+        </p>
+      </div>
+    </div>
+
+    <!-- 顶部统计卡 -->
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <div class="rounded-xl border border-slate-200 bg-white p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-slate-400">总数</p>
+        <p class="mt-1 text-2xl font-semibold text-slate-900"><%= stats.total %></p>
+      </div>
+      <div class="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-emerald-700">含 PDF</p>
+        <p class="mt-1 text-2xl font-semibold text-emerald-900"><%= stats.with_pdf %></p>
+      </div>
+      <div class="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-blue-700">含 DOI</p>
+        <p class="mt-1 text-2xl font-semibold text-blue-900"><%= stats.with_doi %></p>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-slate-500">重复</p>
+        <p class="mt-1 text-2xl font-semibold text-slate-700"><%= stats.duplicates %></p>
+      </div>
+      <div class="rounded-xl border border-amber-100 bg-amber-50/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-amber-700">缺 Abstract</p>
+        <p class="mt-1 text-2xl font-semibold text-amber-900"><%= stats.missing_abstract %></p>
+      </div>
+    </div>
+
+    <!-- 过滤工具栏 -->
+    <form method="get" action="<%= recordsBase %>" class="rounded-2xl border border-slate-200 bg-white p-4">
+      <div class="flex flex-wrap items-end gap-3">
+        <div class="min-w-[200px] flex-1">
+          <label class="block text-xs font-medium text-slate-500">关键词</label>
+          <input type="text" name="q" value="<%= escAttr(q) %>" placeholder="标题 / 作者 / 期刊 / DOI"
+                 class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500">年份起</label>
+          <input type="number" name="year_from" value="<%= escAttr(yearFrom) %>"
+                 placeholder="<%= yearRange.min_year || '' %>"
+                 min="1900" max="2100" inputmode="numeric"
+                 class="mt-1 w-24 rounded-lg border border-slate-300 px-2 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500">年份止</label>
+          <input type="number" name="year_to" value="<%= escAttr(yearTo) %>"
+                 placeholder="<%= yearRange.max_year || '' %>"
+                 min="1900" max="2100" inputmode="numeric"
+                 class="mt-1 w-24 rounded-lg border border-slate-300 px-2 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+        </div>
+        <div class="flex flex-wrap items-center gap-3 text-sm">
+          <label class="inline-flex items-center gap-1.5">
+            <input type="checkbox" name="has_pdf" value="1" <%= onlyPdf ? 'checked' : '' %>
+                   class="rounded border-slate-300" />
+            <span>仅含 PDF</span>
+          </label>
+          <label class="inline-flex items-center gap-1.5">
+            <input type="checkbox" name="has_doi" value="1" <%= onlyDoi ? 'checked' : '' %>
+                   class="rounded border-slate-300" />
+            <span>仅含 DOI</span>
+          </label>
+          <label class="inline-flex items-center gap-1.5">
+            <!-- 默认 hide_duplicates 选中;取消 = 提交 hide_duplicates=0 -->
+            <input type="checkbox" name="hide_duplicates_ui" value="1" <%= hideDup ? 'checked' : '' %>
+                   onchange="document.getElementById('hide_dup_val').value = this.checked ? '' : '0'"
+                   class="rounded border-slate-300" />
+            <span>隐藏重复</span>
+          </label>
+          <!-- 真正提交的字段:checkbox 不选时显式提交 0 -->
+          <input type="hidden" id="hide_dup_val" name="hide_duplicates" value="<%= hideDup ? '' : '0' %>" />
+        </div>
+        <div class="ml-auto flex gap-2">
+          <button type="submit"
+                  class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+            筛选
+          </button>
+          <% if (hasAnyFilter) { %>
+            <a href="<%= recordsBase %>"
+               class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+              重置
+            </a>
+          <% } %>
+        </div>
+      </div>
+    </form>
+
+    <!-- 结果区 -->
+    <% if (stats.total === 0) { %>
+      <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+        <p class="text-2xl">📭</p>
+        <h3 class="mt-2 text-base font-semibold text-slate-800">还没有文献条目</h3>
+        <p class="mt-1 text-sm text-slate-500">
+          请先上传一份 Zotero 导出包(RDF + PDF),系统会自动解析为条目。
+        </p>
+        <div class="mt-4">
+          <a href="/projects/<%= project.id %>/zotero"
+             class="inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+            前往 Zotero 上传
+          </a>
+        </div>
+      </div>
+    <% } else if (totalFiltered === 0) { %>
+      <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+        <p class="text-base text-slate-700">当前过滤条件下没有匹配的条目。</p>
+        <a href="<%= recordsBase %>"
+           class="mt-3 inline-block rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+          清除过滤
+        </a>
+      </div>
+    <% } else { %>
+      <!-- 结果摘要条 -->
+      <div class="flex items-center justify-between text-xs text-slate-500">
+        <span>
+          显示第 <strong class="text-slate-700"><%= (page - 1) * pageSize + 1 %></strong>
+          – <strong class="text-slate-700"><%= Math.min(page * pageSize, totalFiltered) %></strong>
+          条,共 <strong class="text-slate-700"><%= totalFiltered %></strong> 条匹配
+          <% if (totalFiltered !== stats.total) { %>(项目共 <%= stats.total %> 条)<% } %>
+        </span>
+        <span>第 <%= page %> / <%= totalPages %> 页</span>
+      </div>
+
+      <!-- 表格 -->
+      <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+            <tr>
+              <th class="w-8 px-3 py-3"><input type="checkbox" disabled title="批量筛选(下一步开放)" class="rounded border-slate-300 opacity-50" /></th>
+              <th class="px-3 py-3 text-left">标题 / 作者</th>
+              <th class="px-3 py-3 text-left">年</th>
+              <th class="px-3 py-3 text-left">期刊</th>
+              <th class="px-3 py-3 text-left">标记</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <% records.forEach(r => { %>
+              <tr class="hover:bg-slate-50/50">
+                <td class="px-3 py-3 align-top">
+                  <input type="checkbox" disabled class="rounded border-slate-300 opacity-50" />
+                </td>
+                <td class="px-3 py-3 align-top">
+                  <a href="/projects/<%= project.id %>/records/<%= r.id %>"
+                     class="font-medium text-slate-900 hover:text-blue-700 hover:underline">
+                    <%= r.title %>
+                  </a>
+                  <% if (r.authors_short) { %>
+                    <p class="mt-0.5 text-xs text-slate-500"><%= r.authors_short %></p>
+                  <% } %>
+                  <% if ((r.keywords_list || []).length) { %>
+                    <p class="mt-1 flex flex-wrap gap-1">
+                      <% r.keywords_list.slice(0, 5).forEach(k => { %>
+                        <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600"><%= k %></span>
+                      <% }) %>
+                      <% if (r.keywords_list.length > 5) { %>
+                        <span class="text-[10px] text-slate-400">+<%= r.keywords_list.length - 5 %></span>
+                      <% } %>
+                    </p>
+                  <% } %>
+                </td>
+                <td class="px-3 py-3 align-top text-slate-700">
+                  <%= r.year || '—' %>
+                </td>
+                <td class="px-3 py-3 align-top text-slate-700">
+                  <span class="line-clamp-2"><%= r.journal || '—' %></span>
+                </td>
+                <td class="px-3 py-3 align-top">
+                  <div class="flex flex-wrap gap-1">
+                    <% if (r.has_pdf) { %>
+                      <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"
+                            title="<%= r.pdf_count %> 个 PDF">PDF</span>
+                    <% } %>
+                    <% if (r.has_doi) { %>
+                      <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+                            title="<%= r.doi %>">DOI</span>
+                    <% } %>
+                    <% if (r.has_notes) { %>
+                      <span class="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700"
+                            title="Zotero 笔记">Note</span>
+                    <% } %>
+                    <% if (r.is_duplicate) { %>
+                      <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500"
+                            title="此条已合并到其他记录">DUP</span>
+                    <% } %>
+                  </div>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 分页 -->
+      <% if (totalPages > 1) { %>
+        <div class="flex items-center justify-center gap-1 text-sm">
+          <% if (page > 1) { %>
+            <a href="<%= pageHref(page - 1) %>"
+               class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50">← 上一页</a>
+          <% } else { %>
+            <span class="rounded-lg border border-slate-200 px-3 py-1.5 text-slate-300">← 上一页</span>
+          <% } %>
+
+          <%
+            // 简化的分页:首页 / 当前-1 / 当前 / 当前+1 / 末页
+            const pagesToShow = new Set([1, totalPages, page - 1, page, page + 1])
+            const sorted = Array.from(pagesToShow).filter(n => n >= 1 && n <= totalPages).sort((a, b) => a - b)
+            let prev = 0
+          %>
+          <% sorted.forEach(n => { %>
+            <% if (n - prev > 1) { %>
+              <span class="px-2 text-slate-400">…</span>
+            <% } %>
+            <% if (n === page) { %>
+              <span class="rounded-lg bg-slate-900 px-3 py-1.5 font-medium text-white"><%= n %></span>
+            <% } else { %>
+              <a href="<%= pageHref(n) %>"
+                 class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50"><%= n %></a>
+            <% } %>
+            <% prev = n %>
+          <% }) %>
+
+          <% if (page < totalPages) { %>
+            <a href="<%= pageHref(page + 1) %>"
+               class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50">下一页 →</a>
+          <% } else { %>
+            <span class="rounded-lg border border-slate-200 px-3 py-1.5 text-slate-300">下一页 →</span>
+          <% } %>
+        </div>
+      <% } %>
+    <% } %>
+  </section>
+</div>
+
+<%- include('../../partials/footer') %>
