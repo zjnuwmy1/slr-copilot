@@ -38,8 +38,8 @@ import * as openaiCli from './providers/openai-cli.js'
 
 // 模型默认值(可被调用方 model 参数覆盖)
 const DEFAULT_MODEL = {
-  anthropic: process.env.CLAUDE_MODEL_HEAVY || 'claude-sonnet-4-6',
-  openai: process.env.OPENAI_MODEL_HEAVY || 'gpt-4o',
+  anthropic: process.env.CLAUDE_MODEL_HEAVY || 'claude-sonnet-4-7',
+  openai: process.env.OPENAI_MODEL_HEAVY || 'gpt-5-mini',
 }
 const LIGHT_MODEL = {
   anthropic: process.env.CLAUDE_MODEL_LIGHT || 'claude-haiku-4-5',

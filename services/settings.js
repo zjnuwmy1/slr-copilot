@@ -10,7 +10,7 @@
  *   step_model.drafting            — 章节写作
  *
  * 值可以是 model alias('heavy' / 'light')或具体模型名:
- *   anthropic: claude-sonnet-4-6 / claude-haiku-4-5 / claude-opus-4
+ *   anthropic: claude-sonnet-4-7 / -4-6 / claude-haiku-4-5 / claude-opus-4-7 / -4-6
  *   openai:    gpt-5 / gpt-5-mini / o3 / gpt-4o
  *
  * llm.js 在 runLlm 入口先调 resolveStepModel(),按用户已绑凭证 provider 选合适模型。
@@ -22,9 +22,11 @@
 
 export const AVAILABLE_MODELS = {
   anthropic: [
-    { id: 'claude-opus-4',     label: 'Claude Opus 4 (最强,慢且贵)',  tier: 'flagship' },
-    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (推荐,平衡)', tier: 'standard' },
-    { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5 (快且便宜)',    tier: 'light' },
+    { id: 'claude-opus-4-7',   label: 'Claude Opus 4.7 (最强最新)',          tier: 'flagship' },
+    { id: 'claude-opus-4-6',   label: 'Claude Opus 4.6 (上一代旗舰)',        tier: 'flagship' },
+    { id: 'claude-sonnet-4-7', label: 'Claude Sonnet 4.7 (推荐,最新平衡)',  tier: 'standard' },
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (上一代平衡)',      tier: 'standard' },
+    { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5 (快且便宜)',         tier: 'light' },
   ],
   openai: [
     { id: 'gpt-5',       label: 'GPT-5 (最强)',           tier: 'flagship' },
@@ -80,8 +82,8 @@ export const STEP_KEYS = Object.keys(STEP_SPECS)
 
 const DEFAULT_BY_PROVIDER_AND_TIER = {
   anthropic: {
-    flagship: 'claude-opus-4',
-    standard: 'claude-sonnet-4-6',
+    flagship: 'claude-opus-4-7',
+    standard: 'claude-sonnet-4-7',
     light:    'claude-haiku-4-5',
   },
   openai: {
