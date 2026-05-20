@@ -339,3 +339,136 @@ CREATE TABLE IF NOT EXISTS attachments (
 
 CREATE INDEX IF NOT EXISTS idx_attachments_record ON attachments(record_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_kind ON attachments(attachment_kind);
+
+-- ========================================
+-- Phase 5: 筛选 + 抽取
+-- ========================================
+
+-- PDF 文本切片(Agent L pdf-parse 写入)
+CREATE TABLE IF NOT EXISTS paper_chunks (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL,
+  attachment_id TEXT,
+  section_type TEXT,             -- abstract | introduction | methods | results | discussion | conclusion | references | other
+  heading TEXT,
+  page_start INTEGER,
+  page_end INTEGER,
+  chunk_index INTEGER,
+  text TEXT NOT NULL,
+  token_count INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
+  FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_record ON paper_chunks(record_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_section ON paper_chunks(section_type);
+
+-- 筛选决定(Agent M 写入,既有 AI 建议也有人工最终决定)
+CREATE TABLE IF NOT EXISTS screening_decisions (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  stage TEXT NOT NULL DEFAULT 'title_abstract' CHECK (stage IN ('title_abstract','full_text')),
+  ai_suggestion TEXT CHECK (ai_suggestion IN ('include','exclude','uncertain','not_run')) DEFAULT 'not_run',
+  ai_reason TEXT,
+  ai_confidence REAL,
+  ai_model TEXT,
+  ai_matched_inclusion TEXT,    -- JSON array of criterion strings the AI thought matched
+  ai_matched_exclusion TEXT,
+  ai_need_full_text TEXT,       -- JSON array of fields LLM said need full-text check
+  ai_ran_at TEXT,
+  human_decision TEXT CHECK (human_decision IN ('include','exclude','uncertain','not_decided')) DEFAULT 'not_decided',
+  human_reason TEXT,
+  decided_at TEXT,
+  decided_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  UNIQUE(record_id, stage)
+);
+CREATE INDEX IF NOT EXISTS idx_screening_project ON screening_decisions(project_id);
+CREATE INDEX IF NOT EXISTS idx_screening_ai ON screening_decisions(ai_suggestion);
+CREATE INDEX IF NOT EXISTS idx_screening_human ON screening_decisions(human_decision);
+
+-- 全文结构化抽取(Agent N 写入)
+CREATE TABLE IF NOT EXISTS extractions (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  schema_version TEXT NOT NULL DEFAULT 'v1.0',
+  extracted_json TEXT,          -- 整个抽取 JSON 串
+  model TEXT,
+  prompt_version TEXT,
+  human_verified INTEGER NOT NULL DEFAULT 0,
+  human_notes TEXT,
+  requires_manual_check TEXT,   -- JSON array
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  UNIQUE(record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_extractions_project ON extractions(project_id);
+
+-- ========================================
+-- Phase 6: 主题 / Evidence Matrix / 综述初稿
+-- ========================================
+
+CREATE TABLE IF NOT EXISTS themes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  supporting_record_ids TEXT,   -- JSON array of record_id
+  consistent_findings TEXT,     -- JSON array of strings
+  conflicting_findings TEXT,    -- JSON array
+  evidence_gaps TEXT,           -- JSON array
+  evidence_strength TEXT CHECK (evidence_strength IN ('strong','moderate','weak','unclear')),
+  generated_by TEXT NOT NULL DEFAULT 'ai',
+  model TEXT,
+  display_order INTEGER,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_themes_project ON themes(project_id);
+
+CREATE TABLE IF NOT EXISTS evidence_points (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  record_id TEXT NOT NULL,
+  theme_id TEXT,
+  finding TEXT NOT NULL,
+  evidence_type TEXT,           -- empirical | theoretical | review | methodological
+  strength TEXT CHECK (strength IN ('strong','moderate','weak','unclear')),
+  section TEXT,                 -- 在论文哪一节
+  page INTEGER,
+  chunk_id TEXT,                -- 反向链回 paper_chunks
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
+  FOREIGN KEY (theme_id) REFERENCES themes(id) ON DELETE SET NULL,
+  FOREIGN KEY (chunk_id) REFERENCES paper_chunks(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_project ON evidence_points(project_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_theme ON evidence_points(theme_id);
+
+-- 综述初稿的各章节
+CREATE TABLE IF NOT EXISTS draft_sections (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  section_name TEXT NOT NULL,   -- title | abstract | introduction | methods | results | discussion | limitations | conclusion | references
+  content_markdown TEXT,
+  citation_map TEXT,            -- JSON: [{placeholder, paper_id}, ...]
+  model TEXT,
+  prompt_version TEXT,
+  user_edited INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  UNIQUE(project_id, section_name, version)
+);
+CREATE INDEX IF NOT EXISTS idx_draft_project ON draft_sections(project_id);
