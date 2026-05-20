@@ -7,6 +7,7 @@ import {
   buildProtocolUserPrompt,
   normalizeProtocolOutput,
 } from '../../services/prompts/protocol.js'
+import { seedChecklistForProject, getProjectProgress } from '../../services/prisma.js'
 
 const router = express.Router()
 
@@ -135,6 +136,13 @@ router.post('/', (req, res) => {
     JSON.stringify(seedTitles),
   )
 
+  // 种 PRISMA 27 项清单
+  try {
+    seedChecklistForProject(db, id)
+  } catch (e) {
+    console.error('[projects] seedChecklistForProject failed:', e.message)
+  }
+
   audit(db, req, {
     eventType: 'project_created',
     userId: req.user.id,
@@ -144,6 +152,14 @@ router.post('/', (req, res) => {
 
   req.session.flash = { type: 'success', message: '项目已创建,接下来生成研究协议。' }
   res.redirect(`/projects/${id}`)
+})
+
+// ---------- GET /projects/:id/progress.json (前端 stepper 轮询用) ----------
+router.get('/:id/progress.json', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) return res.status(404).json({ error: 'not_found' })
+  res.json(getProjectProgress(db, project.id))
 })
 
 // ---------- GET /projects/:id 详情 ----------

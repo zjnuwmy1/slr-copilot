@@ -184,3 +184,49 @@ CREATE TABLE IF NOT EXISTS protocols (
 
 CREATE INDEX IF NOT EXISTS idx_protocols_project ON protocols(project_id);
 CREATE INDEX IF NOT EXISTS idx_protocols_version ON protocols(project_id, version);
+
+-- ========================================
+-- Phase 3: PRISMA 工作流 — 检索式 + 27 项清单
+-- ========================================
+
+-- WoS / Scopus / PubMed 等检索式;同一个 database 可有多个 query_type 版本
+CREATE TABLE IF NOT EXISTS search_strategies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  database_name TEXT NOT NULL,             -- wos | scopus | pubmed | ieee | eric | acm | psycinfo | other
+  query_type TEXT NOT NULL,                -- high_recall | balanced | high_precision | user
+  query_text TEXT NOT NULL,
+  filters TEXT,                            -- JSON: { document_type:[], language:[], year_range:[s,e] }
+  rationale TEXT,
+  result_count INTEGER,                    -- 用户手动回填
+  search_date TEXT,                        -- 用户手动回填
+  version INTEGER NOT NULL,
+  generated_by TEXT NOT NULL DEFAULT 'ai' CHECK (generated_by IN ('ai','user','ai_edited')),
+  model TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_search_project ON search_strategies(project_id);
+CREATE INDEX IF NOT EXISTS idx_search_database ON search_strategies(project_id, database_name);
+
+-- PRISMA 2020 27 项清单(42 entries with sub-items)— 每项目一份,创建项目时种入
+CREATE TABLE IF NOT EXISTS prisma_checklist (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  item_number TEXT NOT NULL,               -- '1' | '5' | '10a' | '13b' | '24c' | ...
+  section TEXT NOT NULL,                   -- Title | Abstract | Introduction | Methods | Results | Discussion | Other
+  topic TEXT NOT NULL,
+  recommendation TEXT NOT NULL,
+  workflow_step TEXT,                      -- 'protocol' | 'search' | ... — 映射到我们的 wizard step
+  status TEXT NOT NULL DEFAULT 'not_started' CHECK (status IN ('not_started','in_progress','done','not_applicable')),
+  notes TEXT,
+  evidence_url TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  UNIQUE (project_id, item_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prisma_project ON prisma_checklist(project_id);
+CREATE INDEX IF NOT EXISTS idx_prisma_step ON prisma_checklist(project_id, workflow_step);
