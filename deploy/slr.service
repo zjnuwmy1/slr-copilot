@@ -1,0 +1,29 @@
+[Unit]
+Description=SLR Copilot (Node/Express)
+After=network.target
+
+[Service]
+Type=simple
+User=slr
+Group=slr
+WorkingDirectory=/opt/slr
+EnvironmentFile=/etc/slr.env
+# 关键:让 Node spawn 出的 claude CLI 能读到 slr 用户的 OAuth 凭证
+Environment=HOME=/var/lib/slr/claude-home
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+
+# 资源限制(服务器 1.6G 内存,留余量给 knowledge-share + Claude CLI 子进程)
+MemoryMax=600M
+TasksMax=200
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/var/lib/slr
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,44 @@
+<%- include('partials/header', { title }) %>
+
+<section class="space-y-6">
+  <div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+    <p class="text-xs font-medium uppercase tracking-wider text-emerald-600">Ready</p>
+    <h1 class="mt-2 text-3xl font-semibold tracking-tight">SLR Copilot</h1>
+    <p class="mt-3 text-sm text-slate-600">
+      AI 辅助的系统性文献综述平台。本页面是 <strong>Phase 0</strong> 的占位页,说明部署管道已经打通,
+      后续 Phase 1 起会逐步接入 Project Wizard、检索式生成、Zotero 上传、PDF 抽取、Evidence Matrix 与综述初稿生成。
+    </p>
+    <div class="mt-6 inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">
+      <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+      <%= phase %>
+    </div>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-3">
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">Runtime</p>
+      <p class="mt-2 text-sm text-slate-700"><%= nodeEnv %></p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">Database</p>
+      <p class="mt-2 break-all text-sm text-slate-700"><%= dbPath %></p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">LLM</p>
+      <p class="mt-2 text-sm text-slate-700">Claude Code CLI(headless,Phase 1 接入)</p>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-dashed border-slate-300 bg-white/60 p-6 text-sm text-slate-600">
+    <h2 class="text-base font-semibold text-slate-800">下一步</h2>
+    <ol class="mt-3 list-decimal space-y-1 pl-5">
+      <li>DNS 加 <code class="rounded bg-slate-100 px-1">slr.yourai.asia A 47.236.207.143</code></li>
+      <li>SSH 上服务器跑 <code class="rounded bg-slate-100 px-1">deploy/install-server.sh</code></li>
+      <li>给 <code class="rounded bg-slate-100 px-1">slr</code> 用户登录 Claude(OAuth)</li>
+      <li>Certbot 签 HTTPS</li>
+      <li>进入 Phase 1:Project Wizard + Protocol 生成</li>
+    </ol>
+  </div>
+</section>
+
+<%- include('partials/footer') %>

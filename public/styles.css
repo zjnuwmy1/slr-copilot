@@ -1,0 +1,9 @@
+/* Tailwind 通过 CDN 加载,这里只放偶尔需要的自定义样式 */
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  font-size: 0.875em;
+}
