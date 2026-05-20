@@ -253,3 +253,89 @@ CREATE TABLE IF NOT EXISTS credential_shares (
 
 CREATE INDEX IF NOT EXISTS idx_cred_shares_target ON credential_shares(shared_with_user_id);
 CREATE INDEX IF NOT EXISTS idx_cred_shares_owner ON credential_shares(shared_by_user_id);
+
+-- ========================================
+-- Phase 4: Zotero ingest — 上传 RDF + PDF 包,解析成 records + attachments
+-- ========================================
+
+CREATE TABLE IF NOT EXISTS zotero_packages (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('web_upload', 'admin_staging')),
+  source_filename TEXT,                  -- 用户上传的 zip 文件名 / staging 子目录名
+  storage_path TEXT NOT NULL,            -- 服务器解压后绝对路径
+  size_bytes INTEGER,
+  rdf_filename TEXT,                     -- 'robotic foundation models.rdf'
+  status TEXT NOT NULL DEFAULT 'uploaded'
+    CHECK (status IN ('uploaded', 'parsing', 'parsed', 'ingested', 'failed')),
+  total_records INTEGER,
+  total_with_pdf INTEGER,
+  total_with_doi INTEGER,
+  total_duplicates INTEGER,
+  manifest TEXT,                         -- JSON dump 完整 manifest
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  parsed_at TEXT,
+  ingested_at TEXT,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_zotero_pkg_project ON zotero_packages(project_id);
+CREATE INDEX IF NOT EXISTS idx_zotero_pkg_status ON zotero_packages(status);
+
+-- 一个 RDF 里抽出来的每条文献(176 条 for the test dataset)
+CREATE TABLE IF NOT EXISTS records (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  package_id TEXT,                       -- 来源(可能未来支持手动添加,故允许 NULL)
+  zotero_item_id TEXT,                   -- '#item_1364' (RDF 里的 internal id)
+  zotero_rdf_about TEXT,                 -- rdf:about URL
+  item_type TEXT,                        -- 'journalArticle' | 'conferencePaper' | 'bookSection' | 'webpage' | 'other'
+  title TEXT NOT NULL,
+  normalized_title TEXT,                 -- lowercase + 去标点 + 去 stopwords,用于去重
+  authors_json TEXT,                     -- JSON: [{surname, givenName, full}, ...]
+  authors_text TEXT,                     -- 'Wang G, Tang R, Xu M' for display + dedup
+  year INTEGER,
+  date_text TEXT,                        -- raw date string from RDF
+  journal TEXT,                          -- 'Advanced Intelligent Systems'
+  publisher TEXT,
+  doi TEXT,
+  url TEXT,
+  abstract TEXT,
+  keywords_json TEXT,                    -- JSON array of strings
+  notes TEXT,                            -- 用户在 Zotero 里写的 annotation(中文笔记)
+  has_pdf INTEGER NOT NULL DEFAULT 0,
+  duplicate_group_id TEXT,               -- 去重后同组指同一个 group id;NULL 表示无重复
+  duplicate_of_record_id TEXT,           -- 如果是被合并的副本,指向主记录
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (package_id) REFERENCES zotero_packages(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_records_project ON records(project_id);
+CREATE INDEX IF NOT EXISTS idx_records_package ON records(package_id);
+CREATE INDEX IF NOT EXISTS idx_records_doi ON records(doi);
+CREATE INDEX IF NOT EXISTS idx_records_norm_title ON records(normalized_title);
+CREATE INDEX IF NOT EXISTS idx_records_dup_group ON records(duplicate_group_id);
+CREATE INDEX IF NOT EXISTS idx_records_year ON records(year);
+
+-- 附件:PDF / HTML snapshot / 其他
+CREATE TABLE IF NOT EXISTS attachments (
+  id TEXT PRIMARY KEY,
+  record_id TEXT NOT NULL,
+  package_id TEXT,
+  attachment_kind TEXT NOT NULL,         -- 'pdf' | 'html' | 'snapshot' | 'other'
+  filename TEXT,
+  storage_path TEXT NOT NULL,            -- 绝对路径(在服务器上)
+  size_bytes INTEGER,
+  mime_type TEXT,
+  zotero_item_id TEXT,                   -- '#item_1366' 在 RDF 里的 id
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
+  FOREIGN KEY (package_id) REFERENCES zotero_packages(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_record ON attachments(record_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_kind ON attachments(attachment_kind);
