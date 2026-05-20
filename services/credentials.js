@@ -261,3 +261,154 @@ export function checkProviderAllowed(db, { userId, provider, authType }) {
   }
   return null
 }
+
+// ============================================================
+// 凭证共享(Phase 3+)
+// ============================================================
+
+/**
+ * Owner 把自己的凭证共享给指定 email 对应的用户。
+ * 返回 { ok: true, targetUserId } 或 { ok: false, reason }。
+ */
+export function shareCredentialWithEmail(db, { credentialId, ownerUserId, targetEmail, notes }) {
+  // 1) 校验凭证归属
+  const cred = db
+    .prepare(`SELECT id, user_id, status FROM user_credentials WHERE id = ? AND user_id = ?`)
+    .get(credentialId, ownerUserId)
+  if (!cred) return { ok: false, reason: 'credential_not_found_or_not_owner' }
+  if (cred.status !== 'active') return { ok: false, reason: 'credential_not_active', detail: cred.status }
+
+  // 2) 找目标用户
+  const email = String(targetEmail || '').trim().toLowerCase()
+  if (!email) return { ok: false, reason: 'empty_email' }
+  const target = db
+    .prepare(`SELECT id, is_active FROM users WHERE email = ?`)
+    .get(email)
+  if (!target) return { ok: false, reason: 'user_not_found' }
+  if (!target.is_active) return { ok: false, reason: 'user_inactive' }
+  if (target.id === ownerUserId) return { ok: false, reason: 'cannot_share_with_self' }
+
+  // 3) UPSERT(同 owner 重复 share 同一人 → 更新 notes)
+  db.prepare(`
+    INSERT INTO credential_shares (credential_id, shared_with_user_id, shared_by_user_id, notes)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT (credential_id, shared_with_user_id) DO UPDATE SET
+      notes = excluded.notes
+  `).run(credentialId, target.id, ownerUserId, String(notes || '').slice(0, 500) || null)
+
+  return { ok: true, targetUserId: target.id, targetEmail: email }
+}
+
+/** Owner 取消共享 */
+export function unshareCredential(db, { credentialId, ownerUserId, targetUserId }) {
+  // 校验凭证归属(WHERE user_id 防越权:别人不能撤销我设置的共享)
+  const cred = db
+    .prepare(`SELECT id FROM user_credentials WHERE id = ? AND user_id = ?`)
+    .get(credentialId, ownerUserId)
+  if (!cred) return { ok: false, reason: 'credential_not_found_or_not_owner' }
+
+  const r = db
+    .prepare(`DELETE FROM credential_shares WHERE credential_id = ? AND shared_with_user_id = ?`)
+    .run(credentialId, targetUserId)
+  return { ok: r.changes > 0, changes: r.changes }
+}
+
+/** 一个 credential 共享给了哪些人 — owner 视角 */
+export function listSharesOfCredential(db, credentialId) {
+  return db.prepare(`
+    SELECT cs.shared_with_user_id AS user_id,
+           u.email, u.display_name, u.is_active,
+           cs.notes, cs.created_at
+    FROM credential_shares cs
+    JOIN users u ON u.id = cs.shared_with_user_id
+    WHERE cs.credential_id = ?
+    ORDER BY cs.created_at DESC
+  `).all(credentialId)
+}
+
+/** 共享给我的所有凭证 — 用户视角(脱敏,不返回 blob) */
+export function listSharedWithUser(db, userId) {
+  return db.prepare(`
+    SELECT uc.id, uc.provider, uc.auth_type, uc.label, uc.status,
+           uc.last_validated_at, uc.last_used_at,
+           cs.shared_by_user_id, owner.email AS owner_email,
+           cs.notes, cs.created_at AS shared_at
+    FROM credential_shares cs
+    JOIN user_credentials uc ON uc.id = cs.credential_id
+    JOIN users owner ON owner.id = uc.user_id
+    WHERE cs.shared_with_user_id = ?
+    ORDER BY cs.created_at DESC
+  `).all(userId)
+}
+
+/** Admin 视角:全平台所有共享 */
+export function listAllShares(db) {
+  return db.prepare(`
+    SELECT uc.id AS credential_id, uc.provider, uc.auth_type, uc.label,
+           owner.email AS owner_email,
+           target.email AS target_email,
+           cs.notes, cs.created_at
+    FROM credential_shares cs
+    JOIN user_credentials uc ON uc.id = cs.credential_id
+    JOIN users owner ON owner.id = uc.user_id
+    JOIN users target ON target.id = cs.shared_with_user_id
+    ORDER BY cs.created_at DESC
+  `).all()
+}
+
+/**
+ * 给 LLM router 用的解密:允许 owner OR 被共享对象访问。
+ * 返回解密后的明文凭证(含 api_key / home_path)。
+ */
+export function getDecryptedForUsage(db, { userId, credentialId }) {
+  // owner 自有
+  const own = db.prepare(`
+    SELECT id, user_id, provider, auth_type, label, credential_blob_enc, status
+    FROM user_credentials WHERE id = ? AND user_id = ? AND status = 'active'
+  `).get(credentialId, userId)
+  if (own) {
+    try { return { ...own, ...decryptJson(own.credential_blob_enc), via: 'owner' } }
+    catch (e) { throw new Error(`decrypt_failed: ${e.message}`) }
+  }
+  // 共享给我的
+  const shared = db.prepare(`
+    SELECT uc.id, uc.user_id AS owner_user_id, uc.provider, uc.auth_type, uc.label,
+           uc.credential_blob_enc, uc.status
+    FROM credential_shares cs
+    JOIN user_credentials uc ON uc.id = cs.credential_id
+    WHERE cs.credential_id = ? AND cs.shared_with_user_id = ? AND uc.status = 'active'
+  `).get(credentialId, userId)
+  if (shared) {
+    try { return { ...shared, ...decryptJson(shared.credential_blob_enc), via: 'shared', ownerUserId: shared.owner_user_id } }
+    catch (e) { throw new Error(`decrypt_failed: ${e.message}`) }
+  }
+  throw new Error('credential_not_accessible')
+}
+
+/**
+ * 给 LLM router 用的"找一条可用凭证":先看 owner 自有,再看共享给我的。
+ * 返回 active 凭证元数据数组(脱敏)+ via 标记。
+ */
+export function listUsableForUser(db, userId) {
+  const own = db.prepare(`
+    SELECT ${SAFE_COLUMNS}, 'owner' AS via, NULL AS owner_email
+    FROM user_credentials
+    WHERE user_id = ? AND status = 'active'
+    ORDER BY created_at DESC
+  `).all(userId)
+
+  const shared = db.prepare(`
+    SELECT uc.id, uc.provider, uc.auth_type, uc.label, uc.status,
+           uc.last_validated_at, uc.last_used_at, uc.created_at,
+           'shared' AS via,
+           owner.email AS owner_email
+    FROM credential_shares cs
+    JOIN user_credentials uc ON uc.id = cs.credential_id
+    JOIN users owner ON owner.id = uc.user_id
+    WHERE cs.shared_with_user_id = ? AND uc.status = 'active'
+    ORDER BY cs.created_at DESC
+  `).all(userId)
+
+  // owner 自有的优先,后接共享
+  return [...own, ...shared]
+}

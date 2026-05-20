@@ -230,3 +230,26 @@ CREATE TABLE IF NOT EXISTS prisma_checklist (
 
 CREATE INDEX IF NOT EXISTS idx_prisma_project ON prisma_checklist(project_id);
 CREATE INDEX IF NOT EXISTS idx_prisma_step ON prisma_checklist(project_id, workflow_step);
+
+-- ========================================
+-- Phase 3+: 凭证共享 — owner 把自己的 user_credentials 行授权给其他用户使用
+-- 设计:
+--   - 只有凭证的拥有者(user_id)能 share / unshare
+--   - 被共享方在自己没有可用凭证时回落到共享凭证
+--   - 配额(user_quotas)仍按"使用者"算,不是按 owner 算
+--   - usage_logs 记录的是实际调用者(user_id),credential_id 指向 owner 的凭证
+-- ========================================
+CREATE TABLE IF NOT EXISTS credential_shares (
+  credential_id TEXT NOT NULL,
+  shared_with_user_id TEXT NOT NULL,
+  shared_by_user_id TEXT NOT NULL,        -- 同 owner,记录冗余便于查询
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (credential_id, shared_with_user_id),
+  FOREIGN KEY (credential_id) REFERENCES user_credentials(id) ON DELETE CASCADE,
+  FOREIGN KEY (shared_with_user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (shared_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cred_shares_target ON credential_shares(shared_with_user_id);
+CREATE INDEX IF NOT EXISTS idx_cred_shares_owner ON credential_shares(shared_by_user_id);

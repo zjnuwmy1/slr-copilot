@@ -25,6 +25,10 @@ import {
   listForUser,
   getById,
   checkProviderAllowed,
+  shareCredentialWithEmail,
+  unshareCredential,
+  listSharesOfCredential,
+  listSharedWithUser,
 } from '../../services/credentials.js'
 
 const router = Router()
@@ -40,9 +44,11 @@ function setFlash(req, type, message) {
 router.get('/', (req, res) => {
   const db = req.app.locals.db
   const credentials = listForUser(db, req.user.id)
+  const sharedWithMe = listSharedWithUser(db, req.user.id)
   res.render('account/credentials/list', {
     title: '我的凭证',
     credentials,
+    sharedWithMe,
   })
 })
 
@@ -148,10 +154,77 @@ router.get('/:id', (req, res) => {
       message: '凭证不存在或不属于当前用户',
     })
   }
+  const shares = listSharesOfCredential(db, cred.id)
   res.render('account/credentials/detail', {
     title: cred.label,
     cred,
+    shares,
   })
+})
+
+// ============== POST /:id/share — owner 把凭证共享给指定 email ==============
+
+router.post('/:id/share', (req, res) => {
+  const db = req.app.locals.db
+  const credentialId = req.params.id
+  const { target_email, notes } = req.body
+
+  const r = shareCredentialWithEmail(db, {
+    credentialId,
+    ownerUserId: req.user.id,
+    targetEmail: target_email,
+    notes,
+  })
+
+  if (r.ok) {
+    audit(db, req, {
+      eventType: 'credential_shared',
+      userId: req.user.id,
+      actorUserId: req.user.id,
+      targetUserId: r.targetUserId,
+      payload: { credential_id: credentialId, target_email: r.targetEmail },
+    })
+    setFlash(req, 'success', `已共享给 ${r.targetEmail}。对方下次调用 LLM 时若自己没绑凭证会回落到此条。`)
+  } else {
+    const msgMap = {
+      credential_not_found_or_not_owner: '凭证不存在或你不是 owner',
+      credential_not_active: '凭证状态非 active,无法共享',
+      empty_email: '请输入对方邮箱',
+      user_not_found: '系统里找不到这个邮箱的用户',
+      user_inactive: '目标用户当前被停用,无法共享',
+      cannot_share_with_self: '不能共享给自己',
+    }
+    setFlash(req, 'error', msgMap[r.reason] || `共享失败:${r.reason}`)
+  }
+  res.redirect(`/account/credentials/${encodeURIComponent(credentialId)}`)
+})
+
+// ============== POST /:id/unshare/:targetUserId — owner 取消共享 ==============
+
+router.post('/:id/unshare/:targetUserId', (req, res) => {
+  const db = req.app.locals.db
+  const credentialId = req.params.id
+  const targetUserId = req.params.targetUserId
+
+  const r = unshareCredential(db, {
+    credentialId,
+    ownerUserId: req.user.id,
+    targetUserId,
+  })
+
+  if (r.ok) {
+    audit(db, req, {
+      eventType: 'credential_unshared',
+      userId: req.user.id,
+      actorUserId: req.user.id,
+      targetUserId,
+      payload: { credential_id: credentialId },
+    })
+    setFlash(req, 'success', '已取消共享')
+  } else {
+    setFlash(req, 'error', r.reason === 'credential_not_found_or_not_owner' ? '凭证不存在或你不是 owner' : '取消失败')
+  }
+  res.redirect(`/account/credentials/${encodeURIComponent(credentialId)}`)
 })
 
 // ============== POST /:id/retest — 重新测活 ==============

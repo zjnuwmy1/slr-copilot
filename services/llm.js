@@ -29,7 +29,7 @@
  *   }
  */
 
-import { getDecrypted, listForUser } from './credentials.js'
+import { getDecrypted, listForUser, listUsableForUser, getDecryptedForUsage } from './credentials.js'
 import { checkQuotaBeforeCall } from './quota.js'
 import * as anthropicApi from './providers/anthropic-api.js'
 import * as anthropicCli from './providers/anthropic-cli.js'
@@ -63,27 +63,37 @@ function resolveModel(model, provider) {
  */
 function pickCredential(db, { userId, credentialId, preferredProvider, preferredAuthType }) {
   if (credentialId) {
-    const cred = db
+    // 显式指定:owner 优先,然后 shared
+    const own = db
       .prepare(
         `SELECT id, user_id, provider, auth_type, label, status
          FROM user_credentials WHERE id = ? AND user_id = ?`
       )
       .get(credentialId, userId)
-    if (!cred) return { ok: false, reason: 'credential_not_found' }
-    if (cred.status !== 'active') return { ok: false, reason: 'credential_not_active', detail: cred.status }
-    return { ok: true, cred }
+    if (own) {
+      if (own.status !== 'active') return { ok: false, reason: 'credential_not_active', detail: own.status }
+      return { ok: true, cred: { ...own, via: 'owner' } }
+    }
+    // shared
+    const shared = db.prepare(`
+      SELECT uc.id, uc.user_id, uc.provider, uc.auth_type, uc.label, uc.status
+      FROM credential_shares cs
+      JOIN user_credentials uc ON uc.id = cs.credential_id
+      WHERE cs.credential_id = ? AND cs.shared_with_user_id = ?
+    `).get(credentialId, userId)
+    if (!shared) return { ok: false, reason: 'credential_not_found' }
+    if (shared.status !== 'active') return { ok: false, reason: 'credential_not_active', detail: shared.status }
+    return { ok: true, cred: { ...shared, via: 'shared' } }
   }
 
-  const all = listForUser(db, userId).filter((c) => c.status === 'active')
+  // 自动选:owner 自有的优先,然后是共享给我的
+  const all = listUsableForUser(db, userId)  // 已按 owner-first 排序
   if (all.length === 0) return { ok: false, reason: 'no_active_credential' }
 
   let candidates = all
   if (preferredProvider) candidates = candidates.filter((c) => c.provider === preferredProvider)
   if (preferredAuthType) candidates = candidates.filter((c) => c.auth_type === preferredAuthType)
-  if (candidates.length === 0) {
-    // 退化:fall back 到任意 active
-    candidates = all
-  }
+  if (candidates.length === 0) candidates = all  // 退化
   return { ok: true, cred: candidates[0] }
 }
 
@@ -273,7 +283,8 @@ export async function runLlm(db, opts) {
   // 3. 解密凭证
   let decrypted
   try {
-    decrypted = getDecrypted(db, { userId, credentialId: cred.id })
+    // 用 ForUsage 版本:既允许 owner 自有,也允许"共享给我的"
+    decrypted = getDecryptedForUsage(db, { userId, credentialId: cred.id })
   } catch (e) {
     return {
       ok: false, status: 'config_error',
