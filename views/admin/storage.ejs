@@ -1,0 +1,170 @@
+<%- include('../partials/header', { title }) %>
+
+<section class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin · Storage</p>
+      <h1 class="mt-1 text-2xl font-semibold tracking-tight">储存空间</h1>
+      <p class="mt-1 text-sm text-slate-500">磁盘 / DB / 用户 / 项目占用 + 孤儿文件清理</p>
+    </div>
+    <a href="/admin" class="text-sm text-slate-500 hover:text-slate-900">← 返回管理后台</a>
+  </div>
+
+  <!-- ─── 平台总览 ─── -->
+  <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+      <p class="text-xs font-medium uppercase text-slate-400">总占用</p>
+      <p class="mt-2 text-2xl font-semibold"><%= formatBytes(platform.total_bytes) %></p>
+    </div>
+    <% Object.entries(platform.breakdown).forEach(([k, v]) => { %>
+      <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+        <p class="text-xs font-medium uppercase text-slate-400"><%= v.label %></p>
+        <p class="mt-2 text-2xl font-semibold"><%= formatBytes(v.bytes) %></p>
+        <% if (v.files != null) { %>
+          <p class="mt-0.5 text-[11px] text-slate-400"><%= v.files %> 个文件</p>
+        <% } %>
+      </div>
+    <% }) %>
+  </div>
+
+  <!-- uploads 二级 -->
+  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-card">
+    <h2 class="text-sm font-medium uppercase text-slate-400">上传区细分</h2>
+    <div class="mt-3 grid gap-3 sm:grid-cols-3">
+      <% ['packages','records','staging'].forEach((k) => { %>
+        <div class="rounded-lg border border-slate-100 bg-slate-50/40 p-3">
+          <p class="text-xs text-slate-500"><%= k %></p>
+          <p class="mt-1 font-semibold"><%= formatBytes(platform.uploads_breakdown[k].bytes) %></p>
+          <p class="text-[11px] text-slate-400"><%= platform.uploads_breakdown[k].files %> 个文件</p>
+        </div>
+      <% }) %>
+    </div>
+  </div>
+
+  <!-- ─── 业务对象计数 ─── -->
+  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-card">
+    <h2 class="text-sm font-medium uppercase text-slate-400">业务计数</h2>
+    <div class="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-7 text-sm">
+      <% Object.entries(platform.counts).forEach(([k, v]) => { %>
+        <div class="rounded border border-slate-100 px-3 py-2">
+          <p class="text-[11px] text-slate-400"><%= k %></p>
+          <p class="mt-0.5 font-mono"><%= v %></p>
+        </div>
+      <% }) %>
+    </div>
+  </div>
+
+  <!-- ─── 用户 Top ─── -->
+  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-card">
+    <h2 class="text-sm font-medium uppercase text-slate-400">用户占用 Top 10</h2>
+    <table class="mt-3 w-full text-sm">
+      <thead class="text-left text-xs text-slate-500">
+        <tr><th class="py-2">邮箱</th><th>项目数</th><th>项目数据</th><th>OAuth HOME</th><th class="text-right">总占用</th></tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <% userUsage.forEach((u) => { %>
+          <tr>
+            <td class="py-2"><a class="hover:underline" href="/admin/users/<%= u.id %>"><%= u.email %></a></td>
+            <td><%= u.project_count %></td>
+            <td class="font-mono text-xs"><%= formatBytes(u.projects_bytes) %></td>
+            <td class="font-mono text-xs"><%= formatBytes(u.oauth_bytes) %></td>
+            <td class="text-right font-semibold"><%= formatBytes(u.bytes) %></td>
+          </tr>
+        <% }) %>
+        <% if (userUsage.length === 0) { %>
+          <tr><td colspan="5" class="py-6 text-center text-slate-400">无用户</td></tr>
+        <% } %>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ─── 项目 Top ─── -->
+  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-card">
+    <h2 class="text-sm font-medium uppercase text-slate-400">项目占用 Top 15</h2>
+    <table class="mt-3 w-full text-sm">
+      <thead class="text-left text-xs text-slate-500">
+        <tr>
+          <th class="py-2">项目</th><th>所有者</th>
+          <th>附件</th><th>缺失</th><th>chunks</th>
+          <th class="text-right">占用</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <% projectUsage.forEach((p) => { %>
+          <tr>
+            <td class="py-2 truncate max-w-xs">
+              <a class="hover:underline" href="/admin/projects/<%= p.id %>"><%= p.title %></a>
+            </td>
+            <td class="text-xs"><%= p.owner_email || '—' %></td>
+            <td class="font-mono text-xs"><%= p.attach_total %></td>
+            <td class="font-mono text-xs <%= p.attach_missing > 0 ? 'text-rose-600' : '' %>"><%= p.attach_missing %></td>
+            <td class="font-mono text-xs"><%= p.counts.chunks %></td>
+            <td class="text-right font-semibold"><%= formatBytes(p.bytes) %></td>
+          </tr>
+        <% }) %>
+        <% if (projectUsage.length === 0) { %>
+          <tr><td colspan="6" class="py-6 text-center text-slate-400">无项目</td></tr>
+        <% } %>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ─── 孤儿文件 ─── -->
+  <div class="rounded-2xl border border-rose-200 bg-rose-50/40 p-5 shadow-card">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-sm font-medium uppercase text-rose-700">孤儿文件 / 目录</h2>
+        <p class="mt-1 text-xs text-slate-600">
+          DB 没引用、但文件系统存在的内容。多见于:用户删了项目但服务器异常没清掉、OAuth 绑定失败留下的 stage 目录。
+        </p>
+      </div>
+      <% if (orphans.length > 0) { %>
+        <form method="post" action="/admin/storage/cleanup-orphans"
+              onsubmit="return confirm('确认删除全部孤儿(共 ' + <%= orphans.length %> + ' 项,约 <%= formatBytes(orphanTotal) %>)?此操作不可撤销。')">
+          <button type="submit" class="rounded-md bg-rose-600 px-3 py-1.5 text-sm text-white hover:bg-rose-700 shadow-subtle">
+            一键清理(共 <%= formatBytes(orphanTotal) %>)
+          </button>
+        </form>
+      <% } %>
+    </div>
+    <% if (orphans.length === 0) { %>
+      <p class="mt-4 text-sm text-slate-500">✓ 没有孤儿文件,DB 与文件系统一致。</p>
+    <% } else { %>
+      <table class="mt-3 w-full text-sm">
+        <thead class="text-left text-xs text-slate-500">
+          <tr><th class="py-2">类型</th><th>原因</th><th class="text-right">大小</th><th>路径</th></tr>
+        </thead>
+        <tbody class="divide-y divide-rose-100">
+          <% orphans.forEach((o) => { %>
+            <tr>
+              <td class="py-2"><span class="rounded-full bg-rose-100 px-2 py-0.5 text-xs text-rose-700"><%= o.kind %></span></td>
+              <td class="text-xs text-slate-500"><%= o.reason %></td>
+              <td class="text-right font-mono text-xs"><%= formatBytes(o.bytes) %></td>
+              <td class="font-mono text-[11px] text-slate-500 break-all"><%= o.path %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+
+  <!-- ─── DB 表统计 ─── -->
+  <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-card">
+    <h2 class="text-sm font-medium uppercase text-slate-400">SQLite 表统计</h2>
+    <p class="mt-1 text-xs text-slate-500">
+      DB 文件:<span class="font-mono"><%= formatBytes(dbStats.db_bytes) %></span>
+      <% if (dbStats.wal_bytes > 0) { %> · WAL:<span class="font-mono"><%= formatBytes(dbStats.wal_bytes) %></span><% } %>
+      · 路径:<span class="font-mono text-[11px]"><%= dbStats.db_path %></span>
+    </p>
+    <div class="mt-3 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3 text-xs">
+      <% dbStats.tables.forEach((t) => { %>
+        <div class="flex items-center justify-between rounded border border-slate-100 px-2 py-1.5">
+          <span class="font-mono text-slate-600"><%= t.table %></span>
+          <span class="font-mono <%= (t.rows || 0) > 100 ? 'text-slate-900 font-semibold' : 'text-slate-400' %>"><%= t.rows ?? '—' %></span>
+        </div>
+      <% }) %>
+    </div>
+  </div>
+</section>
+
+<%- include('../partials/footer') %>

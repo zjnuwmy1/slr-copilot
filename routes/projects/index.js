@@ -2,6 +2,8 @@ import express from 'express'
 import { randomId } from '../../services/crypto.js'
 import { audit } from '../../services/audit.js'
 import { runLlm } from '../../services/llm.js'
+import { deleteProject } from '../../services/project-delete.js'
+import { getProjectStorage, formatBytes } from '../../services/storage.js'
 import {
   PROTOCOL_SYSTEM,
   buildProtocolUserPrompt,
@@ -485,5 +487,35 @@ for (const stepId of Object.keys(STEP_LABELS)) {
     })
   })
 }
+
+// ---------- POST /:id/delete ----------
+// 用户删自己的项目(admin 删别人的走 /admin/projects 的同 endpoint — 见下)
+router.post('/:id/delete', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    req.session.flash = { type: 'error', message: '项目不存在或无权访问' }
+    return res.redirect('/projects')
+  }
+
+  const result = deleteProject(db, {
+    projectId: project.id,
+    actorUserId: req.user.id,
+    req,
+  })
+
+  if (!result.ok) {
+    req.session.flash = { type: 'error', message: `删除失败:${result.error || ''}` }
+    return res.redirect(`/projects/${project.id}`)
+  }
+
+  const s = result.summary
+  const totalRows = Object.values(s.db_rows_deleted).reduce((a, b) => a + b, 0)
+  req.session.flash = {
+    type: 'success',
+    message: `项目"${s.project_title}"已删除(${totalRows} 条 DB 记录 + ${s.files_removed} 个文件 / ${formatBytes(s.bytes_removed)})`,
+  }
+  res.redirect('/projects')
+})
 
 export default router
