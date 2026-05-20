@@ -1,0 +1,34 @@
+<%#
+  Step Layout 说明文件(不是 wrapper — EJS 不支持 slot/yield)
+  ===========================================================
+
+  每个 step 页面(detail.ejs / screening.ejs / extraction.ejs / rob.ejs / ...)
+  应该按以下顺序组合:
+
+    <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
+    <%- include('partials/project-header', { project }) %>
+
+    <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+      <%- include('partials/stepper', { project, progress, currentStep: '<step-id>' }) %>
+
+      <section class="space-y-6">
+        <!-- 面包屑 -->
+        <p class="text-xs text-slate-500">
+          Step <N> of 8 · <%= stepLabel %> · 覆盖 PRISMA #x #y #z
+        </p>
+
+        <!-- step 内容主体 -->
+        ...
+      </section>
+    </div>
+
+    <%- include('../partials/footer') %>
+
+  Locals 约定(由路由统一传入):
+    - project       : 项目 row(parseProject 后)
+    - progress      : getProjectProgress(db, projectId)
+    - currentStep   : 'protocol' | 'search' | 'screening' | 'extraction' | 'rob' | 'synthesis' | 'certainty' | 'report'
+    - stepLabel     : 顶部面包屑用的中文标题(如 "3. 筛选(Screening)")
+
+  注:header 已包了 max-w-5xl,260px stepper + 1fr 主区刚好放下;再窄就堆叠。
+%>

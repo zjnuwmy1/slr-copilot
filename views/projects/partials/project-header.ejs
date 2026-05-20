@@ -1,0 +1,26 @@
+<%#
+  Project Header — 项目标题 + 状态徽章 + 返回链接
+
+  Locals:
+    project : { id, title, status }
+%>
+<div class="mb-6">
+  <a href="/projects" class="text-sm text-slate-500 hover:text-slate-900">← 项目列表</a>
+  <div class="mt-2 flex items-center justify-between gap-4">
+    <h1 class="truncate text-2xl font-semibold tracking-tight"><%= project.title %></h1>
+    <%
+      const statusCfg = ({
+        draft:              ['bg-slate-100 text-slate-600',     '草稿'],
+        protocol_pending:   ['bg-amber-100 text-amber-700',     '协议待审批'],
+        protocol_approved:  ['bg-emerald-100 text-emerald-700', '协议已审批'],
+        searching:          ['bg-blue-100 text-blue-700',       '检索中'],
+        screening:          ['bg-blue-100 text-blue-700',       '筛选中'],
+        extracting:         ['bg-blue-100 text-blue-700',       '抽取中'],
+        synthesizing:       ['bg-blue-100 text-blue-700',       '综合中'],
+        complete:           ['bg-emerald-100 text-emerald-700', '已完成'],
+        archived:           ['bg-slate-100 text-slate-500',     '归档'],
+      })[project.status] || ['bg-slate-100 text-slate-600', project.status]
+    %>
+    <span class="flex-none rounded-full px-3 py-1 text-xs <%= statusCfg[0] %>"><%= statusCfg[1] %></span>
+  </div>
+</div>

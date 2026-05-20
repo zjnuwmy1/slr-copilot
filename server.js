@@ -16,6 +16,8 @@ import credentialsRouter from './routes/account/credentials.js'
 import oauthRouter from './routes/account/oauth.js'
 import llmRouter from './routes/account/llm.js'
 import projectsRouter from './routes/projects/index.js'
+import projectSearchRouter from './routes/projects/search.js'
+import projectPrismaRouter from './routes/projects/prisma.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -87,6 +89,10 @@ app.use('/', authRouter)
 app.use('/account/credentials', requireUser, credentialsRouter)
 app.use('/account/oauth', requireUser, oauthRouter)
 app.use('/account/llm', requireUser, llmRouter)
+// 项目子路由:E 的 router 内部用 /:id/search/* 前缀,挂在 /projects;
+// F 的 router 用 mergeParams 模式,挂在 /projects/:id/prisma。先具体后通用。
+app.use('/projects/:id/prisma', requireUser, projectPrismaRouter)
+app.use('/projects', requireUser, projectSearchRouter)
 app.use('/projects', requireUser, projectsRouter)
 
 // /account 仪表盘:登录用户的快速总览

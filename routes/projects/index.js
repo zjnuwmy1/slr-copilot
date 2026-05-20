@@ -7,7 +7,11 @@ import {
   buildProtocolUserPrompt,
   normalizeProtocolOutput,
 } from '../../services/prompts/protocol.js'
-import { seedChecklistForProject, getProjectProgress } from '../../services/prisma.js'
+import {
+  seedChecklistForProject,
+  getProjectProgress,
+  getChecklistItems,
+} from '../../services/prisma.js'
 
 const router = express.Router()
 
@@ -195,6 +199,9 @@ router.get('/:id', (req, res) => {
     latestProtocol: latest,
     approvedProtocol: approved,
     recentUsage,
+    progress: getProjectProgress(db, project.id),
+    currentStep: 'protocol',
+    stepLabel: '1. 协议(Protocol)',
   })
 })
 
@@ -381,5 +388,35 @@ router.post('/:id/protocol/:protocolId/edit', (req, res) => {
   req.session.flash = { type: 'success', message: `已基于 v${row.version} 创建编辑版 v${version}` }
   res.redirect(`/projects/${project.id}#protocol-v${version}`)
 })
+
+// ---------- step 占位页:screening / extraction / rob / synthesis / certainty / report ----------
+// Phase 4+ 会接入真正的内容,现在只渲染 stepper + "即将开放" 提示 + 当前 step 覆盖的 PRISMA 项
+const STEP_LABELS = {
+  screening:  '3. 筛选(Screening)',
+  extraction: '4. 抽取(Extraction)',
+  rob:        '5. 偏倚风险(Risk of Bias)',
+  synthesis:  '6. 综合(Synthesis)',
+  certainty:  '7. 证据强度(Certainty)',
+  report:     '8. 报告(Report)',
+}
+for (const stepId of Object.keys(STEP_LABELS)) {
+  router.get(`/:id/${stepId}`, (req, res) => {
+    const db = req.app.locals.db
+    const project = ownProjectOr404(db, req.params.id, req.user.id)
+    if (!project) {
+      return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+    }
+    const progress = getProjectProgress(db, project.id)
+    const stepItems = getChecklistItems().filter((it) => it.workflow_step === stepId)
+    res.render(`projects/${stepId}`, {
+      title: STEP_LABELS[stepId],
+      project,
+      progress,
+      currentStep: stepId,
+      stepLabel: STEP_LABELS[stepId],
+      stepItems,
+    })
+  })
+}
 
 export default router

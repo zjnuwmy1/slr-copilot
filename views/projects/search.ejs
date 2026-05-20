@@ -1,0 +1,243 @@
+<%- include('../partials/header', { title }) %>
+
+<%
+  // 容错:Agent D 的 partial 如果还没合,fallback 到普通布局
+  let hasStepper = true
+  try { /* noop — include 失败会在下面 catch 不到,EJS 是编译期。所以这里靠 fs 判断不现实,
+           直接 include,假设 D 已经在场(routes/projects/index.js 已经引用 stepper)*/ } catch { hasStepper = false }
+%>
+
+<%- include('partials/project-header', { project }) %>
+
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('partials/stepper', { project, progress: progress || { stepStatus: {}, prismaProgress: { donePct: 0, done: 0, total: 42 } }, currentStep: 'search' }) %>
+
+  <section class="space-y-6 min-w-0">
+
+    <!-- 顶部标题 + 操作栏 -->
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <h2 class="text-xl font-semibold text-slate-900">检索式</h2>
+        <p class="mt-1 text-sm text-slate-500">基于已审批协议,生成 Web of Science / Scopus / PubMed 三库 × 三版本(高召回 / 平衡 / 高精确)的检索式。覆盖 PRISMA #6(信息来源)+ #7(检索策略)。</p>
+      </div>
+      <% if (latestVersion != null) { %>
+        <a href="/projects/<%= project.id %>/search/export.md"
+           class="flex-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100">
+          导出 Markdown 附录
+        </a>
+      <% } %>
+    </div>
+
+    <!-- 协议状态卡 -->
+    <% if (!approvedProtocol) { %>
+      <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+        <p class="text-sm font-medium text-amber-900">请先审批研究协议</p>
+        <p class="mt-1 text-sm text-amber-800">检索式必须基于已审批的协议(概念组 / 研究问题 / 纳排标准)生成。请回到协议步骤,生成并审批一份协议。</p>
+        <a href="/projects/<%= project.id %>"
+           class="mt-3 inline-flex items-center rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white hover:bg-amber-500">
+          前往协议步骤
+        </a>
+      </div>
+    <% } else { %>
+      <div class="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-emerald-900">已基于协议 v<%= approvedProtocol.version %> 进行检索式生成</p>
+            <p class="mt-0.5 text-xs text-emerald-800">
+              <%= (approvedProtocol.concept_groups || []).length %> 个概念组 ·
+              <%= (approvedProtocol.research_questions || []).length %> 个研究问题
+            </p>
+          </div>
+          <form method="post" action="/projects/<%= project.id %>/search/generate">
+            <button type="submit"
+                    class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+              <%= latestVersion != null ? '重新生成检索式' : '让 Claude 生成检索式' %>
+            </button>
+          </form>
+        </div>
+      </div>
+    <% } %>
+
+    <!-- 检索式区(三个数据库 tab) -->
+    <% if (latestVersion == null) { %>
+      <div class="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-10 text-center text-slate-500">
+        <% if (approvedProtocol) { %>
+          点击上方按钮,让 Claude 生成 9 条检索式(3 库 × 3 版本)。
+        <% } else { %>
+          需要先审批协议。
+        <% } %>
+      </div>
+    <% } else { %>
+      <%
+        // 计算每个 database 是否有数据,首选有内容的第一个 tab
+        const firstActiveDb = (dbOrder || ['wos','scopus','pubmed']).find(k => (byDatabase[k] || []).length > 0) || 'wos'
+      %>
+      <div class="rounded-2xl border border-slate-200 bg-white">
+        <!-- Tabs -->
+        <div class="flex border-b border-slate-200" role="tablist">
+          <% (dbOrder || ['wos','scopus','pubmed']).forEach((dbKey, i) => {
+               const list = byDatabase[dbKey] || []
+               const isActive = (dbKey === firstActiveDb)
+          %>
+            <button type="button"
+                    role="tab"
+                    data-tab-target="tab-<%= dbKey %>"
+                    class="search-tab-btn flex-1 px-4 py-3 text-sm font-medium border-b-2 <%= isActive ? 'border-blue-500 text-blue-700 bg-blue-50/40' : 'border-transparent text-slate-600 hover:text-slate-900' %>">
+              <%= dbLabel[dbKey] || dbKey %>
+              <span class="ml-1 text-xs text-slate-400">(<%= list.length %>)</span>
+            </button>
+          <% }) %>
+        </div>
+
+        <!-- Tab panels -->
+        <% (dbOrder || ['wos','scopus','pubmed']).forEach((dbKey) => {
+             const list = byDatabase[dbKey] || []
+             const isActive = (dbKey === firstActiveDb)
+        %>
+          <div id="tab-<%= dbKey %>" class="search-tab-panel <%= isActive ? '' : 'hidden' %> p-5 space-y-4">
+            <% if (list.length === 0) { %>
+              <p class="text-sm text-slate-500">本数据库没有可用的检索式(LLM 可能跳过了),可以点上方"重新生成"。</p>
+            <% } %>
+            <% list.forEach(s => { %>
+              <article class="rounded-xl border border-slate-200 bg-slate-50/30 p-4 space-y-3">
+                <header class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-2">
+                    <%
+                      const qtCls = ({
+                        high_recall:    'bg-rose-100 text-rose-700',
+                        balanced:       'bg-blue-100 text-blue-700',
+                        high_precision: 'bg-emerald-100 text-emerald-700',
+                      })[s.query_type] || 'bg-slate-100 text-slate-600'
+                    %>
+                    <span class="rounded-full px-2.5 py-0.5 text-xs font-medium <%= qtCls %>"><%= qtLabel[s.query_type] || s.query_type %></span>
+                    <% if (s.model) { %><span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500"><%= s.model %></span><% } %>
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">v<%= s.version %></span>
+                  </div>
+                  <button type="button"
+                          class="copy-btn rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                          data-copy-target="qtext-<%= s.id %>">
+                    复制
+                  </button>
+                </header>
+
+                <% if (s.rationale) { %>
+                  <p class="text-xs text-slate-600"><span class="font-medium text-slate-700">设计理由:</span><%= s.rationale %></p>
+                <% } %>
+
+                <textarea id="qtext-<%= s.id %>" readonly rows="5"
+                          class="block w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"><%= s.query_text %></textarea>
+
+                <% if (s.filters) { %>
+                  <div class="flex flex-wrap gap-2 text-xs text-slate-500">
+                    <% if (s.filters.year_range) { %><span class="rounded bg-slate-100 px-2 py-0.5">年份: <%= s.filters.year_range.join('-') %></span><% } %>
+                    <% if (s.filters.document_types) { %><span class="rounded bg-slate-100 px-2 py-0.5">类型: <%= s.filters.document_types.join('/') %></span><% } %>
+                    <% if (s.filters.language) { %><span class="rounded bg-slate-100 px-2 py-0.5">语言: <%= s.filters.language.join('/') %></span><% } %>
+                  </div>
+                <% } %>
+
+                <!-- 命中数 + 检索日期表单 -->
+                <form method="post" action="/projects/<%= project.id %>/search/<%= s.id %>/log"
+                      class="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end pt-2 border-t border-slate-200">
+                  <div>
+                    <label class="text-xs text-slate-600" for="rc-<%= s.id %>">命中数</label>
+                    <input id="rc-<%= s.id %>" type="number" min="0" step="1" name="result_count"
+                           value="<%= s.result_count != null ? s.result_count : '' %>"
+                           placeholder="如 1234"
+                           class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm">
+                  </div>
+                  <div>
+                    <label class="text-xs text-slate-600" for="sd-<%= s.id %>">检索日期</label>
+                    <input id="sd-<%= s.id %>" type="date" name="search_date"
+                           value="<%= s.search_date || '' %>"
+                           class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm">
+                  </div>
+                  <button type="submit"
+                          class="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700">
+                    保存记录
+                  </button>
+                </form>
+
+                <!-- 备注 -->
+                <details class="text-xs text-slate-600">
+                  <summary class="cursor-pointer text-slate-500 hover:text-slate-700">备注 / 修订记录<% if (s.notes) { %> <span class="text-emerald-600">·已填</span><% } %></summary>
+                  <form method="post" action="/projects/<%= project.id %>/search/<%= s.id %>/notes" class="mt-2 space-y-2">
+                    <textarea name="notes" rows="3"
+                              placeholder="例如:WoS 实际跑出 1543 条,比预期少;尝试去掉 NEAR/5 后增加到 2010 条"
+                              class="block w-full rounded-md border-slate-300 px-2 py-1.5 text-xs"><%= s.notes || '' %></textarea>
+                    <div class="flex justify-end">
+                      <button type="submit" class="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100">保存备注</button>
+                    </div>
+                  </form>
+                </details>
+              </article>
+            <% }) %>
+          </div>
+        <% }) %>
+      </div>
+
+      <!-- 历史版本提示 -->
+      <%
+        const olderVersions = []
+        const seen = new Set()
+        for (const s of strategies) {
+          if (s.version === latestVersion) continue
+          if (seen.has(s.version)) continue
+          seen.add(s.version)
+          olderVersions.push(s.version)
+        }
+      %>
+      <% if (olderVersions.length) { %>
+        <p class="text-xs text-slate-400">历史检索式版本:<%= olderVersions.map(v => 'v' + v).join(' · ') %>(导出 Markdown 仅包含最新版)</p>
+      <% } %>
+    <% } %>
+
+  </section>
+</div>
+
+<script>
+  // Tab 切换
+  document.querySelectorAll('.search-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tgt = btn.getAttribute('data-tab-target')
+      document.querySelectorAll('.search-tab-btn').forEach(b => {
+        b.classList.remove('border-blue-500', 'text-blue-700', 'bg-blue-50/40')
+        b.classList.add('border-transparent', 'text-slate-600')
+      })
+      btn.classList.remove('border-transparent', 'text-slate-600')
+      btn.classList.add('border-blue-500', 'text-blue-700', 'bg-blue-50/40')
+      document.querySelectorAll('.search-tab-panel').forEach(p => p.classList.add('hidden'))
+      const panel = document.getElementById(tgt)
+      if (panel) panel.classList.remove('hidden')
+    })
+  })
+
+  // 复制按钮
+  document.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-copy-target')
+      const ta = document.getElementById(id)
+      if (!ta) return
+      const text = ta.value || ta.textContent || ''
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text)
+        } else {
+          ta.select()
+          document.execCommand('copy')
+          ta.blur()
+        }
+        const original = btn.textContent
+        btn.textContent = '已复制 ✓'
+        btn.classList.add('bg-emerald-50', 'text-emerald-700', 'border-emerald-300')
+        setTimeout(() => {
+          btn.textContent = original
+          btn.classList.remove('bg-emerald-50', 'text-emerald-700', 'border-emerald-300')
+        }, 1500)
+      } catch (e) {
+        alert('复制失败,请手动选中文本复制')
+      }
+    })
+  })
+</script>
+
+<%- include('../partials/footer') %>

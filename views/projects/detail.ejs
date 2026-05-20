@@ -1,203 +1,210 @@
-<%- include('../partials/header', { title }) %>
+<%- include('../partials/header', { title: project.title + ' · 协议' }) %>
+<%- include('partials/project-header', { project }) %>
 
-<section class="space-y-6">
-  <div>
-    <a href="/projects" class="text-sm text-slate-500 hover:text-slate-900">← 项目列表</a>
-    <div class="mt-2 flex items-center justify-between">
-      <h1 class="text-2xl font-semibold tracking-tight"><%= project.title %></h1>
-      <% const statusCfg = ({
-        draft: ['bg-slate-100 text-slate-600', '草稿'],
-        protocol_pending: ['bg-amber-100 text-amber-700', '协议待审批'],
-        protocol_approved: ['bg-emerald-100 text-emerald-700', '协议已审批'],
-        searching: ['bg-blue-100 text-blue-700', '检索中'],
-        screening: ['bg-blue-100 text-blue-700', '筛选中'],
-        extracting: ['bg-blue-100 text-blue-700', '抽取中'],
-        synthesizing: ['bg-blue-100 text-blue-700', '综合中'],
-        complete: ['bg-emerald-100 text-emerald-700', '已完成'],
-        archived: ['bg-slate-100 text-slate-500', '归档'],
-      })[project.status] || ['bg-slate-100 text-slate-600', project.status] %>
-      <span class="rounded-full px-3 py-1 text-xs <%= statusCfg[0] %>"><%= statusCfg[1] %></span>
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('partials/stepper', { project, progress, currentStep: 'protocol' }) %>
+
+  <section class="space-y-6">
+    <!-- 面包屑 -->
+    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+      <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 1 of 8 · 协议(Protocol)</p>
+      <p class="mt-1 text-sm text-slate-600">覆盖 PRISMA #3 Rationale · #4 Objectives · #5 Eligibility · #24a-c Registration</p>
     </div>
-  </div>
 
-  <!-- 项目元信息 -->
-  <div class="rounded-2xl border border-slate-200 bg-white p-6">
-    <h2 class="text-sm font-medium uppercase text-slate-400">项目信息</h2>
-    <dl class="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-      <div>
-        <dt class="text-xs text-slate-400">主题</dt>
-        <dd class="mt-0.5 text-slate-700"><%= project.topic %></dd>
-      </div>
-      <% if (project.goal) { %>
-        <div><dt class="text-xs text-slate-400">目标</dt><dd class="mt-0.5 text-slate-700"><%= project.goal %></dd></div>
-      <% } %>
-      <% if (project.discipline) { %>
-        <div><dt class="text-xs text-slate-400">学科</dt><dd class="mt-0.5 text-slate-700"><%= project.discipline %></dd></div>
-      <% } %>
-      <% if (project.year_start || project.year_end) { %>
-        <div><dt class="text-xs text-slate-400">年份</dt><dd class="mt-0.5 text-slate-700"><%= project.year_start || '?' %> – <%= project.year_end || '?' %></dd></div>
-      <% } %>
-      <% if (project.databases.length) { %>
-        <div><dt class="text-xs text-slate-400">数据库</dt><dd class="mt-0.5 text-slate-700"><%= project.databases.join(', ') %></dd></div>
-      <% } %>
-      <% if (project.language_limits.length) { %>
-        <div><dt class="text-xs text-slate-400">语言</dt><dd class="mt-0.5 text-slate-700"><%= project.language_limits.join(', ') %></dd></div>
-      <% } %>
-      <% if (project.seed_titles.length) { %>
-        <div class="sm:col-span-2">
-          <dt class="text-xs text-slate-400">种子文献</dt>
-          <dd class="mt-0.5 text-slate-700">
-            <ul class="list-disc pl-5">
-              <% project.seed_titles.forEach(t => { %><li><%= t %></li><% }) %>
-            </ul>
-          </dd>
+    <!-- 项目元信息 -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <h2 class="text-sm font-medium uppercase text-slate-400">项目信息</h2>
+      <dl class="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+        <div>
+          <dt class="text-xs text-slate-400">主题</dt>
+          <dd class="mt-0.5 text-slate-700"><%= project.topic %></dd>
         </div>
-      <% } %>
-    </dl>
-  </div>
-
-  <!-- 协议区 -->
-  <div class="space-y-3">
-    <div class="flex items-center justify-between">
-      <h2 class="text-lg font-semibold text-slate-900">研究协议</h2>
-      <form method="post" action="/projects/<%= project.id %>/protocol/generate">
-        <button type="submit" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">
-          <%= latestProtocol ? '重新生成' : '让 Claude 生成协议' %>
-        </button>
-      </form>
+        <% if (project.goal) { %>
+          <div><dt class="text-xs text-slate-400">目标</dt><dd class="mt-0.5 text-slate-700"><%= project.goal %></dd></div>
+        <% } %>
+        <% if (project.discipline) { %>
+          <div><dt class="text-xs text-slate-400">学科</dt><dd class="mt-0.5 text-slate-700"><%= project.discipline %></dd></div>
+        <% } %>
+        <% if (project.year_start || project.year_end) { %>
+          <div><dt class="text-xs text-slate-400">年份</dt><dd class="mt-0.5 text-slate-700"><%= project.year_start || '?' %> – <%= project.year_end || '?' %></dd></div>
+        <% } %>
+        <% if (project.databases.length) { %>
+          <div><dt class="text-xs text-slate-400">数据库</dt><dd class="mt-0.5 text-slate-700"><%= project.databases.join(', ') %></dd></div>
+        <% } %>
+        <% if (project.language_limits.length) { %>
+          <div><dt class="text-xs text-slate-400">语言</dt><dd class="mt-0.5 text-slate-700"><%= project.language_limits.join(', ') %></dd></div>
+        <% } %>
+        <% if (project.seed_titles.length) { %>
+          <div class="sm:col-span-2">
+            <dt class="text-xs text-slate-400">种子文献</dt>
+            <dd class="mt-0.5 text-slate-700">
+              <ul class="list-disc pl-5">
+                <% project.seed_titles.forEach(t => { %><li><%= t %></li><% }) %>
+              </ul>
+            </dd>
+          </div>
+        <% } %>
+      </dl>
     </div>
 
-    <% if (protocols.length === 0) { %>
-      <div class="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-10 text-center text-slate-500">
-        还没有协议。点击右上角让 Claude 基于上面项目信息生成 RQ + 纳排标准 + 概念组。
+    <!-- 协议区 -->
+    <div class="space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-semibold text-slate-900">研究协议</h2>
+        <form method="post" action="/projects/<%= project.id %>/protocol/generate">
+          <button type="submit" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">
+            <%= latestProtocol ? '重新生成' : '让 Claude 生成协议' %>
+          </button>
+        </form>
       </div>
-    <% } else { %>
-      <% protocols.forEach(p => { %>
-        <div id="protocol-v<%= p.version %>" class="rounded-2xl border <%= p.approved_by_user ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200 bg-white' %> p-6">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
-              <h3 class="text-base font-semibold">v<%= p.version %></h3>
-              <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600"><%= p.generated_by %></span>
-              <% if (p.model) { %><span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500"><%= p.model %></span><% } %>
-              <% if (p.approved_by_user) { %>
-                <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">✓ 已审批</span>
-              <% } %>
-            </div>
-            <div class="flex gap-2">
-              <% if (!p.approved_by_user) { %>
-                <form method="post" action="/projects/<%= project.id %>/protocol/<%= p.id %>/approve">
-                  <button type="submit" class="rounded-md bg-emerald-600 px-3 py-1 text-xs text-white hover:bg-emerald-500">审批</button>
-                </form>
-              <% } %>
-              <button type="button" onclick="document.getElementById('edit-<%= p.id %>').classList.toggle('hidden')"
-                      class="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100">
-                编辑
-              </button>
-            </div>
-          </div>
 
-          <% if (p.rationale) { %>
-            <p class="mt-3 rounded-md bg-slate-50 p-3 text-xs text-slate-600"><strong>推荐综述类型:</strong> <%= p.recommended_review_type || '—' %> · <%= p.rationale %></p>
-          <% } %>
-
-          <div class="mt-4 grid gap-4 md:grid-cols-2">
-            <div>
-              <h4 class="text-xs font-medium uppercase text-slate-400">研究问题</h4>
-              <ul class="mt-1 list-decimal space-y-1 pl-5 text-sm text-slate-700">
-                <% p.research_questions.forEach(q => { %><li><%= q %></li><% }) %>
-              </ul>
-            </div>
-            <div>
-              <h4 class="text-xs font-medium uppercase text-slate-400">概念组</h4>
-              <div class="mt-1 space-y-2">
-                <% p.concept_groups.forEach(g => { %>
-                  <div>
-                    <p class="text-sm font-medium text-slate-700"><%= g.name %></p>
-                    <p class="font-mono text-xs text-slate-500"><%= (g.terms || []).join(' OR ') %></p>
-                  </div>
-                <% }) %>
+      <% if (protocols.length === 0) { %>
+        <div class="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-10 text-center text-slate-500">
+          还没有协议。点击右上角让 Claude 基于上面项目信息生成 RQ + 纳排标准 + 概念组。
+        </div>
+      <% } else { %>
+        <% protocols.forEach(p => { %>
+          <div id="protocol-v<%= p.version %>" class="rounded-2xl border <%= p.approved_by_user ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200 bg-white' %> p-6">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <h3 class="text-base font-semibold">v<%= p.version %></h3>
+                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600"><%= p.generated_by %></span>
+                <% if (p.model) { %><span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500"><%= p.model %></span><% } %>
+                <% if (p.approved_by_user) { %>
+                  <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-700">✓ 已审批</span>
+                <% } %>
+              </div>
+              <div class="flex gap-2">
+                <% if (!p.approved_by_user) { %>
+                  <form method="post" action="/projects/<%= project.id %>/protocol/<%= p.id %>/approve">
+                    <button type="submit" class="rounded-md bg-emerald-600 px-3 py-1 text-xs text-white hover:bg-emerald-500">审批</button>
+                  </form>
+                <% } %>
+                <button type="button" onclick="document.getElementById('edit-<%= p.id %>').classList.toggle('hidden')"
+                        class="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100">
+                  编辑
+                </button>
               </div>
             </div>
-            <div>
-              <h4 class="text-xs font-medium uppercase text-slate-400">纳入标准</h4>
-              <ul class="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-700">
-                <% p.inclusion_criteria.forEach(c => { %><li><%= c %></li><% }) %>
-              </ul>
-            </div>
-            <div>
-              <h4 class="text-xs font-medium uppercase text-slate-400">排除标准</h4>
-              <ul class="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-700">
-                <% p.exclusion_criteria.forEach(c => { %><li><%= c %></li><% }) %>
-              </ul>
-            </div>
-            <% if (p.clarification_questions.length) { %>
-              <div class="md:col-span-2 rounded-md bg-amber-50 p-3">
-                <h4 class="text-xs font-medium uppercase text-amber-700">AI 需要你澄清</h4>
-                <ul class="mt-1 list-disc space-y-1 pl-5 text-sm text-amber-900">
-                  <% p.clarification_questions.forEach(c => { %><li><%= c %></li><% }) %>
+
+            <% if (p.rationale) { %>
+              <p class="mt-3 rounded-md bg-slate-50 p-3 text-xs text-slate-600"><strong>推荐综述类型:</strong> <%= p.recommended_review_type || '—' %> · <%= p.rationale %></p>
+            <% } %>
+
+            <div class="mt-4 grid gap-4 md:grid-cols-2">
+              <div>
+                <h4 class="text-xs font-medium uppercase text-slate-400">研究问题</h4>
+                <ul class="mt-1 list-decimal space-y-1 pl-5 text-sm text-slate-700">
+                  <% p.research_questions.forEach(q => { %><li><%= q %></li><% }) %>
                 </ul>
               </div>
-            <% } %>
+              <div>
+                <h4 class="text-xs font-medium uppercase text-slate-400">概念组</h4>
+                <div class="mt-1 space-y-2">
+                  <% p.concept_groups.forEach(g => { %>
+                    <div>
+                      <p class="text-sm font-medium text-slate-700"><%= g.name %></p>
+                      <p class="font-mono text-xs text-slate-500"><%= (g.terms || []).join(' OR ') %></p>
+                    </div>
+                  <% }) %>
+                </div>
+              </div>
+              <div>
+                <h4 class="text-xs font-medium uppercase text-slate-400">纳入标准</h4>
+                <ul class="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                  <% p.inclusion_criteria.forEach(c => { %><li><%= c %></li><% }) %>
+                </ul>
+              </div>
+              <div>
+                <h4 class="text-xs font-medium uppercase text-slate-400">排除标准</h4>
+                <ul class="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                  <% p.exclusion_criteria.forEach(c => { %><li><%= c %></li><% }) %>
+                </ul>
+              </div>
+              <% if (p.clarification_questions.length) { %>
+                <div class="md:col-span-2 rounded-md bg-amber-50 p-3">
+                  <h4 class="text-xs font-medium uppercase text-amber-700">AI 需要你澄清</h4>
+                  <ul class="mt-1 list-disc space-y-1 pl-5 text-sm text-amber-900">
+                    <% p.clarification_questions.forEach(c => { %><li><%= c %></li><% }) %>
+                  </ul>
+                </div>
+              <% } %>
+            </div>
+
+            <!-- 编辑表单(默认隐藏) -->
+            <form id="edit-<%= p.id %>" method="post" action="/projects/<%= project.id %>/protocol/<%= p.id %>/edit" class="hidden mt-4 space-y-3 border-t border-slate-200 pt-4">
+              <p class="text-xs text-slate-500">在已有 v<%= p.version %> 基础上创建新版本。每行一条。</p>
+              <div>
+                <label class="text-xs text-slate-600">研究问题</label>
+                <textarea name="research_questions" rows="5" class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm"><%= p.research_questions.join('\n') %></textarea>
+              </div>
+              <div class="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label class="text-xs text-slate-600">纳入标准</label>
+                  <textarea name="inclusion_criteria" rows="6" class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm"><%= p.inclusion_criteria.join('\n') %></textarea>
+                </div>
+                <div>
+                  <label class="text-xs text-slate-600">排除标准</label>
+                  <textarea name="exclusion_criteria" rows="6" class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm"><%= p.exclusion_criteria.join('\n') %></textarea>
+                </div>
+              </div>
+              <div>
+                <label class="text-xs text-slate-600">概念组(JSON 粘贴,进阶 UI Phase 3 再加)</label>
+                <textarea name="concept_groups_json" rows="4" class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 font-mono text-xs"><%= JSON.stringify(p.concept_groups, null, 2) %></textarea>
+              </div>
+              <div class="flex justify-end gap-2">
+                <button type="button" onclick="document.getElementById('edit-<%= p.id %>').classList.add('hidden')" class="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700">取消</button>
+                <button type="submit" class="rounded-md bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700">保存为新版本</button>
+              </div>
+            </form>
           </div>
-
-          <!-- 编辑表单(默认隐藏) -->
-          <form id="edit-<%= p.id %>" method="post" action="/projects/<%= project.id %>/protocol/<%= p.id %>/edit" class="hidden mt-4 space-y-3 border-t border-slate-200 pt-4">
-            <p class="text-xs text-slate-500">在已有 v<%= p.version %> 基础上创建新版本。每行一条。</p>
-            <div>
-              <label class="text-xs text-slate-600">研究问题</label>
-              <textarea name="research_questions" rows="5" class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm"><%= p.research_questions.join('\n') %></textarea>
-            </div>
-            <div class="grid gap-3 md:grid-cols-2">
-              <div>
-                <label class="text-xs text-slate-600">纳入标准</label>
-                <textarea name="inclusion_criteria" rows="6" class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm"><%= p.inclusion_criteria.join('\n') %></textarea>
-              </div>
-              <div>
-                <label class="text-xs text-slate-600">排除标准</label>
-                <textarea name="exclusion_criteria" rows="6" class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm"><%= p.exclusion_criteria.join('\n') %></textarea>
-              </div>
-            </div>
-            <div>
-              <label class="text-xs text-slate-600">概念组(JSON 粘贴,进阶 UI Phase 3 再加)</label>
-              <textarea name="concept_groups_json" rows="4" class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 font-mono text-xs"><%= JSON.stringify(p.concept_groups, null, 2) %></textarea>
-            </div>
-            <div class="flex justify-end gap-2">
-              <button type="button" onclick="document.getElementById('edit-<%= p.id %>').classList.add('hidden')" class="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700">取消</button>
-              <button type="submit" class="rounded-md bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700">保存为新版本</button>
-            </div>
-          </form>
-        </div>
-      <% }) %>
-    <% } %>
-  </div>
-
-  <!-- LLM 使用记录 -->
-  <% if (recentUsage.length) { %>
-    <div class="rounded-2xl border border-slate-200 bg-white p-6">
-      <h3 class="text-sm font-medium uppercase text-slate-400">最近 LLM 调用</h3>
-      <div class="mt-3 overflow-x-auto">
-        <table class="min-w-full text-xs">
-          <thead class="text-slate-400">
-            <tr><th class="px-2 py-1 text-left">时间</th><th class="px-2 py-1 text-left">动作</th><th class="px-2 py-1 text-left">模型</th><th class="px-2 py-1 text-right">耗时</th><th class="px-2 py-1">状态</th></tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100 text-slate-600">
-            <% recentUsage.forEach(u => { %>
-              <tr>
-                <td class="px-2 py-1 font-mono"><%= u.started_at %></td>
-                <td class="px-2 py-1"><%= u.action_type %></td>
-                <td class="px-2 py-1"><%= u.model || '—' %></td>
-                <td class="px-2 py-1 text-right font-mono"><%= u.duration_ms %>ms</td>
-                <td class="px-2 py-1">
-                  <% const cls = u.status === 'success' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700' %>
-                  <span class="rounded-full px-2 py-0.5 text-xs <%= cls %>"><%= u.status %></span>
-                </td>
-              </tr>
-            <% }) %>
-          </tbody>
-        </table>
-      </div>
+        <% }) %>
+      <% } %>
     </div>
-  <% } %>
-</section>
+
+    <!-- 下一步 CTA -->
+    <% if (approvedProtocol) { %>
+      <div class="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-5">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm font-medium text-emerald-900">协议已审批 ✓</p>
+            <p class="mt-1 text-xs text-emerald-700">下一步:生成检索式(Step 2 · Search)</p>
+          </div>
+          <a href="/projects/<%= project.id %>/search" class="rounded-lg bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-500">
+            进入检索式 →
+          </a>
+        </div>
+      </div>
+    <% } %>
+
+    <!-- LLM 使用记录 -->
+    <% if (recentUsage.length) { %>
+      <div class="rounded-2xl border border-slate-200 bg-white p-6">
+        <h3 class="text-sm font-medium uppercase text-slate-400">最近 LLM 调用</h3>
+        <div class="mt-3 overflow-x-auto">
+          <table class="min-w-full text-xs">
+            <thead class="text-slate-400">
+              <tr><th class="px-2 py-1 text-left">时间</th><th class="px-2 py-1 text-left">动作</th><th class="px-2 py-1 text-left">模型</th><th class="px-2 py-1 text-right">耗时</th><th class="px-2 py-1">状态</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 text-slate-600">
+              <% recentUsage.forEach(u => { %>
+                <tr>
+                  <td class="px-2 py-1 font-mono"><%= u.started_at %></td>
+                  <td class="px-2 py-1"><%= u.action_type %></td>
+                  <td class="px-2 py-1"><%= u.model || '—' %></td>
+                  <td class="px-2 py-1 text-right font-mono"><%= u.duration_ms %>ms</td>
+                  <td class="px-2 py-1">
+                    <% const cls = u.status === 'success' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700' %>
+                    <span class="rounded-full px-2 py-0.5 text-xs <%= cls %>"><%= u.status %></span>
+                  </td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    <% } %>
+  </section>
+</div>
 
 <%- include('../partials/footer') %>
