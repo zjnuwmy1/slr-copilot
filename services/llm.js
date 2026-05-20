@@ -46,13 +46,35 @@ const LIGHT_MODEL = {
   openai: process.env.OPENAI_MODEL_LIGHT || 'gpt-4o-mini',
 }
 
+import { resolveStepModel } from './settings.js'
+
 /**
- * 从模型字符串里提取语义:'light' → provider 默认轻量模型;'heavy' → 默认重模型;其他直接当模型名
+ * 从模型字符串里提取语义。优先级:
+ *   1) 调用方传入了 model 字符串(不是 alias) → 直接用
+ *   2) 调用方传 'heavy'/'light' 或没传 → 查 system_settings 里 step_model.<actionType>
+ *   3) settings 没值 → 用 STEP_SPECS 的 defaultTier + provider 推
+ *   4) 还不行 → 老的 env-var 默认
+ *
+ * 这样 admin 在 UI 改"协议生成用什么模型",立刻生效;同时保留旧的 'heavy'/'light' 调用方代码兼容。
  */
-function resolveModel(model, provider) {
-  if (!model || model === 'heavy') return DEFAULT_MODEL[provider]
-  if (model === 'light') return LIGHT_MODEL[provider]
-  return model
+function resolveModel(db, { model, provider, actionType }) {
+  const alias = (model || 'heavy').toString().toLowerCase()
+  const isAlias = ['heavy', 'light', 'flagship', 'standard', ''].includes(alias)
+
+  if (!isAlias && model) {
+    // 调用方明确指定了具体型号,尊重它
+    return model
+  }
+  // alias → 走 settings resolver
+  try {
+    const resolved = resolveStepModel(db, { actionType, provider })
+    if (resolved) return resolved
+  } catch (e) {
+    // settings 表不存在或异常 → fallback 到 env 默认
+  }
+  // 最后兜底 env 默认
+  if (alias === 'light') return LIGHT_MODEL[provider]
+  return DEFAULT_MODEL[provider]
 }
 
 /**
@@ -293,7 +315,7 @@ export async function runLlm(db, opts) {
   }
 
   // 4. 解析模型
-  const model = resolveModel(modelHint, cred.provider)
+  const model = resolveModel(db, { model: modelHint, provider: cred.provider, actionType })
 
   // 5. 路由到 provider 适配器
   const started = Date.now()

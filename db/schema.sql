@@ -472,3 +472,16 @@ CREATE TABLE IF NOT EXISTS draft_sections (
   UNIQUE(project_id, section_name, version)
 );
 CREATE INDEX IF NOT EXISTS idx_draft_project ON draft_sections(project_id);
+
+-- ========================================
+-- Phase 7: 系统设置(admin 配每一步模型等)
+-- ========================================
+
+-- 简单 KV 表:管理员可改的系统级配置
+-- 当前用 key: step_model.<action_type>(值 = 模型名或 alias 'heavy'/'light')
+CREATE TABLE IF NOT EXISTS system_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by_user_id TEXT
+);
