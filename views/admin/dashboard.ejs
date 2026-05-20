@@ -1,0 +1,50 @@
+<%- include('../partials/header', { title }) %>
+
+<section class="space-y-6">
+  <div>
+    <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin</p>
+    <h1 class="mt-1 text-2xl font-semibold tracking-tight">管理后台</h1>
+    <p class="mt-1 text-sm text-slate-500">欢迎,<%= user.display_name || user.email %></p>
+  </div>
+
+  <div class="grid gap-4 sm:grid-cols-3">
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">总用户</p>
+      <p class="mt-2 text-2xl font-semibold"><%= stats.userCount %></p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">活跃用户</p>
+      <p class="mt-2 text-2xl font-semibold"><%= stats.activeCount %></p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">未使用邀请码</p>
+      <p class="mt-2 text-2xl font-semibold"><%= stats.inviteCount %></p>
+    </div>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-3">
+    <a
+      href="/admin/users"
+      class="block rounded-xl border border-slate-200 bg-white p-5 transition hover:border-slate-400 hover:shadow-sm"
+    >
+      <p class="text-base font-semibold text-slate-800">用户管理</p>
+      <p class="mt-1 text-xs text-slate-500">查看、邀请、停启、改角色、设配额</p>
+    </a>
+    <a
+      href="/admin/usage"
+      class="block rounded-xl border border-slate-200 bg-white p-5 transition hover:border-slate-400 hover:shadow-sm"
+    >
+      <p class="text-base font-semibold text-slate-800">使用记录</p>
+      <p class="mt-1 text-xs text-slate-500">查看所有用户的 LLM 调用 / 耗时 / 错误</p>
+    </a>
+    <a
+      href="/admin/audit"
+      class="block rounded-xl border border-slate-200 bg-white p-5 transition hover:border-slate-400 hover:shadow-sm"
+    >
+      <p class="text-base font-semibold text-slate-800">审计日志</p>
+      <p class="mt-1 text-xs text-slate-500">登录 / 注册 / 凭证 / 角色等敏感事件</p>
+    </a>
+  </div>
+</section>
+
+<%- include('../partials/footer') %>

@@ -1,0 +1,98 @@
+<%- include('../partials/header', { title }) %>
+
+<section class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin · Usage</p>
+      <h1 class="mt-1 text-2xl font-semibold tracking-tight">LLM 使用记录</h1>
+      <p class="mt-1 text-sm text-slate-500">所有用户的 LLM 调用历史。Phase 2 接入 Project Wizard 后开始有数据。</p>
+    </div>
+    <a href="/admin" class="text-sm text-slate-500 hover:text-slate-900">← 返回管理后台</a>
+  </div>
+
+  <div class="grid gap-4 sm:grid-cols-4">
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">24h 调用</p>
+      <p class="mt-2 text-2xl font-semibold"><%= summary.d1_total || 0 %></p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">24h 错误</p>
+      <p class="mt-2 text-2xl font-semibold <%= (summary.d1_errors || 0) > 0 ? 'text-red-600' : '' %>"><%= summary.d1_errors || 0 %></p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">7 天调用</p>
+      <p class="mt-2 text-2xl font-semibold"><%= summary.d7_total || 0 %></p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase text-slate-400">30 天调用</p>
+      <p class="mt-2 text-2xl font-semibold"><%= summary.d30_total || 0 %></p>
+    </div>
+  </div>
+
+  <form method="get" action="/admin/usage" class="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-5">
+    <input name="user" value="<%= filters.user %>" placeholder="用户邮箱或 ID" class="rounded-md border-slate-300 px-3 py-1.5 text-sm" />
+    <select name="provider" class="rounded-md border-slate-300 px-3 py-1.5 text-sm">
+      <option value="">全部 provider</option>
+      <option value="anthropic" <%= filters.provider === 'anthropic' ? 'selected' : '' %>>Anthropic</option>
+      <option value="openai" <%= filters.provider === 'openai' ? 'selected' : '' %>>OpenAI</option>
+    </select>
+    <select name="status" class="rounded-md border-slate-300 px-3 py-1.5 text-sm">
+      <option value="">全部状态</option>
+      <% ['success','rate_limited','timeout','error','quota_exceeded'].forEach(s => { %>
+        <option value="<%= s %>" <%= filters.status === s ? 'selected' : '' %>><%= s %></option>
+      <% }) %>
+    </select>
+    <input name="since" type="date" value="<%= filters.since %>" class="rounded-md border-slate-300 px-3 py-1.5 text-sm" />
+    <button type="submit" class="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700">过滤</button>
+  </form>
+
+  <% if (rows.length === 0) { %>
+    <div class="rounded-xl border border-dashed border-slate-300 bg-white/60 p-10 text-center text-sm text-slate-500">
+      暂无使用记录。Phase 2 接入 LLM 后调用会自动落库到此。
+    </div>
+  <% } else { %>
+    <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <table class="min-w-full text-sm">
+        <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase text-slate-500">
+          <tr>
+            <th class="px-4 py-2">时间</th>
+            <th class="px-4 py-2">用户</th>
+            <th class="px-4 py-2">动作</th>
+            <th class="px-4 py-2">Provider</th>
+            <th class="px-4 py-2">Model</th>
+            <th class="px-4 py-2 text-right">Tokens</th>
+            <th class="px-4 py-2 text-right">耗时</th>
+            <th class="px-4 py-2">状态</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          <% rows.forEach(r => { %>
+            <tr>
+              <td class="px-4 py-2 font-mono text-xs text-slate-500"><%= r.started_at %></td>
+              <td class="px-4 py-2"><%= r.user_email || r.user_id %></td>
+              <td class="px-4 py-2"><%= r.action_type %></td>
+              <td class="px-4 py-2 text-slate-600"><%= r.provider %> / <%= r.auth_type %></td>
+              <td class="px-4 py-2 text-slate-500"><%= r.model || '—' %></td>
+              <td class="px-4 py-2 text-right font-mono text-xs">
+                <% if (r.prompt_tokens != null) { %>
+                  <%= r.prompt_tokens %>+<%= r.completion_tokens || 0 %>
+                <% } else { %>—<% } %>
+              </td>
+              <td class="px-4 py-2 text-right font-mono text-xs"><%= r.duration_ms != null ? r.duration_ms + 'ms' : '—' %></td>
+              <td class="px-4 py-2">
+                <% const cls = r.status === 'success' ? 'bg-emerald-100 text-emerald-700' :
+                                 r.status === 'rate_limited' ? 'bg-amber-100 text-amber-700' :
+                                 r.status === 'quota_exceeded' ? 'bg-amber-100 text-amber-700' :
+                                 'bg-red-100 text-red-700' %>
+                <span class="rounded-full px-2 py-0.5 text-xs <%= cls %>"><%= r.status %></span>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+    <p class="text-xs text-slate-400">显示最近 <%= rows.length %> 条(上限 <%= filters.limit %>)</p>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>

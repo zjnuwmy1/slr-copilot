@@ -1,0 +1,137 @@
+<%- include('../../partials/header', { title }) %>
+
+<section class="mx-auto max-w-2xl space-y-6" data-session-id="<%= session.id %>">
+  <div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+    <div class="flex items-center justify-between">
+      <h1 class="text-2xl font-semibold tracking-tight">正在绑定 <%= session.provider === 'anthropic' ? 'Claude' : 'Codex' %>…</h1>
+      <span id="state-pill" class="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
+        <%= session.state === 'awaiting_url' ? '等待 CLI 输出授权 URL' : '等待粘贴 code' %>
+      </span>
+    </div>
+
+    <div id="url-block" class="mt-6 <%= session.prompt_url ? '' : 'hidden' %>">
+      <p class="text-sm text-slate-700">第 1 步:在你的浏览器打开下面这个链接,完成授权:</p>
+      <div class="mt-2 flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <a
+          id="prompt-url"
+          href="<%= session.prompt_url || '#' %>"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex-1 break-all text-xs text-slate-800 underline decoration-dotted hover:text-slate-900"
+        ><%= session.prompt_url || '' %></a>
+        <button
+          type="button"
+          id="copy-url-btn"
+          class="shrink-0 rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-white"
+        >复制</button>
+      </div>
+    </div>
+
+    <div id="waiting-url-block" class="mt-6 <%= session.prompt_url ? 'hidden' : '' %>">
+      <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+        <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-500"></span>
+        正在启动 CLI 子进程,稍候…
+      </div>
+    </div>
+
+    <form id="code-form" action="/account/oauth/<%= session.id %>/code" method="post" class="mt-6 space-y-3">
+      <label class="block text-sm font-medium text-slate-700">
+        第 2 步:把授权页给你的 code 粘进来
+      </label>
+      <textarea
+        name="code"
+        rows="3"
+        required
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="例如:abc123…"
+        class="block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+      ></textarea>
+      <div class="flex items-center justify-between">
+        <form action="/account/oauth/<%= session.id %>/cancel" method="post">
+          <button type="submit" class="text-xs text-slate-500 hover:text-red-700">取消会话</button>
+        </form>
+        <button
+          type="submit"
+          id="submit-code-btn"
+          class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+          <%= session.state === 'awaiting_code' ? '' : 'disabled' %>
+        >提交 code</button>
+      </div>
+    </form>
+  </div>
+
+  <details class="rounded-xl border border-slate-200 bg-white/60 p-4 text-xs text-slate-500">
+    <summary class="cursor-pointer">调试信息</summary>
+    <dl class="mt-2 space-y-1 font-mono">
+      <div>session_id: <%= session.id %></div>
+      <div>provider:   <%= session.provider %></div>
+      <div>state:      <span id="dbg-state"><%= session.state %></span></div>
+      <div>created_at: <%= session.created_at %></div>
+      <div>expires_at: <%= session.expires_at %></div>
+    </dl>
+  </details>
+</section>
+
+<script>
+(function () {
+  const sid = document.currentScript.parentElement.querySelector('[data-session-id]').dataset.sessionId
+  const urlBlock = document.getElementById('url-block')
+  const waitingBlock = document.getElementById('waiting-url-block')
+  const promptUrl = document.getElementById('prompt-url')
+  const statePill = document.getElementById('state-pill')
+  const dbgState = document.getElementById('dbg-state')
+  const submitBtn = document.getElementById('submit-code-btn')
+  const copyBtn = document.getElementById('copy-url-btn')
+
+  copyBtn?.addEventListener('click', async () => {
+    const u = promptUrl?.getAttribute('href')
+    if (!u || u === '#') return
+    try {
+      await navigator.clipboard.writeText(u)
+      copyBtn.textContent = '已复制'
+      setTimeout(() => { copyBtn.textContent = '复制' }, 1500)
+    } catch {
+      copyBtn.textContent = '复制失败'
+    }
+  })
+
+  let stopped = false
+  async function poll() {
+    if (stopped) return
+    try {
+      const r = await fetch('/account/oauth/' + encodeURIComponent(sid) + '/state.json', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      })
+      if (!r.ok) return
+      const j = await r.json()
+      if (dbgState) dbgState.textContent = j.state
+      if (j.prompt_url && promptUrl) {
+        promptUrl.textContent = j.prompt_url
+        promptUrl.setAttribute('href', j.prompt_url)
+        urlBlock?.classList.remove('hidden')
+        waitingBlock?.classList.add('hidden')
+      }
+      if (j.state === 'awaiting_code') {
+        statePill.textContent = '等待粘贴 code'
+        statePill.className = 'rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700'
+        if (submitBtn) submitBtn.disabled = false
+      } else if (j.state === 'awaiting_url') {
+        statePill.textContent = '等待 CLI 输出授权 URL'
+      }
+      if (j.finished) {
+        stopped = true
+        window.location.reload()
+      }
+    } catch (e) {
+      // 网络抖动忽略
+    }
+  }
+  poll()
+  const handle = setInterval(poll, 2000)
+  window.addEventListener('beforeunload', () => { stopped = true; clearInterval(handle) })
+})()
+</script>
+
+<%- include('../../partials/footer') %>

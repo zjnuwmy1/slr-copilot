@@ -1,6 +1,8 @@
 # 部署到 slr.yourai.asia — 操作 checklist
 
-> 本地代码已在 `/Users/mingyu/Desktop/workspace/slr-copilot`,Phase 0 烟雾测试已通过。下面是把它推到 `47.236.207.143` 的步骤,**按顺序执行**,每步都有验证命令。
+> 本地代码已在 `/Users/mingyu/Desktop/workspace/slr-copilot`,Phase 0 + Phase 1 地基已就绪。下面是把它推到 `47.236.207.143` 的步骤,**按顺序执行**,每步都有验证命令。
+>
+> **Phase 1 新增**:认证 + 用户角色 + 凭证绑定 + 管理员后台。`/etc/slr.env` 需要新增 3 个变量(见步骤 3 之后)。
 
 ---
 
@@ -66,6 +68,29 @@ ssh -i ~/test.pem root@47.236.207.143 'systemctl is-active slr nginx'
 ```
 
 ---
+
+## 3b. 补 Phase 1 环境变量
+
+`install-server.sh` 自动生成的 `/etc/slr.env` 只包含 Phase 0 的字段,Phase 1 上线前要追加 3 行:
+
+```bash
+ssh -i ~/test.pem root@47.236.207.143 'cat >> /etc/slr.env <<EOF
+ENCRYPTION_KEY='$(openssl rand -hex 32)'
+BOOTSTRAP_ADMIN_EMAIL=你的邮箱@example.com
+BOOTSTRAP_ADMIN_PASSWORD=请改成强密码至少10位
+EOF
+systemctl restart slr'
+```
+
+**验证 bootstrap admin:**
+```bash
+ssh -i ~/test.pem root@47.236.207.143 'journalctl -u slr -n 10 | grep bootstrap'
+# 应该看到:[bootstrap] admin created: 你的邮箱@example.com (id=...)
+```
+
+之后浏览器打开 https://slr.yourai.asia/login,用 bootstrap 的邮箱密码登录 → 进 /admin 生成邀请码邀请其他用户。
+
+> ⚠️ BOOTSTRAP_* 只在 users 表为空时生效。之后即便改了这两个变量也不会自动重新创建。
 
 ## 4. Claude OAuth 登录(只跑一次)
 

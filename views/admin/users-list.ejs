@@ -1,0 +1,91 @@
+<%- include('../partials/header', { title }) %>
+
+<section class="space-y-6">
+  <div class="flex items-end justify-between gap-4">
+    <div>
+      <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin</p>
+      <h1 class="mt-1 text-2xl font-semibold tracking-tight">用户管理</h1>
+      <p class="mt-1 text-sm text-slate-500">共 <%= users.length %> 个账号</p>
+    </div>
+    <a
+      href="/admin/users/new"
+      class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+    >+ 生成邀请码</a>
+  </div>
+
+  <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <table class="min-w-full divide-y divide-slate-200 text-sm">
+      <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+        <tr>
+          <th class="px-4 py-3 text-left font-medium">邮箱</th>
+          <th class="px-4 py-3 text-left font-medium">显示名</th>
+          <th class="px-4 py-3 text-left font-medium">角色</th>
+          <th class="px-4 py-3 text-left font-medium">状态</th>
+          <th class="px-4 py-3 text-left font-medium">创建</th>
+          <th class="px-4 py-3 text-left font-medium">最后登录</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <% users.forEach(function(u) { %>
+          <tr class="hover:bg-slate-50">
+            <td class="px-4 py-3 font-medium text-slate-800"><%= u.email %></td>
+            <td class="px-4 py-3 text-slate-600"><%= u.display_name || '—' %></td>
+            <td class="px-4 py-3">
+              <% if (u.role === 'admin') { %>
+                <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">ADMIN</span>
+              <% } else { %>
+                <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">user</span>
+              <% } %>
+            </td>
+            <td class="px-4 py-3">
+              <% if (u.is_active) { %>
+                <span class="inline-flex items-center gap-1 text-xs text-emerald-700">
+                  <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> active
+                </span>
+              <% } else { %>
+                <span class="inline-flex items-center gap-1 text-xs text-slate-500">
+                  <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span> inactive
+                </span>
+              <% } %>
+            </td>
+            <td class="px-4 py-3 text-xs text-slate-500"><%= u.created_at %></td>
+            <td class="px-4 py-3 text-xs text-slate-500"><%= u.last_login_at || '—' %></td>
+            <td class="px-4 py-3 text-right">
+              <a href="/admin/users/<%= encodeURIComponent(u.id) %>" class="text-xs text-slate-700 underline hover:text-slate-900">详情</a>
+            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+
+  <% if (invites && invites.length) { %>
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 class="text-base font-semibold text-slate-800">未使用的邀请码</h2>
+      <p class="mt-1 text-xs text-slate-500">共 <%= invites.length %> 个(最多显示 20)</p>
+      <ul class="mt-4 divide-y divide-slate-100 text-sm">
+        <% invites.forEach(function(inv) { %>
+          <li class="flex items-center justify-between gap-4 py-2">
+            <div class="flex items-center gap-3">
+              <code class="rounded bg-slate-100 px-2 py-1 font-mono text-sm tracking-wider"><%= inv.code %></code>
+              <% if (inv.preset_role === 'admin') { %>
+                <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">ADMIN</span>
+              <% } else { %>
+                <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">user</span>
+              <% } %>
+              <% if (inv.note) { %>
+                <span class="text-xs text-slate-500"><%= inv.note %></span>
+              <% } %>
+            </div>
+            <div class="text-xs text-slate-500">
+              <% if (inv.expires_at) { %>过期:<%= inv.expires_at %><% } else { %>永不过期<% } %>
+            </div>
+          </li>
+        <% }) %>
+      </ul>
+    </div>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>

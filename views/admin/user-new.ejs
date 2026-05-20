@@ -1,0 +1,65 @@
+<%- include('../partials/header', { title }) %>
+
+<section class="mx-auto max-w-xl">
+  <div class="mb-4">
+    <a href="/admin/users" class="text-xs text-slate-500 hover:text-slate-900">← 返回用户列表</a>
+  </div>
+
+  <div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+    <h1 class="text-xl font-semibold tracking-tight">生成邀请码</h1>
+    <p class="mt-1 text-sm text-slate-500">生成后把代码或注册链接发给被邀请者</p>
+
+    <% if (error) { %>
+      <div class="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+        <%= error %>
+      </div>
+    <% } %>
+
+    <form action="/admin/users/invites" method="post" class="mt-6 space-y-5">
+      <div>
+        <label class="block text-sm font-medium text-slate-700">角色</label>
+        <select
+          name="preset_role"
+          class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+        >
+          <option value="user" <%= form.preset_role === 'user' ? 'selected' : '' %>>user(普通用户)</option>
+          <option value="admin" <%= form.preset_role === 'admin' ? 'selected' : '' %>>admin(管理员)</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">备注(可选)</label>
+        <input
+          type="text"
+          name="note"
+          value="<%= form.note %>"
+          maxlength="200"
+          class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+          placeholder="例如:给 Alice 的研究账号"
+        >
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">有效期(天)</label>
+        <input
+          type="number"
+          name="expires_days"
+          value="<%= form.expires_days %>"
+          min="1"
+          max="365"
+          class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+        >
+        <p class="mt-1 text-xs text-slate-500">默认 7 天;留空则永不过期</p>
+      </div>
+
+      <button
+        type="submit"
+        class="w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+      >
+        生成邀请码
+      </button>
+    </form>
+  </div>
+</section>
+
+<%- include('../partials/footer') %>

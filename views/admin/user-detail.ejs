@@ -1,0 +1,215 @@
+<%- include('../partials/header', { title }) %>
+
+<section class="space-y-6">
+  <div>
+    <a href="/admin/users" class="text-xs text-slate-500 hover:text-slate-900">← 返回用户列表</a>
+    <h1 class="mt-1 text-2xl font-semibold tracking-tight"><%= target.display_name || target.email %></h1>
+    <p class="mt-1 text-sm text-slate-500"><%= target.email %></p>
+  </div>
+
+  <!-- 基本信息 -->
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">基本信息</h2>
+    <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+      <div>
+        <dt class="text-xs text-slate-500">ID</dt>
+        <dd class="mt-0.5 break-all font-mono text-xs text-slate-700"><%= target.id %></dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">角色</dt>
+        <dd class="mt-0.5">
+          <% if (target.role === 'admin') { %>
+            <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">ADMIN</span>
+          <% } else { %>
+            <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">user</span>
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">状态</dt>
+        <dd class="mt-0.5">
+          <% if (target.is_active) { %>
+            <span class="inline-flex items-center gap-1 text-xs text-emerald-700">
+              <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> active
+            </span>
+          <% } else { %>
+            <span class="inline-flex items-center gap-1 text-xs text-slate-500">
+              <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span> inactive
+            </span>
+          <% } %>
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">注册时间</dt>
+        <dd class="mt-0.5 text-slate-700"><%= target.created_at %></dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">最后登录</dt>
+        <dd class="mt-0.5 text-slate-700"><%= target.last_login_at || '—' %></dd>
+      </div>
+      <div>
+        <dt class="text-xs text-slate-500">注册时使用的邀请码</dt>
+        <dd class="mt-0.5 font-mono text-xs text-slate-700"><%= target.invite_code_used || '—' %></dd>
+      </div>
+    </dl>
+  </div>
+
+  <!-- 状态 / 角色 -->
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">账户状态</h2>
+      <% if (isSelf) { %>
+        <p class="mt-4 text-xs text-slate-500">这是你自己,不能停用自己。</p>
+      <% } else if (target.is_active) { %>
+        <form action="/admin/users/<%= encodeURIComponent(target.id) %>/deactivate" method="post" class="mt-4">
+          <button
+            type="submit"
+            class="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+            onclick="return confirm('确认停用该用户?停用后该用户将无法登录。')"
+          >停用账户</button>
+        </form>
+      <% } else { %>
+        <form action="/admin/users/<%= encodeURIComponent(target.id) %>/activate" method="post" class="mt-4">
+          <button
+            type="submit"
+            class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+          >启用账户</button>
+        </form>
+      <% } %>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">角色</h2>
+      <% if (isSelf) { %>
+        <p class="mt-4 text-xs text-slate-500">这是你自己,不能把自己降级。</p>
+      <% } else { %>
+        <form action="/admin/users/<%= encodeURIComponent(target.id) %>/role" method="post" class="mt-4 flex items-center gap-3">
+          <select
+            name="role"
+            class="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+          >
+            <option value="user" <%= target.role === 'user' ? 'selected' : '' %>>user</option>
+            <option value="admin" <%= target.role === 'admin' ? 'selected' : '' %>>admin</option>
+          </select>
+          <button
+            type="submit"
+            class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          >保存</button>
+        </form>
+      <% } %>
+    </div>
+  </div>
+
+  <!-- 配额 -->
+  <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">使用配额</h2>
+    <% if (quota) { %>
+      <p class="mt-1 text-xs text-slate-500">
+        最近更新:<%= quota.updated_at %>
+        <% if (quota.updated_by_user_id) { %> · by <code class="font-mono text-[10px]"><%= quota.updated_by_user_id %></code><% } %>
+      </p>
+    <% } else { %>
+      <p class="mt-1 text-xs text-slate-500">尚未设置配额(默认不限)</p>
+    <% } %>
+
+    <form action="/admin/users/<%= encodeURIComponent(target.id) %>/quota" method="post" class="mt-5 space-y-4">
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label class="block text-sm font-medium text-slate-700">每日 LLM 调用上限</label>
+          <input
+            type="number"
+            name="daily_call_limit"
+            min="0"
+            step="1"
+            value="<%= quota && quota.daily_call_limit != null ? quota.daily_call_limit : '' %>"
+            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+            placeholder="留空 = 不限"
+          >
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">每月 Token 上限</label>
+          <input
+            type="number"
+            name="monthly_token_limit"
+            min="0"
+            step="1"
+            value="<%= quota && quota.monthly_token_limit != null ? quota.monthly_token_limit : '' %>"
+            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+            placeholder="留空 = 不限"
+          >
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">允许的 Provider</label>
+        <p class="text-xs text-slate-500">都不勾 = 全允许</p>
+        <div class="mt-2 flex gap-4 text-sm">
+          <label class="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              name="allowed_providers"
+              value="anthropic"
+              <%= allowedProviders && allowedProviders.includes('anthropic') ? 'checked' : '' %>
+              class="rounded border-slate-300"
+            >
+            <span>anthropic</span>
+          </label>
+          <label class="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              name="allowed_providers"
+              value="openai"
+              <%= allowedProviders && allowedProviders.includes('openai') ? 'checked' : '' %>
+              class="rounded border-slate-300"
+            >
+            <span>openai</span>
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">允许的认证方式</label>
+        <p class="text-xs text-slate-500">都不勾 = 全允许</p>
+        <div class="mt-2 flex gap-4 text-sm">
+          <label class="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              name="allowed_auth_types"
+              value="api_key"
+              <%= allowedAuthTypes && allowedAuthTypes.includes('api_key') ? 'checked' : '' %>
+              class="rounded border-slate-300"
+            >
+            <span>api_key</span>
+          </label>
+          <label class="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              name="allowed_auth_types"
+              value="oauth"
+              <%= allowedAuthTypes && allowedAuthTypes.includes('oauth') ? 'checked' : '' %>
+              class="rounded border-slate-300"
+            >
+            <span>oauth</span>
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">备注(可选)</label>
+        <textarea
+          name="notes"
+          maxlength="500"
+          rows="2"
+          class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+        ><%= quota && quota.notes ? quota.notes : '' %></textarea>
+      </div>
+
+      <button
+        type="submit"
+        class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+      >保存配额</button>
+    </form>
+  </div>
+</section>
+
+<%- include('../partials/footer') %>

@@ -1,0 +1,78 @@
+<%- include('../../partials/header', { title }) %>
+
+<section class="mx-auto max-w-2xl space-y-6">
+  <div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+    <h1 class="text-2xl font-semibold tracking-tight">绑定订阅(OAuth)</h1>
+    <p class="mt-2 text-sm text-slate-600">
+      用你的 Claude / Codex <strong>个人订阅账户</strong>授权这台平台。平台会在沙箱目录里执行
+      <code class="rounded bg-slate-100 px-1 text-xs">claude login</code> /
+      <code class="rounded bg-slate-100 px-1 text-xs">codex login</code>,把生成的授权链接抛给你,
+      你在自己的浏览器里完成授权 → 把 code 粘回平台。授权完成后凭证文件落到该用户的私有目录(权限 700),
+      平台后续推理直接读这个目录。
+    </p>
+
+    <% if (mockClaude || mockCodex) { %>
+      <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        <strong>开发模式:</strong>
+        <% if (mockClaude) { %><code>CLAUDE_BIN=mock</code><% } %>
+        <% if (mockClaude && mockCodex) { %> · <% } %>
+        <% if (mockCodex) { %><code>CODEX_BIN=mock</code><% } %>
+        — 当前 provider 不真正调用 CLI,会用假的 URL / 接受任意 code。
+      </div>
+    <% } %>
+
+    <form action="/account/oauth/start" method="post" class="mt-6 space-y-4">
+      <div class="space-y-2">
+        <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 px-4 py-3 hover:border-slate-400">
+          <input
+            type="radio"
+            name="provider"
+            value="anthropic"
+            class="mt-1"
+            <%= preselect === 'anthropic' ? 'checked' : '' %>
+            required
+          >
+          <span class="text-sm">
+            <span class="block font-medium text-slate-900">Claude(Anthropic 订阅)<% if (mockClaude) { %> <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">MOCK</span><% } %></span>
+            <span class="block text-slate-500">使用 <code>claude login</code>,凭证落到 .claude/</span>
+          </span>
+        </label>
+        <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 px-4 py-3 hover:border-slate-400">
+          <input
+            type="radio"
+            name="provider"
+            value="openai"
+            class="mt-1"
+            <%= preselect === 'openai' ? 'checked' : '' %>
+          >
+          <span class="text-sm">
+            <span class="block font-medium text-slate-900">Codex(OpenAI 订阅)<% if (mockCodex) { %> <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">MOCK</span><% } %></span>
+            <span class="block text-slate-500">使用 <code>codex login</code>,凭证落到 .codex/</span>
+          </span>
+        </label>
+      </div>
+      <div class="flex items-center justify-between pt-2">
+        <a href="/account/credentials" class="text-sm text-slate-500 hover:text-slate-900">← 返回凭证</a>
+        <button
+          type="submit"
+          class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+        >
+          开始绑定
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <div class="rounded-xl border border-dashed border-slate-300 bg-white/60 p-5 text-xs text-slate-600">
+    <h2 class="text-sm font-semibold text-slate-800">流程</h2>
+    <ol class="mt-2 list-decimal space-y-1 pl-5">
+      <li>点击"开始绑定" → 平台后台拉起 <code>claude login</code> / <code>codex login</code></li>
+      <li>大约 1–2 秒后会出现一个授权 URL</li>
+      <li>在你自己的浏览器打开它 → Anthropic / OpenAI 那边完成授权</li>
+      <li>授权页给你一个 code,粘回平台</li>
+      <li>平台把 code 喂给 CLI 子进程,等它退出 → 凭证落地 → 完成</li>
+    </ol>
+  </div>
+</section>
+
+<%- include('../../partials/footer') %>
