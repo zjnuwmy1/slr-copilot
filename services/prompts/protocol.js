@@ -85,37 +85,95 @@ export function buildProtocolUserPrompt(input) {
 
 /**
  * 把 LLM 输出 normalize 成数据库能存的形状。
- * 错误处理:任何字段缺失就给空数组 / null。
+ * 容错策略:
+ *  1) raw 可能被包了一层(`{protocol: {...}}` / `{output: {...}}` / `{result: {...}}`),自动剥
+ *  2) 字段名同义词(questions → research_questions, inclusion → inclusion_criteria,etc.)
+ *  3) 任何字段缺失就给空数组 / null,不抛
  */
 export function normalizeProtocolOutput(raw) {
   if (!raw || typeof raw !== 'object') {
-    return {
-      recommended_review_type: null,
-      rationale: '',
-      concept_groups: [],
-      research_questions: [],
-      inclusion_criteria: [],
-      exclusion_criteria: [],
-      clarification_questions: [],
-    }
+    return emptyProtocol()
   }
+
+  // 1) 剥 wrapper:如果顶层只有一个 key 且 value 是对象,递归一次
+  raw = unwrapOne(raw)
+  raw = unwrapOne(raw)  // 最多剥两层 protect against {data: {protocol: {...}}}
+
+  // 2) 字段同义词映射:LLM 偶尔会用不同 key
+  const aliases = {
+    research_questions: ['research_questions', 'researchQuestions', 'questions', 'rq', 'RQs'],
+    inclusion_criteria: ['inclusion_criteria', 'inclusionCriteria', 'inclusion', 'include_criteria'],
+    exclusion_criteria: ['exclusion_criteria', 'exclusionCriteria', 'exclusion', 'exclude_criteria'],
+    concept_groups: ['concept_groups', 'conceptGroups', 'concepts', 'groups', 'keywords'],
+    clarification_questions: ['clarification_questions', 'clarificationQuestions', 'clarifications', 'questions_for_user'],
+    recommended_review_type: ['recommended_review_type', 'recommendedReviewType', 'review_type', 'reviewType'],
+    rationale: ['rationale', 'reason', 'reasoning', 'justification'],
+  }
+  const pick = (key) => {
+    for (const k of aliases[key]) if (raw[k] !== undefined) return raw[k]
+    return undefined
+  }
+
   const arr = (v) => (Array.isArray(v) ? v.filter((x) => x != null && String(x).trim()) : [])
   const strOrNull = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+
   return {
-    recommended_review_type: strOrNull(raw.recommended_review_type),
-    rationale: typeof raw.rationale === 'string' ? raw.rationale.trim() : '',
-    concept_groups: Array.isArray(raw.concept_groups)
-      ? raw.concept_groups
-          .filter((g) => g && typeof g === 'object')
-          .map((g) => ({
-            name: strOrNull(g.name) || '未命名',
-            terms: arr(g.terms).map(String),
-          }))
-          .filter((g) => g.terms.length > 0)
-      : [],
-    research_questions: arr(raw.research_questions).map(String),
-    inclusion_criteria: arr(raw.inclusion_criteria).map(String),
-    exclusion_criteria: arr(raw.exclusion_criteria).map(String),
-    clarification_questions: arr(raw.clarification_questions).map(String),
+    recommended_review_type: strOrNull(pick('recommended_review_type')),
+    rationale: typeof pick('rationale') === 'string' ? pick('rationale').trim() : '',
+    concept_groups: normalizeConceptGroups(pick('concept_groups'), arr, strOrNull),
+    research_questions: arr(pick('research_questions')).map(String),
+    inclusion_criteria: arr(pick('inclusion_criteria')).map(String),
+    exclusion_criteria: arr(pick('exclusion_criteria')).map(String),
+    clarification_questions: arr(pick('clarification_questions')).map(String),
   }
+}
+
+function emptyProtocol() {
+  return {
+    recommended_review_type: null,
+    rationale: '',
+    concept_groups: [],
+    research_questions: [],
+    inclusion_criteria: [],
+    exclusion_criteria: [],
+    clarification_questions: [],
+  }
+}
+
+function unwrapOne(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
+  const keys = Object.keys(raw)
+  // 顶层有 research_questions 之类的直接字段就不要剥
+  const hasProtocolField = keys.some((k) =>
+    /^(research_questions|inclusion_criteria|exclusion_criteria|concept_groups|rationale)$/i.test(k)
+  )
+  if (hasProtocolField) return raw
+  // 顶层只有 1-2 个 key 且其中一个 value 是 object,递归进去
+  for (const k of keys) {
+    if (/^(protocol|output|result|data|response)$/i.test(k)) {
+      const v = raw[k]
+      if (v && typeof v === 'object') return v
+    }
+  }
+  return raw
+}
+
+/** concept_groups 可能是 [{name, terms}],也可能是 {组名: [...]} 形式 */
+function normalizeConceptGroups(cg, arr, strOrNull) {
+  if (!cg) return []
+  if (Array.isArray(cg)) {
+    return cg
+      .filter((g) => g && typeof g === 'object')
+      .map((g) => ({
+        name: strOrNull(g.name) || strOrNull(g.group) || '未命名',
+        terms: arr(g.terms || g.keywords || g.items).map(String),
+      }))
+      .filter((g) => g.terms.length > 0)
+  }
+  if (typeof cg === 'object') {
+    return Object.entries(cg)
+      .filter(([_, v]) => Array.isArray(v) && v.length)
+      .map(([name, terms]) => ({ name, terms: terms.map(String) }))
+  }
+  return []
 }

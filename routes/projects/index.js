@@ -257,21 +257,36 @@ router.post('/:id/protocol/generate', async (req, res) => {
     !normalized.concept_groups.length
   )
   if (isEmpty) {
+    // JSON 解析成功但 normalize 后字段全空:把 raw 文本回填到 usage_log 方便 debug。
+    // 解析失败的 case llm.js 已经回填了 raw 文本,这里只补"normalize 空"的情况。
+    const reason = result.data ? 'normalized_empty' : 'json_parse_failed'
+    if (reason === 'normalized_empty' && result.usageLogId && result.text) {
+      try {
+        db.prepare(`UPDATE usage_logs SET status = 'parse_failed', error_message = ? WHERE id = ?`)
+          .run(
+            `normalize_empty; raw_text(first 1800):\n${result.text.slice(0, 1800)}\n\n--- parsed JSON (first 800) ---\n${JSON.stringify(result.data).slice(0, 800)}`,
+            result.usageLogId,
+          )
+      } catch (e) {
+        console.error('[protocol_gen] failed to attach raw text to usage_log', e.message)
+      }
+    }
     audit(db, req, {
       eventType: 'protocol_generate_failed',
       userId: req.user.id,
       projectId: project.id,
       payload: {
-        reason: result.data ? 'normalized_empty' : 'json_parse_failed',
+        reason,
         model: result.model,
         provider: result.provider,
         duration_ms: result.durationMs,
         usage_log_id: result.usageLogId,
+        parsed_keys: result.data && typeof result.data === 'object' ? Object.keys(result.data).slice(0, 10) : null,
       },
     })
     req.session.flash = {
       type: 'error',
-      message: `Claude 返回的内容没解析出有效协议(usage log #${result.usageLogId} 已存原文片段)。请管理员去 /admin/usage 查看原始输出 → 调整 prompt 后重试。`,
+      message: `Claude 返回的内容没解析出有效协议(${reason},usage log #${result.usageLogId})。已存原文,请管理员去 /admin/usage 查看 → 调整 prompt 后重试。`,
     }
     return res.redirect(`/projects/${project.id}`)
   }
