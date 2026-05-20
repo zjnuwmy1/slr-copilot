@@ -218,8 +218,8 @@ router.post('/:id/search/generate', async (req, res) => {
       prompt: userPrompt,
       expectJson: true,
       model: 'heavy',
-      maxTokens: 4096,
-      timeoutMs: 240_000,
+      maxTokens: 8192,       // 9 条检索式 + 同义词扩展 + 警告,中文较长
+      timeoutMs: 480_000,    // 8 分钟:CLI spawn 开销 + Sonnet 输出 9 条长检索式
     })
   } catch (e) {
     console.error('[search/generate] runLlm threw:', e)

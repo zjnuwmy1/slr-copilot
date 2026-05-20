@@ -234,8 +234,8 @@ router.post('/:id/protocol/generate', async (req, res) => {
     prompt: userPrompt,
     expectJson: true,
     model: 'heavy',
-    maxTokens: 8192,  // 4096 在中文输出场景偶尔会被截断,Sonnet 默认支持到 8192
-    timeoutMs: 180_000,
+    maxTokens: 8192,    // 4096 在中文输出场景偶尔被截断
+    timeoutMs: 300_000, // 5 分钟:CLI spawn 开销 + Sonnet 思考长协议
   })
 
   if (!result.ok) {

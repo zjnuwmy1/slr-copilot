@@ -48,9 +48,10 @@
               <%= (approvedProtocol.research_questions || []).length %> 个研究问题
             </p>
           </div>
-          <form method="post" action="/projects/<%= project.id %>/search/generate">
+          <form method="post" action="/projects/<%= project.id %>/search/generate"
+                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='生成中…(2-5 分钟,请保持页面打开)';">
             <button type="submit"
-                    class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+                    class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:bg-slate-500 disabled:cursor-wait">
               <%= latestVersion != null ? '重新生成检索式' : '让 Claude 生成检索式' %>
             </button>
           </form>
