@@ -1,6 +1,11 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
 <%- include('partials/project-header', { project }) %>
 
+<%
+  // 由 step-loop 渲染时,locals 里没有 themes;手动从 progress / 数据库取
+  // 简化:这一页不直接 query DB,展示 hint + 提示 Phase 6.5 GRADE
+%>
+
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
   <%- include('partials/stepper', { project, progress, currentStep: 'certainty' }) %>
 
@@ -13,18 +18,95 @@
       </p>
     </div>
 
-    <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
-      <p class="text-2xl">🎯</p>
-      <h2 class="mt-2 text-lg font-semibold text-slate-800">即将开放</h2>
-      <p class="mt-1 text-sm text-slate-500">本步骤将在 Phase 5 接入。支持 GRADE 评级、Summary of Findings 表生成、降级/升级理由记录。</p>
-      <div class="mt-4 flex justify-center gap-2">
-        <a href="/projects/<%= project.id %>/synthesis" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">← 返回综合</a>
-        <a href="/projects/<%= project.id %>" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">跳到协议</a>
+    <!-- 简版:列出主题的证据强度,人工调整 -->
+    <%
+      // 主题数据(直接 from db),用 locals.req.app.locals.db 拿
+      let themes = []
+      try {
+        const db = req.app.locals.db
+        themes = db.prepare(`
+          SELECT id, name, description, evidence_strength,
+                 supporting_record_ids, consistent_findings, conflicting_findings, evidence_gaps
+          FROM themes WHERE project_id = ?
+          ORDER BY COALESCE(display_order, 9999) ASC, created_at ASC
+        `).all(project.id)
+      } catch(e) {}
+      function parseArr(v) {
+        if (!v) return []
+        try { const x = JSON.parse(v); return Array.isArray(x) ? x : [] } catch { return [] }
+      }
+    %>
+
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <h2 class="text-lg font-semibold text-slate-800">证据强度概览(简版)</h2>
+      <p class="mt-1 text-sm text-slate-500">
+        本期采用主题级的粗粒度评级。完整 GRADE 评估(降级 / 升级理由、Summary of Findings 表)将在 Phase 6.5 接入。
+      </p>
+
+      <% if (themes.length === 0) { %>
+        <div class="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+          尚无主题。请先到
+          <a href="/projects/<%= project.id %>/synthesis" class="text-slate-700 underline">综合(Synthesis)</a>
+          步骤跑主题聚类。
+        </div>
+      <% } else { %>
+        <div class="mt-4 space-y-3">
+          <% themes.forEach((t, i) => {
+            const strengthCfg = ({
+              strong:   ['bg-emerald-100 text-emerald-700', '强'],
+              moderate: ['bg-blue-100 text-blue-700',       '中'],
+              weak:     ['bg-amber-100 text-amber-700',     '弱'],
+              unclear:  ['bg-slate-100 text-slate-500',     '不确定'],
+            })[t.evidence_strength] || ['bg-slate-100 text-slate-500', t.evidence_strength || '—']
+            const supports = parseArr(t.supporting_record_ids)
+          %>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-slate-400">#<%= i + 1 %></span>
+                    <h3 class="text-base font-semibold text-slate-800"><%= t.name %></h3>
+                    <span class="rounded-full px-2 py-0.5 text-[10px] <%= strengthCfg[0] %>">证据 <%= strengthCfg[1] %></span>
+                    <span class="text-xs text-slate-400"><%= supports.length %> 篇支持</span>
+                  </div>
+                  <% if (t.description) { %>
+                    <p class="mt-1 text-sm text-slate-600"><%= t.description %></p>
+                  <% } %>
+                </div>
+                <form method="post" action="/projects/<%= project.id %>/synthesis/themes/<%= t.id %>/edit" class="flex items-center gap-2">
+                  <input type="hidden" name="name" value="<%= t.name %>">
+                  <input type="hidden" name="description" value="<%= t.description || '' %>">
+                  <select name="evidence_strength" class="rounded border border-slate-300 px-2 py-1 text-xs">
+                    <% ['strong','moderate','weak','unclear'].forEach(s => { %>
+                      <option value="<%= s %>" <%= t.evidence_strength === s ? 'selected' : '' %>><%= s %></option>
+                    <% }) %>
+                  </select>
+                  <button type="submit" class="rounded bg-slate-900 px-2 py-1 text-xs text-white hover:bg-slate-700">保存</button>
+                </form>
+              </div>
+            </div>
+          <% }) %>
+        </div>
+      <% } %>
+    </div>
+
+    <!-- Phase 6.5 TODO 卡 -->
+    <div class="rounded-2xl border border-amber-200 bg-amber-50/60 p-5">
+      <div class="flex items-start gap-3">
+        <span class="text-xl">⚠️</span>
+        <div>
+          <h3 class="text-sm font-semibold text-amber-800">Phase 6.5 — GRADE 详细评估(待开发)</h3>
+          <p class="mt-1 text-sm text-amber-700">
+            将支持五维度评级(风险偏倚 / 不一致性 / 间接性 / 不精确性 / 发表偏倚),
+            自动生成 Summary of Findings 表,并允许针对每个 outcome 单独评级。
+            本期(Phase 6)只做主题级粗粒度评级。
+          </p>
+        </div>
       </div>
     </div>
 
-    <div class="rounded-2xl border border-slate-200 bg-white p-6">
-      <h3 class="text-sm font-medium uppercase text-slate-400">本步骤覆盖的 PRISMA 2020 清单项</h3>
+    <details class="rounded-2xl border border-slate-200 bg-white p-5">
+      <summary class="cursor-pointer text-sm font-medium uppercase text-slate-400">本步骤覆盖的 PRISMA 2020 清单项</summary>
       <ul class="mt-3 space-y-3 text-sm">
         <% stepItems.forEach(it => { %>
           <li class="flex gap-3">
@@ -36,6 +118,11 @@
           </li>
         <% }) %>
       </ul>
+    </details>
+
+    <div class="flex justify-between text-sm">
+      <a href="/projects/<%= project.id %>/synthesis" class="rounded-lg border border-slate-300 px-3 py-2 text-slate-700 hover:bg-slate-50">← 返回综合</a>
+      <a href="/projects/<%= project.id %>/report" class="rounded-lg bg-slate-900 px-3 py-2 text-white hover:bg-slate-700">下一步:报告 →</a>
     </div>
   </section>
 </div>

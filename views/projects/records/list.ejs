@@ -29,7 +29,50 @@
           从 Zotero RDF 解析得到的全部条目;在这里检视、过滤,准备进入双盲筛选。
         </p>
       </div>
+      <div class="flex flex-none items-center gap-2">
+        <a href="<%= recordsBase %>/new"
+           class="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">
+          <span aria-hidden="true">+</span> 手动新增
+        </a>
+
+        <!-- 批量导出下拉 -->
+        <div class="relative" data-export-menu>
+          <button type="button"
+                  aria-haspopup="true" aria-expanded="false"
+                  onclick="(function(b){var m=b.parentNode.querySelector('[data-export-list]');var open=m.classList.toggle('hidden')===false;b.setAttribute('aria-expanded', open?'true':'false');})(this)"
+                  class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+            批量导出
+            <span aria-hidden="true" class="text-xs">▾</span>
+          </button>
+          <div data-export-list
+               class="absolute right-0 z-10 mt-1 hidden w-56 rounded-lg border border-slate-200 bg-white shadow-lg">
+            <a href="<%= recordsBase %>.bib" class="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">BibTeX (.bib)</a>
+            <a href="<%= recordsBase %>.ris" class="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">RIS (.ris)</a>
+            <a href="<%= recordsBase %>.csl.json" class="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">CSL JSON</a>
+            <div class="border-t border-slate-100 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-400">References Markdown</div>
+            <a href="<%= recordsBase %>.refs.md?style=apa" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">APA</a>
+            <a href="<%= recordsBase %>.refs.md?style=ieee" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">IEEE</a>
+            <a href="<%= recordsBase %>.refs.md?style=gb_t_7714" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">GB/T 7714</a>
+            <a href="<%= recordsBase %>.refs.md?style=chicago" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Chicago</a>
+            <a href="<%= recordsBase %>.refs.md?style=mla" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">MLA</a>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <script>
+      // 点空白处收起下拉
+      document.addEventListener('click', function (e) {
+        document.querySelectorAll('[data-export-menu]').forEach(function (m) {
+          if (!m.contains(e.target)) {
+            var l = m.querySelector('[data-export-list]')
+            if (l && !l.classList.contains('hidden')) l.classList.add('hidden')
+            var b = m.querySelector('button[aria-expanded]')
+            if (b) b.setAttribute('aria-expanded', 'false')
+          }
+        })
+      })
+    </script>
 
     <!-- 顶部统计卡 -->
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -153,7 +196,8 @@
         <table class="w-full text-sm">
           <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
             <tr>
-              <th class="w-8 px-3 py-3"><input type="checkbox" disabled title="批量筛选(下一步开放)" class="rounded border-slate-300 opacity-50" /></th>
+              <th class="w-8 px-3 py-3"><input type="checkbox" title="全选(批量操作 — 下一步开放)" class="rounded border-slate-300"
+                onclick="document.querySelectorAll('[data-rec-cb]').forEach(function(cb){cb.checked=this.checked}.bind(this))" /></th>
               <th class="px-3 py-3 text-left">标题 / 作者</th>
               <th class="px-3 py-3 text-left">年</th>
               <th class="px-3 py-3 text-left">期刊</th>
@@ -164,7 +208,7 @@
             <% records.forEach(r => { %>
               <tr class="hover:bg-slate-50/50">
                 <td class="px-3 py-3 align-top">
-                  <input type="checkbox" disabled class="rounded border-slate-300 opacity-50" />
+                  <input type="checkbox" data-rec-cb value="<%= r.id %>" class="rounded border-slate-300" />
                 </td>
                 <td class="px-3 py-3 align-top">
                   <a href="/projects/<%= project.id %>/records/<%= r.id %>"

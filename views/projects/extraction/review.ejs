@@ -1,0 +1,534 @@
+<%- include('../../partials/header', { title: '审阅抽取 · ' + record.title }) %>
+<%- include('../partials/project-header', { project }) %>
+
+<%
+  // 默认空 extraction(用于 failed / 未跑场景,前端 form 仍可初始化)
+  const defaultExt = {
+    bibliographic_metadata: { title: record.title, authors: [], year: record.year, journal: record.journal, doi: record.doi },
+    study_characteristics: {
+      study_type: 'not_reported', country: null, population: null,
+      sample_size: null, setting: null, methods: null, data_sources: [],
+    },
+    intervention_or_focus: '',
+    outcomes_or_themes: [],
+    key_findings: [],
+    limitations_reported_by_authors: [],
+    reviewer_notes: [],
+    requires_manual_check: [],
+  }
+  const ext = extraction || defaultExt
+  const meta = ext.bibliographic_metadata || defaultExt.bibliographic_metadata
+  const sc = ext.study_characteristics || defaultExt.study_characteristics
+
+  // 给 JS 用的全量 JSON(初始值)
+  const initialJson = JSON.stringify(ext)
+%>
+
+<div class="space-y-4">
+  <!-- 顶部导航 -->
+  <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+    <a href="/projects/<%= project.id %>/extraction"
+       class="text-slate-500 hover:text-slate-900">← 返回抽取列表</a>
+    <a href="/projects/<%= project.id %>/records/<%= record.id %>"
+       class="rounded-md border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50">
+      查看原始记录
+    </a>
+  </div>
+
+  <!-- 记录元数据 -->
+  <div class="rounded-2xl border border-slate-200 bg-white p-5">
+    <h2 class="text-lg font-semibold text-slate-900"><%= record.title %></h2>
+    <% if (record.authors_text) { %>
+      <p class="mt-1 text-sm text-slate-600"><%= record.authors_text %></p>
+    <% } %>
+    <p class="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+      <% if (record.year) { %><span>📅 <%= record.year %></span><% } %>
+      <% if (record.journal) { %><span>📰 <%= record.journal %></span><% } %>
+      <% if (record.doi) { %><span class="font-mono">DOI <%= record.doi %></span><% } %>
+      <span>📑 chunks: <%= chunks.length %></span>
+    </p>
+    <% if (extRow) { %>
+      <p class="mt-2 text-[11px] text-slate-400">
+        抽取于 <%= extRow.updated_at %>
+        <% if (extRow.model) { %>· <%= extRow.model %><% } %>
+        <% if (extRow.prompt_version) { %>· <%= extRow.prompt_version %><% } %>
+        <% if (extRow.human_verified) { %>
+          · <span class="text-emerald-700">已人工审验</span>
+        <% } %>
+      </p>
+    <% } %>
+  </div>
+
+  <% if (isFailedJson) { %>
+    <div class="rounded-2xl border border-rose-200 bg-rose-50 p-5">
+      <h3 class="text-sm font-semibold text-rose-800">抽取失败</h3>
+      <p class="mt-1 text-xs text-rose-700">原因:<code class="font-mono"><%= failureReason %></code></p>
+      <div class="mt-3 flex gap-2">
+        <form method="post" action="/projects/<%= project.id %>/extraction/run-one/<%= record.id %>">
+          <button type="submit" class="rounded-md bg-rose-600 px-3 py-1.5 text-xs text-white hover:bg-rose-700">
+            重跑抽取
+          </button>
+        </form>
+      </div>
+    </div>
+  <% } %>
+
+  <% if (!extRow) { %>
+    <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center">
+      <p class="text-sm text-slate-700">这条记录还没有跑过抽取。</p>
+      <% if (!record.has_pdf) { %>
+        <p class="mt-1 text-xs text-rose-600">⚠️ 该记录没有 PDF,无法跑抽取。请先回到 records 页补充 PDF。</p>
+      <% } else { %>
+        <form method="post" action="/projects/<%= project.id %>/extraction/run-one/<%= record.id %>" class="mt-3">
+          <button type="submit" class="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">
+            <%= chunks.length > 0 ? '开始抽取' : '抽取(abstract 兜底)' %>
+          </button>
+        </form>
+      <% } %>
+    </div>
+  <% } %>
+
+  <!-- 主审阅区:左 = 表单 / 右 = chunk -->
+  <div class="grid gap-4 lg:grid-cols-[1fr_360px]">
+    <!-- 左:表单(编辑用)-->
+    <form id="ext-form" method="post"
+          action="/projects/<%= project.id %>/extraction/<%= record.id %>/edit"
+          class="space-y-5">
+
+      <!-- 文献元数据 -->
+      <section class="rounded-2xl border border-slate-200 bg-white p-5">
+        <h3 class="text-sm font-semibold text-slate-800">文献元数据</h3>
+        <div class="mt-3 grid grid-cols-2 gap-3 text-xs">
+          <label class="block">
+            <span class="text-slate-500">标题</span>
+            <input type="text" data-bind="meta.title" value="<%= meta.title || '' %>"
+                   class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+          </label>
+          <label class="block">
+            <span class="text-slate-500">期刊</span>
+            <input type="text" data-bind="meta.journal" value="<%= meta.journal || '' %>"
+                   class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+          </label>
+          <label class="block">
+            <span class="text-slate-500">年份</span>
+            <input type="number" data-bind="meta.year" value="<%= meta.year || '' %>"
+                   class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+          </label>
+          <label class="block">
+            <span class="text-slate-500">DOI</span>
+            <input type="text" data-bind="meta.doi" value="<%= meta.doi || '' %>"
+                   class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+          </label>
+          <label class="col-span-2 block">
+            <span class="text-slate-500">作者(每行一位)</span>
+            <textarea data-bind-list="meta.authors" rows="2"
+                      class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"><%= (meta.authors || []).join('\n') %></textarea>
+          </label>
+        </div>
+      </section>
+
+      <!-- 研究特征 -->
+      <section class="rounded-2xl border border-slate-200 bg-white p-5">
+        <h3 class="text-sm font-semibold text-slate-800">研究特征</h3>
+        <div class="mt-3 grid grid-cols-2 gap-3 text-xs">
+          <label class="block">
+            <span class="text-slate-500">study_type</span>
+            <select data-bind="sc.study_type"
+                    class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+              <% ['RCT','cohort','case_control','cross_sectional','qualitative','mixed_methods','systematic_review','case_study','survey','experimental','simulation','theoretical','other','not_reported'].forEach(st => { %>
+                <option value="<%= st %>" <%= sc.study_type === st ? 'selected' : '' %>><%= st %></option>
+              <% }) %>
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-slate-500">sample_size</span>
+            <input type="number" data-bind="sc.sample_size" value="<%= sc.sample_size != null ? sc.sample_size : '' %>"
+                   class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+          </label>
+          <label class="block">
+            <span class="text-slate-500">国家 / 地区</span>
+            <input type="text" data-bind="sc.country" value="<%= sc.country || '' %>"
+                   class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+          </label>
+          <label class="block">
+            <span class="text-slate-500">研究场景(setting)</span>
+            <input type="text" data-bind="sc.setting" value="<%= sc.setting || '' %>"
+                   class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+          </label>
+          <label class="col-span-2 block">
+            <span class="text-slate-500">研究对象 / 人群(population)</span>
+            <textarea data-bind="sc.population" rows="2"
+                      class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"><%= sc.population || '' %></textarea>
+          </label>
+          <label class="col-span-2 block">
+            <span class="text-slate-500">方法(methods)</span>
+            <textarea data-bind="sc.methods" rows="3"
+                      class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"><%= sc.methods || '' %></textarea>
+          </label>
+          <label class="col-span-2 block">
+            <span class="text-slate-500">数据来源(每行一项)</span>
+            <textarea data-bind-list="sc.data_sources" rows="2"
+                      class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"><%= (sc.data_sources || []).join('\n') %></textarea>
+          </label>
+        </div>
+      </section>
+
+      <!-- 干预 / 焦点 / 结果 -->
+      <section class="rounded-2xl border border-slate-200 bg-white p-5">
+        <h3 class="text-sm font-semibold text-slate-800">干预 / 结果</h3>
+        <div class="mt-3 space-y-3 text-xs">
+          <label class="block">
+            <span class="text-slate-500">intervention_or_focus</span>
+            <textarea data-bind="root.intervention_or_focus" rows="2"
+                      class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"><%= ext.intervention_or_focus || '' %></textarea>
+          </label>
+          <label class="block">
+            <span class="text-slate-500">outcomes_or_themes(每行一条)</span>
+            <textarea data-bind-list="root.outcomes_or_themes" rows="3"
+                      class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"><%= (ext.outcomes_or_themes || []).join('\n') %></textarea>
+          </label>
+        </div>
+      </section>
+
+      <!-- Key Findings(动态列表)-->
+      <section class="rounded-2xl border border-slate-200 bg-white p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-slate-800">关键发现(key_findings)</h3>
+          <button type="button" id="add-finding"
+                  class="rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50">
+            + 添加 finding
+          </button>
+        </div>
+        <p class="mt-1 text-[11px] text-slate-400">supporting_location.chunk_id 必须来自下方 chunk 列表(可点击插入)。</p>
+        <div id="findings-list" class="mt-3 space-y-3"></div>
+      </section>
+
+      <!-- 局限 + 备注 + 待人工核查 -->
+      <section class="rounded-2xl border border-slate-200 bg-white p-5">
+        <h3 class="text-sm font-semibold text-slate-800">局限 / 备注 / 待核查</h3>
+        <div class="mt-3 space-y-3 text-xs">
+          <label class="block">
+            <span class="text-slate-500">limitations_reported_by_authors(每行一条)</span>
+            <textarea data-bind-list="root.limitations_reported_by_authors" rows="3"
+                      class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"><%= (ext.limitations_reported_by_authors || []).join('\n') %></textarea>
+          </label>
+          <label class="block">
+            <span class="text-slate-500">reviewer_notes(每行一条)</span>
+            <textarea data-bind-list="root.reviewer_notes" rows="2"
+                      class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"><%= (ext.reviewer_notes || []).join('\n') %></textarea>
+          </label>
+          <label class="block">
+            <span class="text-slate-500">requires_manual_check(每行一条)</span>
+            <textarea data-bind-list="root.requires_manual_check" rows="2"
+                      class="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"><%= (ext.requires_manual_check || []).join('\n') %></textarea>
+          </label>
+        </div>
+      </section>
+
+      <!-- 保存 + 隐藏字段 -->
+      <input type="hidden" name="extraction_json" id="extraction-json" value="">
+      <div class="flex flex-wrap items-center gap-3">
+        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+          保存编辑
+        </button>
+        <% if (extRow) { %>
+          <% if (extRow.human_verified) { %>
+            <form method="post" action="/projects/<%= project.id %>/extraction/<%= record.id %>/verify" class="inline">
+              <input type="hidden" name="unverify" value="1">
+              <button type="submit" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                撤销审验
+              </button>
+            </form>
+          <% } else { %>
+            <form method="post" action="/projects/<%= project.id %>/extraction/<%= record.id %>/verify" class="inline">
+              <button type="submit" class="rounded-lg bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700">
+                标记为已审验
+              </button>
+            </form>
+          <% } %>
+        <% } %>
+        <% if (extRow && record.has_pdf) { %>
+          <form method="post" action="/projects/<%= project.id %>/extraction/run-one/<%= record.id %>" class="inline">
+            <button type="submit"
+                    onclick="return confirm('重跑会覆盖现有抽取(审验状态会重置),确定吗?')"
+                    class="rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50">
+              重跑抽取
+            </button>
+          </form>
+        <% } %>
+      </div>
+    </form>
+
+    <!-- 右:chunk 反向链接 -->
+    <aside class="space-y-3 lg:sticky lg:top-4 lg:self-start">
+      <div class="rounded-2xl border border-slate-200 bg-white p-4">
+        <h3 class="text-sm font-semibold text-slate-800">PDF 切片(<%= chunks.length %>)</h3>
+        <p class="mt-1 text-[11px] text-slate-500">点击 <code>用</code> 按钮把 chunk_id 复制到当前选中的 finding。</p>
+        <% if (chunks.length === 0) { %>
+          <p class="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            未发现 PDF 切片(Agent L 未跑或失败)。抽取使用 abstract 兜底。
+          </p>
+        <% } %>
+        <div class="mt-3 max-h-[640px] overflow-y-auto pr-1 space-y-2">
+          <% chunks.forEach(c => { %>
+            <details class="rounded-md border border-slate-200 bg-slate-50/40">
+              <summary class="cursor-pointer px-2 py-1.5 text-xs">
+                <span class="font-mono text-slate-500"><%= c.section_type || 'other' %></span>
+                <span class="text-slate-400">·</span>
+                <span class="text-slate-600">p <%= c.page_start || '?' %><%= c.page_end && c.page_end !== c.page_start ? '-' + c.page_end : '' %></span>
+                <% if (c.heading) { %>
+                  <span class="text-slate-400">·</span>
+                  <span class="truncate text-slate-700"><%= c.heading.slice(0, 40) %></span>
+                <% } %>
+                <button type="button" data-use-chunk="<%= c.id %>" data-section="<%= c.section_type || 'other' %>" data-page="<%= c.page_start || '' %>"
+                        class="ml-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-700 hover:bg-blue-200">用</button>
+              </summary>
+              <div class="border-t border-slate-200 px-3 py-2 text-[11px] leading-snug text-slate-700">
+                <p class="mb-1 font-mono text-[10px] text-slate-400">chunk_id: <%= c.id %></p>
+                <%= (c.text || '').slice(0, 800) %><%= (c.text || '').length > 800 ? '…' : '' %>
+              </div>
+            </details>
+          <% }) %>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!--
+  前端 JS:
+   - 把 initialJson 作为编辑会话的内部 state
+   - 每次 input/change 同步回 state
+   - 提交时把 state 写到隐藏字段 extraction_json
+-->
+<script>
+(function() {
+  const STATE = <%- JSON.stringify(ext) %>
+  // 确保数组字段存在
+  STATE.key_findings = Array.isArray(STATE.key_findings) ? STATE.key_findings : []
+  STATE.outcomes_or_themes = Array.isArray(STATE.outcomes_or_themes) ? STATE.outcomes_or_themes : []
+  STATE.limitations_reported_by_authors = Array.isArray(STATE.limitations_reported_by_authors) ? STATE.limitations_reported_by_authors : []
+  STATE.reviewer_notes = Array.isArray(STATE.reviewer_notes) ? STATE.reviewer_notes : []
+  STATE.requires_manual_check = Array.isArray(STATE.requires_manual_check) ? STATE.requires_manual_check : []
+  STATE.bibliographic_metadata = STATE.bibliographic_metadata || {}
+  STATE.bibliographic_metadata.authors = Array.isArray(STATE.bibliographic_metadata.authors) ? STATE.bibliographic_metadata.authors : []
+  STATE.study_characteristics = STATE.study_characteristics || {}
+  STATE.study_characteristics.data_sources = Array.isArray(STATE.study_characteristics.data_sources) ? STATE.study_characteristics.data_sources : []
+
+  const SECTIONS = ['abstract','introduction','methods','results','discussion','conclusion','other']
+  const EV_TYPES = ['empirical','theoretical','review','methodological','descriptive']
+  const STRENGTHS = ['strong','moderate','weak','unclear']
+
+  let activeFindingIdx = null  // 当前用"用"按钮要写入的 finding 索引
+
+  function setPath(path, val) {
+    // path 形如 'meta.title' / 'sc.sample_size' / 'root.intervention_or_focus'
+    const parts = path.split('.')
+    const root = parts[0]
+    const key = parts.slice(1).join('.')
+    if (root === 'meta') {
+      STATE.bibliographic_metadata[key] = val
+    } else if (root === 'sc') {
+      STATE.study_characteristics[key] = val
+    } else if (root === 'root') {
+      STATE[key] = val
+    }
+  }
+
+  function parseNumOrNull(v) {
+    if (v === '' || v == null) return null
+    const n = parseFloat(v)
+    return Number.isFinite(n) ? n : null
+  }
+
+  function bindScalars() {
+    document.querySelectorAll('[data-bind]').forEach((el) => {
+      const path = el.getAttribute('data-bind')
+      el.addEventListener('input', () => {
+        let v = el.value
+        if (el.type === 'number') {
+          v = parseNumOrNull(v)
+        } else if (typeof v === 'string') {
+          v = v.trim() === '' ? null : v
+        }
+        // 但 root.intervention_or_focus 是 string,空字符串保持 ''
+        if (path === 'root.intervention_or_focus') {
+          v = el.value
+        }
+        setPath(path, v)
+      })
+    })
+    document.querySelectorAll('[data-bind-list]').forEach((el) => {
+      const path = el.getAttribute('data-bind-list')
+      el.addEventListener('input', () => {
+        const lines = el.value.split('\n').map((s) => s.trim()).filter(Boolean)
+        setPath(path, lines)
+      })
+    })
+  }
+
+  // ---------- key_findings 列表 ----------
+  function renderFindings() {
+    const wrap = document.getElementById('findings-list')
+    wrap.innerHTML = ''
+    if (STATE.key_findings.length === 0) {
+      const p = document.createElement('p')
+      p.className = 'rounded-md bg-slate-50 px-3 py-3 text-xs text-slate-500'
+      p.textContent = '尚无 finding,点击右上"+ 添加 finding"或重跑抽取。'
+      wrap.appendChild(p)
+      return
+    }
+    STATE.key_findings.forEach((f, i) => {
+      const card = document.createElement('div')
+      card.className = 'rounded-lg border border-slate-200 bg-slate-50/30 p-3'
+      card.dataset.idx = String(i)
+
+      const loc = f.supporting_location || (f.supporting_location = { section: 'other', page: null, chunk_id: null })
+      loc.section = loc.section || 'other'
+
+      card.innerHTML = `
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-[11px] text-slate-400">finding #${i + 1}</span>
+          <div class="flex gap-1">
+            <button type="button" class="rounded border border-slate-300 px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-50" data-action="focus">选定</button>
+            <button type="button" class="rounded border border-rose-200 px-1.5 py-0.5 text-[10px] text-rose-600 hover:bg-rose-50" data-action="delete">删除</button>
+          </div>
+        </div>
+        <textarea rows="2" data-f="finding" class="mt-2 w-full rounded border border-slate-300 px-2 py-1 text-sm">${escapeHtml(f.finding || '')}</textarea>
+        <div class="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+          <label class="block">
+            <span class="text-slate-500">evidence_type</span>
+            <select data-f="evidence_type" class="mt-0.5 w-full rounded border border-slate-300 px-1 py-0.5 text-xs">
+              ${EV_TYPES.map(t => `<option value="${t}" ${f.evidence_type === t ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-slate-500">section</span>
+            <select data-f="loc.section" class="mt-0.5 w-full rounded border border-slate-300 px-1 py-0.5 text-xs">
+              ${SECTIONS.map(t => `<option value="${t}" ${loc.section === t ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-slate-500">strength</span>
+            <select data-f="strength" class="mt-0.5 w-full rounded border border-slate-300 px-1 py-0.5 text-xs">
+              ${STRENGTHS.map(t => `<option value="${t}" ${f.strength === t ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-slate-500">page</span>
+            <input type="number" data-f="loc.page" value="${loc.page == null ? '' : loc.page}" class="mt-0.5 w-full rounded border border-slate-300 px-1 py-0.5 text-xs">
+          </label>
+          <label class="col-span-2 block">
+            <span class="text-slate-500">chunk_id</span>
+            <input type="text" data-f="loc.chunk_id" value="${escapeHtml(loc.chunk_id || '')}"
+                   class="mt-0.5 w-full rounded border border-slate-300 px-1 py-0.5 font-mono text-[10px]">
+          </label>
+        </div>
+      `
+      wrap.appendChild(card)
+
+      // 绑定字段
+      card.querySelectorAll('[data-f]').forEach((el) => {
+        const k = el.getAttribute('data-f')
+        el.addEventListener('input', () => {
+          let v = el.value
+          if (el.type === 'number') v = parseNumOrNull(v)
+          else if (typeof v === 'string') v = v.trim() === '' ? (el.tagName === 'TEXTAREA' ? '' : null) : v
+          if (k === 'finding') {
+            // finding 主体保留原值(可空字符串)
+            STATE.key_findings[i].finding = el.value
+          } else if (k === 'evidence_type') STATE.key_findings[i].evidence_type = el.value
+          else if (k === 'strength') STATE.key_findings[i].strength = el.value
+          else if (k === 'loc.section') STATE.key_findings[i].supporting_location.section = el.value
+          else if (k === 'loc.page') STATE.key_findings[i].supporting_location.page = parseNumOrNull(el.value)
+          else if (k === 'loc.chunk_id') STATE.key_findings[i].supporting_location.chunk_id = el.value.trim() || null
+        })
+      })
+
+      card.querySelector('[data-action="delete"]').addEventListener('click', () => {
+        if (!confirm('删除这条 finding?')) return
+        STATE.key_findings.splice(i, 1)
+        if (activeFindingIdx === i) activeFindingIdx = null
+        renderFindings()
+        highlightActive()
+      })
+      card.querySelector('[data-action="focus"]').addEventListener('click', () => {
+        activeFindingIdx = i
+        highlightActive()
+      })
+
+      // 点击卡片任意处也选定它
+      card.addEventListener('click', (ev) => {
+        if (ev.target.tagName === 'BUTTON' || ev.target.tagName === 'A') return
+        activeFindingIdx = i
+        highlightActive()
+      })
+    })
+    highlightActive()
+  }
+
+  function highlightActive() {
+    document.querySelectorAll('#findings-list > div').forEach((el, i) => {
+      if (i === activeFindingIdx) {
+        el.classList.add('ring-2', 'ring-blue-400')
+      } else {
+        el.classList.remove('ring-2', 'ring-blue-400')
+      }
+    })
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+  }
+
+  // ---------- "添加 finding" 按钮 ----------
+  document.getElementById('add-finding').addEventListener('click', () => {
+    STATE.key_findings.push({
+      finding: '',
+      evidence_type: 'empirical',
+      supporting_location: { section: 'other', page: null, chunk_id: null },
+      strength: 'unclear',
+    })
+    activeFindingIdx = STATE.key_findings.length - 1
+    renderFindings()
+  })
+
+  // ---------- chunk "用" 按钮:写入 active finding ----------
+  document.querySelectorAll('[data-use-chunk]').forEach((btn) => {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault()
+      ev.stopPropagation()
+      if (activeFindingIdx == null || !STATE.key_findings[activeFindingIdx]) {
+        // 自动加一条
+        STATE.key_findings.push({
+          finding: '',
+          evidence_type: 'empirical',
+          supporting_location: { section: 'other', page: null, chunk_id: null },
+          strength: 'unclear',
+        })
+        activeFindingIdx = STATE.key_findings.length - 1
+      }
+      const f = STATE.key_findings[activeFindingIdx]
+      f.supporting_location.chunk_id = btn.getAttribute('data-use-chunk')
+      const sec = btn.getAttribute('data-section')
+      const page = btn.getAttribute('data-page')
+      if (sec) f.supporting_location.section = sec
+      if (page) f.supporting_location.page = parseNumOrNull(page)
+      renderFindings()
+    })
+  })
+
+  // ---------- 提交时把 STATE 序列化到隐藏字段 ----------
+  document.getElementById('ext-form').addEventListener('submit', () => {
+    document.getElementById('extraction-json').value = JSON.stringify(STATE)
+  })
+
+  // 启动
+  bindScalars()
+  renderFindings()
+})()
+</script>
+
+<%- include('../../partials/footer') %>

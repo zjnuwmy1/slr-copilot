@@ -1,32 +1,284 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
 <%- include('partials/project-header', { project }) %>
 
-<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
-  <%- include('partials/stepper', { project, progress, currentStep: 'extraction' }) %>
+<%
+  // status → badge 配置(跟 prompts/extraction.js 的 EXTRACTION_STATUS_LABEL 同步)
+  const STATUS_BADGE = {
+    not_extracted: { cls: 'bg-slate-100 text-slate-500', text: '未抽取' },
+    failed:        { cls: 'bg-rose-100 text-rose-700',   text: '抽取失败' },
+    extracted:     { cls: 'bg-blue-100 text-blue-700',   text: '已抽取' },
+    needs_check:   { cls: 'bg-amber-100 text-amber-700', text: '需人工核查' },
+    verified:      { cls: 'bg-emerald-100 text-emerald-700', text: '已审验' },
+  }
 
-  <section class="space-y-6">
+  const filterChips = [
+    { value: '',              label: '全部',     count: allRecordCount },
+    { value: 'not_extracted', label: '未抽取',   count: stats.not_extracted },
+    { value: 'failed',        label: '失败',     count: stats.failed },
+    { value: 'extracted',     label: '已抽',     count: stats.extracted },
+    { value: 'needs_check',   label: '需核查',   count: stats.needs_check },
+    { value: 'verified',      label: '已审验',   count: stats.verified },
+  ]
+%>
+
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('partials/stepper', { project, progress: progress || { stepStatus: {}, prismaProgress: { donePct: 0, done: 0, total: 42 } }, currentStep: 'extraction' }) %>
+
+  <section class="space-y-6 min-w-0">
+    <!-- 顶部说明 -->
     <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
       <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 4 of 8 · <%= stepLabel %></p>
       <p class="mt-1 text-sm text-slate-600">
-        覆盖 PRISMA
-        <% stepItems.forEach((it, i) => { %><span class="font-mono">#<%= it.item_number %></span><%= i < stepItems.length - 1 ? ' · ' : '' %><% }) %>
+        对筛选通过(include)且含 PDF 的文献,跑 AI 全文结构化抽取:研究特征 / 干预 / 结果 / 关键发现 / 局限。每条 finding 会反向锚定到具体段落(chunk),便于后续 synthesis 跨论文聚类。
       </p>
     </div>
 
-    <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
-      <p class="text-2xl">📋</p>
-      <h2 class="mt-2 text-lg font-semibold text-slate-800">即将开放</h2>
-      <p class="mt-1 text-sm text-slate-500">本步骤将在 Phase 4 接入。支持自定义抽取表单、AI 辅助字段抽取、PICO/PECO 模板。</p>
-      <div class="mt-4 flex justify-center gap-2">
-        <a href="/projects/<%= project.id %>/screening" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">← 返回筛选</a>
-        <a href="/projects/<%= project.id %>" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">跳到协议</a>
+    <!-- 统计卡 -->
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div class="rounded-xl border border-slate-200 bg-white p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-slate-400">符合条件</p>
+        <p class="mt-1 text-2xl font-semibold text-slate-900"><%= stats.total %></p>
+        <p class="mt-0.5 text-[11px] text-slate-400">include + PDF</p>
+      </div>
+      <div class="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-blue-700">已抽取</p>
+        <p class="mt-1 text-2xl font-semibold text-blue-900"><%= stats.extracted %></p>
+        <p class="mt-0.5 text-[11px] text-blue-700/70">含 needs_check / verified</p>
+      </div>
+      <div class="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-emerald-700">已审验</p>
+        <p class="mt-1 text-2xl font-semibold text-emerald-900"><%= stats.verified %></p>
+      </div>
+      <div class="rounded-xl border border-amber-100 bg-amber-50/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-amber-700">待处理</p>
+        <p class="mt-1 text-2xl font-semibold text-amber-900"><%= stats.pending %></p>
+        <p class="mt-0.5 text-[11px] text-amber-700/70">未跑 + 失败</p>
       </div>
     </div>
 
+    <!-- 批量任务区 -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-5">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 class="text-sm font-semibold text-slate-800">一键批量抽取</h3>
+          <p class="mt-0.5 text-xs text-slate-500">
+            串行调用 LLM(每条 1-3 分钟,8K maxTokens),失败的条会标 failed 状态,可单独重跑。
+          </p>
+        </div>
+        <div class="flex gap-2">
+          <form method="post" action="/projects/<%= project.id %>/extraction/run-batch">
+            <button type="submit"
+                    <%= (batchJob && batchJob.status === 'running') ? 'disabled' : '' %>
+                    class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:bg-slate-300">
+              <%= (batchJob && batchJob.status === 'running') ? '运行中…' : `批量抽取 ${stats.pending} 条` %>
+            </button>
+          </form>
+          <a href="/projects/<%= project.id %>/extraction/export.json"
+             class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+            导出 JSON
+          </a>
+        </div>
+      </div>
+
+      <% if (batchJob) { %>
+        <%
+          const pct = batchJob.total ? Math.round(((batchJob.done || 0) / batchJob.total) * 100) : 0
+          const barCls = batchJob.status === 'running' ? 'bg-blue-500' :
+                         (batchJob.failed > 0 ? 'bg-amber-500' : 'bg-emerald-500')
+        %>
+        <div id="batch-progress" class="mt-4">
+          <div class="flex items-center justify-between text-xs text-slate-500">
+            <span>
+              <% if (batchJob.status === 'running') { %>
+                运行中:<%= batchJob.done %>/<%= batchJob.total %> 完成,<%= batchJob.failed %> 失败
+                <% if (batchJob.current && batchJob.current.title) { %>
+                  · 正在抽取:<span class="text-slate-700"><%= batchJob.current.title.slice(0, 80) %></span>
+                <% } %>
+              <% } else if (batchJob.status === 'finished') { %>
+                完成:<%= batchJob.done %>/<%= batchJob.total %>,失败 <%= batchJob.failed %>(<%= batchJob.finishedAt %>)
+              <% } else { %>
+                <%= batchJob.status %>
+              <% } %>
+            </span>
+            <span class="font-mono"><%= pct %>%</span>
+          </div>
+          <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+            <div class="h-full <%= barCls %>" style="width: <%= pct %>%"></div>
+          </div>
+        </div>
+        <% if (batchJob.status === 'running') { %>
+          <script>
+            (function() {
+              const url = '/projects/<%= project.id %>/extraction/progress.json'
+              async function poll() {
+                try {
+                  const r = await fetch(url, { headers: { 'accept': 'application/json' } })
+                  if (!r.ok) return
+                  const data = await r.json()
+                  if (!data || !data.job) return
+                  const job = data.job
+                  if (job.status !== 'running') {
+                    // 跑完了 → 刷新拿最终结果
+                    window.location.reload()
+                    return
+                  }
+                  const wrap = document.getElementById('batch-progress')
+                  if (!wrap) return
+                  const total = job.total || 1
+                  const pct = Math.round(((job.done || 0) / total) * 100)
+                  const bar = wrap.querySelector('div.h-full')
+                  if (bar) bar.style.width = pct + '%'
+                  const status = wrap.querySelector('span')
+                  if (status) {
+                    let s = '运行中:' + (job.done || 0) + '/' + total + ' 完成,' + (job.failed || 0) + ' 失败'
+                    if (job.current && job.current.title) {
+                      s += ' · 正在抽取:' + job.current.title.slice(0, 80)
+                    }
+                    status.textContent = s
+                  }
+                  const pctEl = wrap.querySelector('span.font-mono')
+                  if (pctEl) pctEl.textContent = pct + '%'
+                } catch (e) {}
+              }
+              setInterval(poll, 4000)
+            })()
+          </script>
+        <% } %>
+      <% } %>
+    </div>
+
+    <!-- 过滤 chips -->
+    <div class="flex flex-wrap items-center gap-2 text-sm">
+      <span class="text-xs uppercase tracking-wider text-slate-400">筛选</span>
+      <% filterChips.forEach(c => {
+           const isActive = (filterStatus === c.value) || (!filterStatus && !c.value)
+           const href = c.value ? `?status=${c.value}` : `/projects/${project.id}/extraction`
+      %>
+        <a href="<%= href %>"
+           class="rounded-full px-3 py-1 text-xs <%= isActive ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50' %>">
+          <%= c.label %> · <%= c.count %>
+        </a>
+      <% }) %>
+    </div>
+
+    <!-- 列表 -->
+    <% if (records.length === 0) { %>
+      <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+        <p class="text-2xl">📋</p>
+        <h3 class="mt-2 text-base font-semibold text-slate-800">
+          <% if (allRecordCount === 0) { %>
+            还没有符合条件的记录
+          <% } else { %>
+            当前过滤条件下无匹配
+          <% } %>
+        </h3>
+        <p class="mt-1 text-sm text-slate-500">
+          <% if (allRecordCount === 0) { %>
+            需要至少 1 条 screening = include 且有 PDF 附件的记录,才能开始抽取。
+          <% } else { %>
+            试试切换上方过滤标签。
+          <% } %>
+        </p>
+        <div class="mt-4 flex justify-center gap-2">
+          <a href="/projects/<%= project.id %>/screening"
+             class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+            ← 去筛选
+          </a>
+          <a href="/projects/<%= project.id %>/records"
+             class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+            浏览全部记录
+          </a>
+        </div>
+      </div>
+    <% } else { %>
+      <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+            <tr>
+              <th class="px-3 py-3 text-left">标题 / 作者</th>
+              <th class="px-3 py-3 text-left">年</th>
+              <th class="px-3 py-3 text-left">状态</th>
+              <th class="px-3 py-3 text-left">人工核查</th>
+              <th class="px-3 py-3 text-left">Chunk</th>
+              <th class="px-3 py-3 text-right">操作</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <% records.forEach(r => {
+                 const badge = STATUS_BADGE[r.status] || STATUS_BADGE.not_extracted
+                 const canExtract = r.has_pdf
+                 const reviewHref = `/projects/${project.id}/extraction/${r.id}/review`
+            %>
+              <tr class="hover:bg-slate-50/50">
+                <td class="px-3 py-3 align-top">
+                  <a href="<%= reviewHref %>"
+                     class="font-medium text-slate-900 hover:text-blue-700 hover:underline">
+                    <%= r.title %>
+                  </a>
+                  <% if (r.authors_text) { %>
+                    <p class="mt-0.5 truncate text-xs text-slate-500" title="<%= r.authors_text %>">
+                      <%= r.authors_text.length > 80 ? r.authors_text.slice(0, 80) + '…' : r.authors_text %>
+                    </p>
+                  <% } %>
+                  <% if (r.journal) { %>
+                    <p class="mt-0.5 truncate text-[11px] text-slate-400"><%= r.journal %></p>
+                  <% } %>
+                </td>
+                <td class="px-3 py-3 align-top text-slate-700"><%= r.year || '—' %></td>
+                <td class="px-3 py-3 align-top">
+                  <span class="inline-block rounded-full px-2 py-0.5 text-[11px] <%= badge.cls %>">
+                    <%= badge.text %>
+                  </span>
+                  <% if (r.extraction_model) { %>
+                    <p class="mt-1 text-[10px] text-slate-400" title="<%= r.extraction_updated_at %>"><%= r.extraction_model %></p>
+                  <% } %>
+                </td>
+                <td class="px-3 py-3 align-top">
+                  <% if (r.manual_check_count > 0) { %>
+                    <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">
+                      <%= r.manual_check_count %>
+                    </span>
+                  <% } else { %>
+                    <span class="text-[11px] text-slate-400">—</span>
+                  <% } %>
+                </td>
+                <td class="px-3 py-3 align-top text-slate-700">
+                  <% if (r.chunk_count > 0) { %>
+                    <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-700"><%= r.chunk_count %></span>
+                  <% } else { %>
+                    <span class="text-[11px] text-slate-400" title="无 chunks,将用 abstract 兜底">abstract 兜底</span>
+                  <% } %>
+                </td>
+                <td class="px-3 py-3 align-top text-right">
+                  <div class="inline-flex flex-wrap items-center justify-end gap-1">
+                    <a href="<%= reviewHref %>"
+                       class="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
+                      审阅
+                    </a>
+                    <% if (canExtract) { %>
+                      <form method="post" action="/projects/<%= project.id %>/extraction/run-one/<%= r.id %>" class="inline">
+                        <button type="submit"
+                                class="rounded-md bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700">
+                          <%= r.status === 'not_extracted' ? '抽取' : '重跑' %>
+                        </button>
+                      </form>
+                    <% } else { %>
+                      <span class="text-[11px] text-slate-400" title="无 PDF">无 PDF</span>
+                    <% } %>
+                  </div>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    <% } %>
+
+    <!-- PRISMA 清单覆盖项 -->
     <div class="rounded-2xl border border-slate-200 bg-white p-6">
       <h3 class="text-sm font-medium uppercase text-slate-400">本步骤覆盖的 PRISMA 2020 清单项</h3>
       <ul class="mt-3 space-y-3 text-sm">
-        <% stepItems.forEach(it => { %>
+        <% (stepItems || []).forEach(it => { %>
           <li class="flex gap-3">
             <span class="flex-none rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">#<%= it.item_number %></span>
             <div class="min-w-0">

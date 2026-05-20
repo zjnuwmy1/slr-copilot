@@ -36,7 +36,32 @@
 
     <!-- 标题 + 元信息 -->
     <div class="rounded-2xl border border-slate-200 bg-white p-6">
-      <h1 class="text-xl font-semibold leading-snug text-slate-900"><%= record.title %></h1>
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <h1 class="min-w-0 flex-1 text-xl font-semibold leading-snug text-slate-900"><%= record.title %></h1>
+        <div class="flex flex-none items-center gap-2">
+          <a href="/projects/<%= project.id %>/records/<%= record.id %>/edit"
+             class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+            <span aria-hidden="true">✏️</span> 编辑
+          </a>
+          <% if (citations) { %>
+            <div class="relative" data-copy-menu>
+              <button type="button"
+                      aria-haspopup="true" aria-expanded="false"
+                      onclick="(function(b){var m=b.parentNode.querySelector('[data-copy-list]');var open=m.classList.toggle('hidden')===false;b.setAttribute('aria-expanded', open?'true':'false');})(this)"
+                      class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                <span aria-hidden="true">📋</span> 复制为 <span class="text-[10px]">▾</span>
+              </button>
+              <div data-copy-list class="absolute right-0 z-10 mt-1 hidden w-44 rounded-lg border border-slate-200 bg-white shadow-lg">
+                <button type="button" data-cite="apa" class="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">APA 7th</button>
+                <button type="button" data-cite="ieee" class="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">IEEE</button>
+                <button type="button" data-cite="gb_t_7714" class="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">GB/T 7714-2015</button>
+                <button type="button" data-cite="chicago" class="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">Chicago author-date</button>
+                <button type="button" data-cite="mla" class="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">MLA 9th</button>
+              </div>
+            </div>
+          <% } %>
+        </div>
+      </div>
 
       <% if ((record.authors_list || []).length) { %>
         <p class="mt-3 text-sm text-slate-700">
@@ -217,7 +242,84 @@
         </div>
       </aside>
     </div>
+
+    <!-- 危险区:删除 -->
+    <div class="rounded-2xl border border-rose-200 bg-rose-50/40 p-5">
+      <p class="text-sm font-medium text-rose-800">删除此条目</p>
+      <p class="mt-1 text-xs text-rose-700">
+        会同时删除所有关联附件文件;此操作不可撤销。
+      </p>
+      <form method="post" action="/projects/<%= project.id %>/records/<%= record.id %>/delete"
+            onsubmit="return confirm('确定删除此文献条目?所有附件文件也会被一并清除,不可恢复。');"
+            class="mt-3">
+        <button type="submit"
+                class="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100">
+          删除条目
+        </button>
+      </form>
+    </div>
   </section>
 </div>
+
+<% if (citations) { %>
+<script>
+  // 把 5 种 style 的字符串内嵌(JSON 转义 — 安全的标量字符串)
+  window.__citations__ = <%- JSON.stringify(citations).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026') %>;
+  (function () {
+    function showToast(msg) {
+      var n = document.createElement('div');
+      n.textContent = msg;
+      n.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111827;color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.18);opacity:0;transition:opacity .15s';
+      document.body.appendChild(n);
+      requestAnimationFrame(function () { n.style.opacity = '1' });
+      setTimeout(function () {
+        n.style.opacity = '0';
+        setTimeout(function () { n.remove() }, 200);
+      }, 1500);
+    }
+    function fallbackCopy(text) {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy') } catch (e) {}
+      ta.remove();
+    }
+    document.querySelectorAll('button[data-cite]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var style = btn.getAttribute('data-cite');
+        var text = (window.__citations__ || {})[style] || '';
+        if (!text) { showToast('没有可复制内容'); return }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text)
+            .then(function () { showToast('已复制 ' + style.toUpperCase()) })
+            .catch(function () { fallbackCopy(text); showToast('已复制 ' + style.toUpperCase()) });
+        } else {
+          fallbackCopy(text);
+          showToast('已复制 ' + style.toUpperCase());
+        }
+        // 关掉菜单
+        var menu = btn.closest('[data-copy-menu]');
+        if (menu) {
+          var list = menu.querySelector('[data-copy-list]');
+          if (list) list.classList.add('hidden');
+          var b = menu.querySelector('button[aria-expanded]');
+          if (b) b.setAttribute('aria-expanded', 'false');
+        }
+      });
+    });
+    // 点空白处收起
+    document.addEventListener('click', function (e) {
+      document.querySelectorAll('[data-copy-menu]').forEach(function (m) {
+        if (!m.contains(e.target)) {
+          var l = m.querySelector('[data-copy-list]');
+          if (l && !l.classList.contains('hidden')) l.classList.add('hidden');
+          var b = m.querySelector('button[aria-expanded]');
+          if (b) b.setAttribute('aria-expanded', 'false');
+        }
+      });
+    });
+  })();
+</script>
+<% } %>
 
 <%- include('../../partials/footer') %>

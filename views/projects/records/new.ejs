@@ -1,0 +1,212 @@
+<%- include('../../partials/header', { title }) %>
+<%- include('../partials/project-header', { project }) %>
+
+<%
+  // 复用回显字段
+  const f = form || {}
+  const lookupUrl = `/projects/${project.id}/records/new/lookup-doi`
+%>
+
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('../partials/stepper', { project, progress: progress || { stepStatus: {}, prismaProgress: { donePct: 0, done: 0, total: 42 } }, currentStep: 'screening' }) %>
+
+  <section class="space-y-6 min-w-0">
+    <!-- 面包屑 -->
+    <div class="flex items-center justify-between text-sm">
+      <a href="/projects/<%= project.id %>/records"
+         class="text-slate-500 hover:text-slate-900">← 返回文献列表</a>
+    </div>
+
+    <!-- 标题 -->
+    <div>
+      <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Records · 手动新增</p>
+      <h2 class="mt-1 text-xl font-semibold text-slate-900">手动新增文献条目</h2>
+      <p class="mt-1 text-sm text-slate-500">
+        填写表单或直接粘贴 DOI 自动回填(Crossref)。手动新增的条目不带 PDF;可在保存后从条目详情页编辑。
+      </p>
+    </div>
+
+    <% if (errors && errors.length) { %>
+      <div class="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-800">
+        <p class="font-medium">表单有误,请修正:</p>
+        <ul class="mt-2 list-disc space-y-0.5 pl-5">
+          <% errors.forEach(e => { %><li><%= e %></li><% }) %>
+        </ul>
+      </div>
+    <% } %>
+
+    <!-- DOI 自动填 -->
+    <div class="rounded-2xl border border-blue-200 bg-blue-50/40 p-5">
+      <p class="text-sm font-medium text-blue-900">从 DOI 自动填</p>
+      <p class="mt-1 text-xs text-blue-700">输入 DOI(如 10.1002/aisy.202500288),从 Crossref 拉取标题 / 作者 / 期刊 / 年份等元数据。5 秒超时。</p>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <input type="text" id="doi-lookup-input"
+               placeholder="10.xxxx/xxxxx 或 https://doi.org/..."
+               class="min-w-[280px] flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" />
+        <button type="button" id="doi-lookup-btn"
+                class="rounded-lg bg-blue-700 px-4 py-2 text-sm text-white hover:bg-blue-800 disabled:opacity-50">
+          自动回填
+        </button>
+        <span id="doi-lookup-status" class="text-xs text-slate-500" aria-live="polite"></span>
+      </div>
+    </div>
+
+    <!-- 主表单 -->
+    <form method="post" action="<%= formAction %>" class="space-y-5 rounded-2xl border border-slate-200 bg-white p-6">
+      <div>
+        <label for="f-title" class="block text-xs font-medium uppercase tracking-wider text-slate-500">标题 <span class="text-rose-500">*</span></label>
+        <input id="f-title" name="title" type="text" required maxlength="1000"
+               value="<%= f.title || '' %>"
+               class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+      </div>
+
+      <div class="grid gap-5 sm:grid-cols-2">
+        <div>
+          <label for="f-item-type" class="block text-xs font-medium uppercase tracking-wider text-slate-500">类型</label>
+          <select id="f-item-type" name="item_type"
+                  class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-slate-500 focus:outline-none">
+            <% ['journalArticle','conferencePaper','bookSection','book','webpage','other'].forEach(t => { %>
+              <option value="<%= t %>" <%= (f.item_type || 'journalArticle') === t ? 'selected' : '' %>><%= t %></option>
+            <% }) %>
+          </select>
+        </div>
+        <div>
+          <label for="f-year" class="block text-xs font-medium uppercase tracking-wider text-slate-500">年份</label>
+          <input id="f-year" name="year" type="number" min="1500" max="2200" inputmode="numeric"
+                 value="<%= f.year || '' %>"
+                 class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+        </div>
+      </div>
+
+      <div>
+        <label for="f-authors" class="block text-xs font-medium uppercase tracking-wider text-slate-500">作者(每行一个)</label>
+        <textarea id="f-authors" name="authors_text" rows="5"
+                  placeholder="Wang, Guankun&#10;Tang, Rui&#10;李明"
+                  class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-slate-500 focus:outline-none"><%= f.authors_text || '' %></textarea>
+        <p class="mt-1 text-[11px] text-slate-400">支持 "Surname, Given" 或 "Given Surname";中文姓名整段填即可。</p>
+      </div>
+
+      <div class="grid gap-5 sm:grid-cols-2">
+        <div>
+          <label for="f-journal" class="block text-xs font-medium uppercase tracking-wider text-slate-500">期刊 / 会议 / 来源</label>
+          <input id="f-journal" name="journal" type="text" maxlength="500"
+                 value="<%= f.journal || '' %>"
+                 class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+        </div>
+        <div>
+          <label for="f-publisher" class="block text-xs font-medium uppercase tracking-wider text-slate-500">出版方</label>
+          <input id="f-publisher" name="publisher" type="text" maxlength="500"
+                 value="<%= f.publisher || '' %>"
+                 class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+        </div>
+      </div>
+
+      <div class="grid gap-5 sm:grid-cols-2">
+        <div>
+          <label for="f-doi" class="block text-xs font-medium uppercase tracking-wider text-slate-500">DOI</label>
+          <input id="f-doi" name="doi" type="text" maxlength="200"
+                 value="<%= f.doi || '' %>"
+                 placeholder="10.xxxx/xxxxx"
+                 class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-slate-500 focus:outline-none" />
+        </div>
+        <div>
+          <label for="f-url" class="block text-xs font-medium uppercase tracking-wider text-slate-500">URL</label>
+          <input id="f-url" name="url" type="url" maxlength="2000"
+                 value="<%= f.url || '' %>"
+                 class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+        </div>
+      </div>
+
+      <div>
+        <label for="f-abstract" class="block text-xs font-medium uppercase tracking-wider text-slate-500">Abstract</label>
+        <textarea id="f-abstract" name="abstract" rows="6" maxlength="20000"
+                  class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"><%= f.abstract || '' %></textarea>
+      </div>
+
+      <div>
+        <label for="f-keywords" class="block text-xs font-medium uppercase tracking-wider text-slate-500">关键词(逗号分隔)</label>
+        <input id="f-keywords" name="keywords" type="text"
+               value="<%= f.keywords || '' %>"
+               placeholder="foundation model, endoscopic surgery, multitask learning"
+               class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+      </div>
+
+      <div>
+        <label for="f-notes" class="block text-xs font-medium uppercase tracking-wider text-slate-500">备注</label>
+        <textarea id="f-notes" name="notes" rows="3" maxlength="10000"
+                  class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"><%= f.notes || '' %></textarea>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 border-t border-slate-100 pt-5">
+        <a href="<%= cancelHref %>"
+           class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">取消</a>
+        <button type="submit"
+                class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+          <% if (isEdit) { %>保存修改<% } else { %>创建条目<% } %>
+        </button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<script>
+  (function () {
+    var btn = document.getElementById('doi-lookup-btn');
+    var input = document.getElementById('doi-lookup-input');
+    var status = document.getElementById('doi-lookup-status');
+    if (!btn || !input) return;
+    var LOOKUP_URL = <%- JSON.stringify(lookupUrl) %>;
+
+    function setStatus(msg, kind) {
+      status.textContent = msg;
+      status.className = 'text-xs ' + (kind === 'err' ? 'text-rose-600' : (kind === 'ok' ? 'text-emerald-700' : 'text-slate-500'));
+    }
+    function setField(id, val) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      if (val == null) return;
+      el.value = String(val);
+    }
+    async function lookup() {
+      var doi = (input.value || '').trim();
+      if (!doi) { setStatus('请输入 DOI', 'err'); return; }
+      btn.disabled = true;
+      setStatus('查询中…');
+      try {
+        var res = await fetch(LOOKUP_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ doi: doi })
+        });
+        var json = await res.json().catch(function () { return null; });
+        if (!json || !json.ok) {
+          if (json && json.error === 'not_found') setStatus('未找到此 DOI(可能在 Crossref 之外)', 'err');
+          else if (json && json.error === 'invalid_doi') setStatus('DOI 无效', 'err');
+          else setStatus('查询失败,请稍后重试或手填', 'err');
+          return;
+        }
+        var d = json.data || {};
+        setField('f-title', d.title);
+        setField('f-authors', d.authors_text);
+        setField('f-year', d.year);
+        setField('f-journal', d.journal);
+        setField('f-publisher', d.publisher);
+        setField('f-doi', d.doi);
+        setField('f-url', d.url);
+        setField('f-abstract', d.abstract);
+        if (d.item_type) setField('f-item-type', d.item_type);
+        setStatus('已回填,请检查后保存', 'ok');
+      } catch (e) {
+        setStatus('网络错误,请稍后重试', 'err');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    btn.addEventListener('click', lookup);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); lookup(); }
+    });
+  })();
+</script>
+
+<%- include('../../partials/footer') %>

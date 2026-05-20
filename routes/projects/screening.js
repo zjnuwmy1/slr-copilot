@@ -1,0 +1,687 @@
+/**
+ * Phase 5 Agent M — 标题/摘要 AI 初筛
+ *
+ * 挂载方式(由 server.js 汇总层完成):
+ *   import projectScreeningRouter from './routes/projects/screening.js'
+ *   // 必须在 projectsRouter 之前,否则通用占位 /:id/screening 会先匹配
+ *   app.use('/projects', requireUser, projectScreeningRouter)
+ *
+ * 路由清单:
+ *   GET  /:id/screening                        列表 + 过滤 + 统计
+ *   POST /:id/screening/run-one/:recordId      对单条同步跑 AI
+ *   POST /:id/screening/run-batch              fire-and-forget 批量跑所有未跑
+ *   GET  /:id/screening/progress.json          批量进度
+ *   POST /:id/screening/decide/:recordId       人工 include/exclude/uncertain
+ *   GET  /:id/screening/export.csv             导出 PRISMA 筛选 log
+ */
+
+import express from 'express'
+import { randomId } from '../../services/crypto.js'
+import { audit } from '../../services/audit.js'
+import { runLlm } from '../../services/llm.js'
+import {
+  SCREENING_SYSTEM,
+  buildScreeningUserPrompt,
+  normalizeScreeningOutput,
+  SCREENING_DECISIONS,
+} from '../../services/prompts/screening.js'
+import { getProjectProgress } from '../../services/prisma.js'
+
+const router = express.Router({ mergeParams: true })
+
+// ============================================================
+// 工具
+// ============================================================
+
+function parseJsonArrayField(v) {
+  if (!v) return []
+  try {
+    const x = JSON.parse(v)
+    return Array.isArray(x) ? x : []
+  } catch {
+    return []
+  }
+}
+
+function parseProject(row) {
+  if (!row) return null
+  return {
+    ...row,
+    databases: parseJsonArrayField(row.databases),
+    language_limits: parseJsonArrayField(row.language_limits),
+    document_types: parseJsonArrayField(row.document_types),
+    seed_titles: parseJsonArrayField(row.seed_titles),
+  }
+}
+
+function parseProtocol(row) {
+  if (!row) return null
+  return {
+    ...row,
+    research_questions: parseJsonArrayField(row.research_questions),
+    inclusion_criteria: parseJsonArrayField(row.inclusion_criteria),
+    exclusion_criteria: parseJsonArrayField(row.exclusion_criteria),
+    concept_groups: (() => {
+      try {
+        const x = JSON.parse(row.concept_groups || '[]')
+        return Array.isArray(x) ? x : []
+      } catch { return [] }
+    })(),
+    clarification_questions: parseJsonArrayField(row.clarification_questions),
+  }
+}
+
+function ownProjectOr404(db, projectId, userId) {
+  const row = db
+    .prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?')
+    .get(projectId, userId)
+  return parseProject(row)
+}
+
+function getApprovedProtocol(db, projectId) {
+  const row = db
+    .prepare(
+      `SELECT * FROM protocols
+       WHERE project_id = ? AND approved_by_user = 1
+       ORDER BY version DESC LIMIT 1`
+    )
+    .get(projectId)
+  return parseProtocol(row)
+}
+
+// 校验 record 归属 + 返回 normalize 后的 record(给 AI 用)
+function getRecordInProject(db, projectId, recordId) {
+  const row = db
+    .prepare('SELECT * FROM records WHERE id = ? AND project_id = ?')
+    .get(recordId, projectId)
+  if (!row) return null
+  return {
+    ...row,
+    keywords_list: parseJsonArrayField(row.keywords_json),
+  }
+}
+
+// 把 screening_decisions 行解析成 view-friendly
+function parseDecision(row) {
+  if (!row) return null
+  return {
+    ...row,
+    ai_matched_inclusion: parseJsonArrayField(row.ai_matched_inclusion),
+    ai_matched_exclusion: parseJsonArrayField(row.ai_matched_exclusion),
+    ai_need_full_text:    parseJsonArrayField(row.ai_need_full_text),
+  }
+}
+
+/**
+ * 找到或创建一条 screening_decisions 记录(stage = 'title_abstract')。
+ * UNIQUE(record_id, stage),所以幂等。
+ */
+function ensureScreeningRow(db, { recordId, projectId }) {
+  const existing = db
+    .prepare(`SELECT * FROM screening_decisions WHERE record_id = ? AND stage = 'title_abstract'`)
+    .get(recordId)
+  if (existing) return existing
+  const id = randomId('scr')
+  db.prepare(
+    `INSERT INTO screening_decisions (id, record_id, project_id, stage, ai_suggestion, human_decision)
+     VALUES (?, ?, ?, 'title_abstract', 'not_run', 'not_decided')`
+  ).run(id, recordId, projectId)
+  return db
+    .prepare(`SELECT * FROM screening_decisions WHERE id = ?`)
+    .get(id)
+}
+
+// ============================================================
+// 批量任务进度(in-memory,Node 进程重启会丢)
+// ============================================================
+const batchProgress = new Map()
+// key = projectId,value = { total, done, errors, started_at, finished_at, current_title, status }
+
+function progressGet(projectId) {
+  return batchProgress.get(projectId) || null
+}
+
+function progressInit(projectId, total) {
+  const p = {
+    total,
+    done: 0,
+    errors: 0,
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    current_title: null,
+    status: total > 0 ? 'running' : 'finished',
+  }
+  batchProgress.set(projectId, p)
+  return p
+}
+
+function progressUpdate(projectId, patch) {
+  const cur = batchProgress.get(projectId)
+  if (!cur) return
+  Object.assign(cur, patch)
+}
+
+// 项目级互斥锁:同一个项目同时只能跑一个批量任务
+const runningBatches = new Set()
+
+// ============================================================
+// AI 单条调用 — 跑完写库
+// ============================================================
+async function runScreeningOnce(db, {
+  userId,
+  project,
+  protocol,
+  record,
+  req,        // 用于 audit
+}) {
+  // 确保 row 存在
+  ensureScreeningRow(db, { recordId: record.id, projectId: project.id })
+
+  const userPrompt = buildScreeningUserPrompt({ protocol, record })
+
+  let result
+  try {
+    result = await runLlm(db, {
+      userId,
+      actionType: 'screening',
+      projectId: project.id,
+      system: SCREENING_SYSTEM,
+      prompt: userPrompt,
+      expectJson: true,
+      model: 'light',     // haiku 4.5 — 便宜快,适合 176 条批量
+      maxTokens: 1024,
+      timeoutMs: 60_000,
+    })
+  } catch (e) {
+    // runLlm 内部会兜异常,这里走到说明非常意外
+    db.prepare(
+      `UPDATE screening_decisions
+       SET ai_suggestion = 'uncertain', ai_reason = ?, ai_ran_at = datetime('now'), updated_at = datetime('now')
+       WHERE record_id = ? AND stage = 'title_abstract'`
+    ).run(`llm_threw: ${(e?.message || String(e)).slice(0, 300)}`, record.id)
+    return { ok: false, decision: 'uncertain', error: e?.message || 'llm_threw' }
+  }
+
+  // LLM 失败(quota / rate_limited / timeout / no_credential ...)→ 不入库 AI 结果,
+  // 只把这条标 uncertain + reason,避免阻塞批量任务。
+  if (!result.ok) {
+    db.prepare(
+      `UPDATE screening_decisions
+       SET ai_suggestion = 'uncertain', ai_reason = ?, ai_model = ?, ai_ran_at = datetime('now'), updated_at = datetime('now')
+       WHERE record_id = ? AND stage = 'title_abstract'`
+    ).run(
+      `llm_error[${result.status}]: ${(result.error || '').slice(0, 240)}`,
+      result.model || null,
+      record.id,
+    )
+    return { ok: false, decision: 'uncertain', status: result.status, error: result.error }
+  }
+
+  // normalize
+  const norm = normalizeScreeningOutput(result.data || null)
+  // 如果 JSON 解析失败(result.data == null)或 normalize 后空 decision,记 json_parse_failed
+  let aiReason = norm.reason
+  if (!result.data) {
+    aiReason = `json_parse_failed; ${aiReason || ''}`.slice(0, 800)
+    norm.decision = 'uncertain'
+  }
+
+  db.prepare(
+    `UPDATE screening_decisions
+     SET ai_suggestion = ?, ai_reason = ?, ai_confidence = ?, ai_model = ?,
+         ai_matched_inclusion = ?, ai_matched_exclusion = ?, ai_need_full_text = ?,
+         ai_ran_at = datetime('now'),
+         updated_at = datetime('now')
+     WHERE record_id = ? AND stage = 'title_abstract'`
+  ).run(
+    norm.decision,
+    aiReason || null,
+    norm.confidence,
+    result.model || null,
+    JSON.stringify(norm.matched_inclusion),
+    JSON.stringify(norm.matched_exclusion),
+    JSON.stringify(norm.need_full_text_check),
+    record.id,
+  )
+
+  audit(db, req, {
+    eventType: 'screening_ai_ran',
+    userId,
+    projectId: project.id,
+    payload: {
+      record_id: record.id,
+      decision: norm.decision,
+      confidence: norm.confidence,
+      model: result.model,
+      duration_ms: result.durationMs,
+      json_parse_failed: !result.data,
+    },
+  })
+
+  return { ok: true, decision: norm.decision, confidence: norm.confidence }
+}
+
+// ============================================================
+// GET /:id/screening
+// ============================================================
+router.get('/:id/screening', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  const protocol = getApprovedProtocol(db, project.id)
+
+  const filterAi    = String(req.query.ai || '').trim()
+  const filterHuman = String(req.query.human || '').trim()
+  const AI_VALUES   = ['include', 'exclude', 'uncertain', 'not_run']
+  const HUMAN_VALUES = ['include', 'exclude', 'uncertain', 'not_decided']
+  const aiF    = AI_VALUES.includes(filterAi) ? filterAi : null
+  const humanF = HUMAN_VALUES.includes(filterHuman) ? filterHuman : null
+
+  // 列表:所有 records LEFT JOIN screening_decisions(stage='title_abstract')
+  // 默认隐藏重复
+  const where = ['r.project_id = ?', 'r.duplicate_of_record_id IS NULL']
+  const params = [project.id]
+  if (aiF) {
+    where.push(`COALESCE(sd.ai_suggestion, 'not_run') = ?`)
+    params.push(aiF)
+  }
+  if (humanF) {
+    where.push(`COALESCE(sd.human_decision, 'not_decided') = ?`)
+    params.push(humanF)
+  }
+  const rows = db
+    .prepare(
+      `SELECT r.id, r.title, r.year, r.journal, r.authors_text, r.abstract,
+              r.keywords_json, r.has_pdf,
+              sd.id AS sd_id, sd.ai_suggestion, sd.ai_reason, sd.ai_confidence,
+              sd.ai_model, sd.ai_matched_inclusion, sd.ai_matched_exclusion,
+              sd.ai_need_full_text, sd.ai_ran_at,
+              sd.human_decision, sd.human_reason, sd.decided_at
+       FROM records r
+       LEFT JOIN screening_decisions sd
+         ON sd.record_id = r.id AND sd.stage = 'title_abstract'
+       WHERE ${where.join(' AND ')}
+       ORDER BY (r.year IS NULL), r.year DESC, r.title
+       LIMIT 500`
+    )
+    .all(...params)
+    .map((r) => ({
+      ...r,
+      ai_matched_inclusion: parseJsonArrayField(r.ai_matched_inclusion),
+      ai_matched_exclusion: parseJsonArrayField(r.ai_matched_exclusion),
+      ai_need_full_text:    parseJsonArrayField(r.ai_need_full_text),
+      keywords_list:        parseJsonArrayField(r.keywords_json),
+      ai_suggestion: r.ai_suggestion || 'not_run',
+      human_decision: r.human_decision || 'not_decided',
+      has_abstract: !!(r.abstract && String(r.abstract).trim()),
+    }))
+
+  // 统计(项目全貌,不受过滤影响)
+  const statsRow = db
+    .prepare(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN COALESCE(sd.ai_suggestion, 'not_run') != 'not_run' THEN 1 ELSE 0 END) AS ai_done,
+         SUM(CASE WHEN sd.ai_suggestion = 'include'  THEN 1 ELSE 0 END) AS ai_include,
+         SUM(CASE WHEN sd.ai_suggestion = 'exclude'  THEN 1 ELSE 0 END) AS ai_exclude,
+         SUM(CASE WHEN sd.ai_suggestion = 'uncertain' THEN 1 ELSE 0 END) AS ai_uncertain,
+         SUM(CASE WHEN COALESCE(sd.human_decision, 'not_decided') != 'not_decided' THEN 1 ELSE 0 END) AS human_done,
+         SUM(CASE WHEN sd.human_decision = 'include'  THEN 1 ELSE 0 END) AS human_include,
+         SUM(CASE WHEN sd.human_decision = 'exclude'  THEN 1 ELSE 0 END) AS human_exclude,
+         SUM(CASE WHEN sd.human_decision = 'uncertain' THEN 1 ELSE 0 END) AS human_uncertain
+       FROM records r
+       LEFT JOIN screening_decisions sd
+         ON sd.record_id = r.id AND sd.stage = 'title_abstract'
+       WHERE r.project_id = ? AND r.duplicate_of_record_id IS NULL`
+    )
+    .get(project.id) || {}
+  const stats = {
+    total: statsRow.total || 0,
+    ai_done: statsRow.ai_done || 0,
+    ai_include: statsRow.ai_include || 0,
+    ai_exclude: statsRow.ai_exclude || 0,
+    ai_uncertain: statsRow.ai_uncertain || 0,
+    human_done: statsRow.human_done || 0,
+    human_include: statsRow.human_include || 0,
+    human_exclude: statsRow.human_exclude || 0,
+    human_uncertain: statsRow.human_uncertain || 0,
+  }
+  stats.ai_pending = stats.total - stats.ai_done
+  stats.human_pending = stats.total - stats.human_done
+
+  let progress = null
+  try {
+    progress = getProjectProgress(db, project.id)
+  } catch (e) {
+    console.error('[screening] getProjectProgress failed:', e.message)
+  }
+
+  res.render('projects/screening', {
+    title: `初筛 · ${project.title}`,
+    project,
+    protocol,
+    rows,
+    stats,
+    filterAi: aiF,
+    filterHuman: humanF,
+    batch: progressGet(project.id),
+    progress,
+    currentStep: 'screening',
+    stepLabel: '3. 筛选(Screening)',
+  })
+})
+
+// ============================================================
+// POST /:id/screening/run-one/:recordId
+// ============================================================
+router.post('/:id/screening/run-one/:recordId', async (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+  }
+  const protocol = getApprovedProtocol(db, project.id)
+  if (!protocol) {
+    req.session.flash = {
+      type: 'error',
+      message: '请先在第 1 步生成并审批研究协议(没有纳排标准无法判断)。',
+    }
+    return res.redirect(`/projects/${project.id}/screening`)
+  }
+  const record = getRecordInProject(db, project.id, req.params.recordId)
+  if (!record) {
+    return res.status(404).render('error', { title: 'Not Found', message: '文献条目不存在或不属于本项目' })
+  }
+
+  const r = await runScreeningOnce(db, {
+    userId: req.user.id,
+    project,
+    protocol,
+    record,
+    req,
+  })
+
+  if (r.ok) {
+    req.session.flash = {
+      type: 'success',
+      message: `已对《${(record.title || '').slice(0, 40)}》跑完 AI:${r.decision}${r.confidence != null ? `(置信度 ${r.confidence.toFixed(2)})` : ''}`,
+    }
+  } else {
+    req.session.flash = {
+      type: 'error',
+      message: `AI 调用失败:${r.status || ''} ${r.error || ''}`.slice(0, 240),
+    }
+  }
+  res.redirect(`/projects/${project.id}/screening`)
+})
+
+// ============================================================
+// POST /:id/screening/run-batch
+//
+// fire-and-forget:启动后台任务,立即重定向回 /screening,前端轮询 progress.json
+// ============================================================
+router.post('/:id/screening/run-batch', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+  }
+  const protocol = getApprovedProtocol(db, project.id)
+  if (!protocol) {
+    req.session.flash = {
+      type: 'error',
+      message: '请先在第 1 步生成并审批研究协议(没有纳排标准无法判断)。',
+    }
+    return res.redirect(`/projects/${project.id}/screening`)
+  }
+
+  // 已有任务在跑:不允许重入
+  if (runningBatches.has(project.id)) {
+    req.session.flash = {
+      type: 'error',
+      message: '已有批量任务在跑,请等它跑完再启动新一批(或刷新页面查看进度)。',
+    }
+    return res.redirect(`/projects/${project.id}/screening`)
+  }
+
+  // 找出 ai_suggestion = 'not_run' 或者还没建 screening_decisions 行的 records
+  const targets = db
+    .prepare(
+      `SELECT r.id
+       FROM records r
+       LEFT JOIN screening_decisions sd
+         ON sd.record_id = r.id AND sd.stage = 'title_abstract'
+       WHERE r.project_id = ?
+         AND r.duplicate_of_record_id IS NULL
+         AND (sd.ai_suggestion IS NULL OR sd.ai_suggestion = 'not_run')
+       ORDER BY r.title`
+    )
+    .all(project.id)
+
+  if (targets.length === 0) {
+    req.session.flash = { type: 'success', message: '没有未跑的条目,AI 初筛已全部完成。' }
+    return res.redirect(`/projects/${project.id}/screening`)
+  }
+
+  runningBatches.add(project.id)
+  progressInit(project.id, targets.length)
+
+  const userId = req.user.id
+
+  // 给批量任务造一个最简的 req-like 对象给 audit 用(原 req 在响应之后会被回收)
+  const fakeReq = {
+    ip: req.ip,
+    get: (h) => req.get(h),
+  }
+
+  audit(db, req, {
+    eventType: 'screening_batch_started',
+    userId,
+    projectId: project.id,
+    payload: { total: targets.length },
+  })
+
+  // 立刻响应,后台串行跑
+  req.session.flash = {
+    type: 'success',
+    message: `已启动批量 AI 初筛:${targets.length} 条。请保持页面打开,进度会实时刷新(关闭页面 / 进程重启会丢进度)。`,
+  }
+  res.redirect(`/projects/${project.id}/screening`)
+
+  // 在响应后跑(setImmediate 让 res.end 真正发出去)
+  setImmediate(async () => {
+    try {
+      for (const t of targets) {
+        const record = getRecordInProject(db, project.id, t.id)
+        if (!record) {
+          progressUpdate(project.id, {
+            done: (batchProgress.get(project.id)?.done || 0) + 1,
+            errors: (batchProgress.get(project.id)?.errors || 0) + 1,
+          })
+          continue
+        }
+        progressUpdate(project.id, { current_title: (record.title || '').slice(0, 80) })
+        const r = await runScreeningOnce(db, {
+          userId,
+          project,
+          protocol,
+          record,
+          req: fakeReq,
+        })
+        const cur = batchProgress.get(project.id) || { done: 0, errors: 0 }
+        progressUpdate(project.id, {
+          done: cur.done + 1,
+          errors: cur.errors + (r.ok ? 0 : 1),
+        })
+      }
+    } catch (e) {
+      console.error('[screening] batch loop crashed:', e)
+    } finally {
+      progressUpdate(project.id, {
+        status: 'finished',
+        current_title: null,
+        finished_at: new Date().toISOString(),
+      })
+      runningBatches.delete(project.id)
+      const final = progressGet(project.id) || {}
+      audit(db, fakeReq, {
+        eventType: 'screening_batch_finished',
+        userId,
+        projectId: project.id,
+        payload: { total: final.total, done: final.done, errors: final.errors },
+      })
+    }
+  })
+})
+
+// ============================================================
+// GET /:id/screening/progress.json
+// ============================================================
+router.get('/:id/screening/progress.json', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) return res.status(404).json({ error: 'not_found' })
+
+  const p = progressGet(project.id)
+  if (!p) {
+    return res.json({ running: false, total: 0, done: 0, errors: 0 })
+  }
+  res.json({
+    running: p.status === 'running',
+    status: p.status,
+    total: p.total,
+    done: p.done,
+    errors: p.errors,
+    pct: p.total > 0 ? Math.round((p.done / p.total) * 100) : 0,
+    started_at: p.started_at,
+    finished_at: p.finished_at,
+    current_title: p.current_title,
+  })
+})
+
+// ============================================================
+// POST /:id/screening/decide/:recordId
+//   body: decision (include|exclude|uncertain), reason
+// ============================================================
+router.post('/:id/screening/decide/:recordId', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+  }
+  const record = getRecordInProject(db, project.id, req.params.recordId)
+  if (!record) {
+    return res.status(404).render('error', { title: 'Not Found', message: '文献条目不存在或不属于本项目' })
+  }
+
+  const decision = String(req.body.decision || '').trim()
+  if (!SCREENING_DECISIONS.includes(decision)) {
+    req.session.flash = { type: 'error', message: '决定值非法' }
+    return res.redirect(`/projects/${project.id}/screening`)
+  }
+  const reason = String(req.body.reason || '').slice(0, 2000).trim() || null
+
+  // 确保行存在
+  ensureScreeningRow(db, { recordId: record.id, projectId: project.id })
+
+  db.prepare(
+    `UPDATE screening_decisions
+     SET human_decision = ?, human_reason = ?, decided_at = datetime('now'),
+         decided_by = ?, updated_at = datetime('now')
+     WHERE record_id = ? AND stage = 'title_abstract'`
+  ).run(decision, reason, req.user.id, record.id)
+
+  audit(db, req, {
+    eventType: 'screening_decided',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: {
+      record_id: record.id,
+      decision,
+      has_reason: !!reason,
+    },
+  })
+
+  req.session.flash = { type: 'success', message: `已记录人工决定:${decision}` }
+  // 跳回 + 锚点定位到当前 record
+  res.redirect(`/projects/${project.id}/screening#row-${record.id}`)
+})
+
+// ============================================================
+// GET /:id/screening/export.csv
+// ============================================================
+router.get('/:id/screening/export.csv', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT r.id AS record_id, r.title, r.year, r.journal, r.doi,
+              sd.ai_suggestion, sd.ai_reason, sd.ai_confidence, sd.ai_model, sd.ai_ran_at,
+              sd.human_decision, sd.human_reason, sd.decided_at
+       FROM records r
+       LEFT JOIN screening_decisions sd
+         ON sd.record_id = r.id AND sd.stage = 'title_abstract'
+       WHERE r.project_id = ? AND r.duplicate_of_record_id IS NULL
+       ORDER BY (r.year IS NULL), r.year DESC, r.title`
+    )
+    .all(project.id)
+
+  const header = [
+    'record_id', 'title', 'year', 'journal', 'doi',
+    'ai_suggestion', 'ai_confidence', 'ai_model', 'ai_reason', 'ai_ran_at',
+    'human_decision', 'human_reason', 'decided_at',
+  ]
+  const lines = [header.join(',')]
+  for (const r of rows) {
+    lines.push([
+      csv(r.record_id),
+      csv(r.title),
+      csv(r.year),
+      csv(r.journal),
+      csv(r.doi),
+      csv(r.ai_suggestion || 'not_run'),
+      csv(r.ai_confidence),
+      csv(r.ai_model),
+      csv(r.ai_reason),
+      csv(r.ai_ran_at),
+      csv(r.human_decision || 'not_decided'),
+      csv(r.human_reason),
+      csv(r.decided_at),
+    ].join(','))
+  }
+  const body = lines.join('\n')
+
+  audit(db, req, {
+    eventType: 'screening_exported_csv',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: { rows: rows.length, bytes: Buffer.byteLength(body, 'utf8') },
+  })
+
+  const safeTitle = (project.title || 'project').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'project'
+  const filename = `screening-log-${safeTitle}.csv`
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+  // 加 BOM 让 Excel 正确识别 UTF-8
+  res.send('﻿' + body)
+})
+
+/** 把任意值转 CSV 安全字符串(双引号包裹 + 双引号转义) */
+function csv(v) {
+  if (v == null) return ''
+  let s = String(v)
+  // 去掉换行,避免一行多 record
+  s = s.replace(/\r?\n/g, ' ').replace(/\r/g, ' ')
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    s = '"' + s.replace(/"/g, '""') + '"'
+  }
+  return s
+}
+
+export default router

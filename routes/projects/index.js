@@ -12,8 +12,15 @@ import {
   getProjectProgress,
   getChecklistItems,
 } from '../../services/prisma.js'
+import synthesisRouter from './synthesis.js'
+import reportRouter from './report.js'
 
 const router = express.Router()
+
+// Phase 6 子路由(/:id/synthesis/* 和 /:id/report/*)— 必须在通用 step-loop 之前注册
+// 以便 POST /:id/synthesis/run 等不被 step-loop 的 GET 拦截
+router.use('/', synthesisRouter)
+router.use('/', reportRouter)
 
 // ---------- 工具:解析 JSON 字段(项目/协议表里多列是 JSON 字符串) ----------
 function parseJsonArrayField(v) {
@@ -452,13 +459,12 @@ router.post('/:id/protocol/:protocolId/edit', (req, res) => {
 
 // ---------- step 占位页:screening / extraction / rob / synthesis / certainty / report ----------
 // Phase 4+ 会接入真正的内容,现在只渲染 stepper + "即将开放" 提示 + 当前 step 覆盖的 PRISMA 项
+// 注意:synthesis 与 report 由 ./synthesis.js / ./report.js 接管,这里只留占位 step
 const STEP_LABELS = {
   screening:  '3. 筛选(Screening)',
   extraction: '4. 抽取(Extraction)',
   rob:        '5. 偏倚风险(Risk of Bias)',
-  synthesis:  '6. 综合(Synthesis)',
   certainty:  '7. 证据强度(Certainty)',
-  report:     '8. 报告(Report)',
 }
 for (const stepId of Object.keys(STEP_LABELS)) {
   router.get(`/:id/${stepId}`, (req, res) => {

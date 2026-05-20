@@ -17,6 +17,16 @@ import express from 'express'
 import path from 'node:path'
 import fs from 'node:fs'
 import { getProjectProgress } from '../../services/prisma.js'
+import { randomId } from '../../services/crypto.js'
+import { audit } from '../../services/audit.js'
+import { formatAllStyles, normalizeRecord } from '../../services/citation-format.js'
+import {
+  exportBibTeX,
+  exportRIS,
+  exportCslJson,
+  exportReferencesSection,
+} from '../../services/reference-export.js'
+import { fetchByDoi } from '../../services/crossref.js'
 
 const router = express.Router({ mergeParams: true })
 
@@ -226,6 +236,214 @@ function buildPageHref(basePath, query, page) {
 }
 
 // ============================================================
+// 表单解析辅助:authors_text(每行一个作者)→ authors_json
+// ============================================================
+
+function parseAuthorsTextarea(raw) {
+  if (!raw || typeof raw !== 'string') return { authors: [], text: '' }
+  const lines = raw
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 200)
+  const authors = lines.map((line) => {
+    // 支持 'Surname, Given' 或 'Given Surname' 或单独 surname
+    if (line.includes(',')) {
+      const [sur, given] = line.split(',').map((x) => x.trim())
+      return { surname: sur || '', givenName: given || '', full: line }
+    }
+    // CJK:连续中日韩字符整段当 surname+given 不易拆,保留 full
+    if (/[㐀-鿿]/.test(line)) {
+      // 假设第一个字符是姓
+      const first = Array.from(line)[0] || ''
+      const rest = line.slice(first.length)
+      return { surname: first, givenName: rest, full: line }
+    }
+    const parts = line.split(/\s+/)
+    if (parts.length === 1) return { surname: parts[0], givenName: '', full: line }
+    return {
+      surname: parts[parts.length - 1],
+      givenName: parts.slice(0, -1).join(' '),
+      full: line,
+    }
+  })
+  // 列表展示用:'Wang G, Tang R, Xu M'
+  const text = authors
+    .map((a) => {
+      const sur = a.surname || ''
+      const given = a.givenName || ''
+      const initials = given
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((p) => (p[0] || '').toUpperCase())
+        .join('')
+      if (/[㐀-鿿]/.test(sur + given)) return a.full
+      return initials ? `${sur} ${initials}` : sur || a.full
+    })
+    .filter(Boolean)
+    .join(', ')
+  return { authors, text }
+}
+
+function parseKeywordsField(raw) {
+  if (!raw || typeof raw !== 'string') return []
+  return raw
+    .split(/[,;\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 100)
+}
+
+function normalizeTitleForDedup(title) {
+  if (!title) return ''
+  return String(title)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function cleanDoi(raw) {
+  if (!raw) return null
+  const t = String(raw).trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '')
+  return t || null
+}
+
+// 收集 form 字段(POST body)→ DB-shaped values。返回 { values, errors }
+function collectRecordForm(body) {
+  const errors = []
+  const title = (body.title || '').trim()
+  if (!title) errors.push('标题必填')
+  if (title.length > 1000) errors.push('标题过长(>1000 字符)')
+
+  const { authors, text: authorsText } = parseAuthorsTextarea(body.authors_text || '')
+
+  let year = null
+  if (body.year) {
+    const n = parseInt(body.year, 10)
+    if (Number.isFinite(n) && n >= 1500 && n <= 2200) year = n
+    else if (String(body.year).trim()) errors.push('年份无效(1500-2200)')
+  }
+
+  const journal = (body.journal || '').trim().slice(0, 500) || null
+  const publisher = (body.publisher || '').trim().slice(0, 500) || null
+  const doi = cleanDoi(body.doi)
+  const url = (body.url || '').trim().slice(0, 2000) || null
+  const abstract = (body.abstract || '').trim().slice(0, 20000) || null
+  const notes = (body.notes || '').trim().slice(0, 10000) || null
+  const keywords = parseKeywordsField(body.keywords || '')
+  const itemType = ['journalArticle', 'conferencePaper', 'bookSection', 'book', 'webpage', 'other']
+    .includes(body.item_type) ? body.item_type : 'journalArticle'
+
+  return {
+    errors,
+    values: {
+      title,
+      authors_json: JSON.stringify(authors),
+      authors_text: authorsText || null,
+      year,
+      journal,
+      publisher,
+      doi,
+      url,
+      abstract,
+      notes,
+      keywords_json: JSON.stringify(keywords),
+      item_type: itemType,
+      normalized_title: normalizeTitleForDedup(title),
+    },
+    // 表单回显:把原始输入存一下,出错重渲染时用
+    raw: {
+      title,
+      authors_text: body.authors_text || '',
+      year: body.year || '',
+      journal: journal || '',
+      publisher: publisher || '',
+      doi: doi || '',
+      url: url || '',
+      abstract: abstract || '',
+      keywords: body.keywords || '',
+      notes: notes || '',
+      item_type: itemType,
+    },
+  }
+}
+
+// 给 view 准备一份回显用的对象(record 还没保存时也能用)
+function recordFormDefaults() {
+  return {
+    title: '',
+    authors_text: '',
+    year: '',
+    journal: '',
+    publisher: '',
+    doi: '',
+    url: '',
+    abstract: '',
+    keywords: '',
+    notes: '',
+    item_type: 'journalArticle',
+  }
+}
+
+function recordToFormShape(row) {
+  if (!row) return recordFormDefaults()
+  const authors = parseAuthors(row.authors_json)
+  const authors_text = authors
+    .map((a) => a.full || `${a.surname || ''} ${a.givenName || ''}`.trim())
+    .filter(Boolean)
+    .join('\n')
+  const kws = parseJsonArrayField(row.keywords_json)
+  return {
+    title: row.title || '',
+    authors_text,
+    year: row.year || '',
+    journal: row.journal || '',
+    publisher: row.publisher || '',
+    doi: row.doi || '',
+    url: row.url || '',
+    abstract: row.abstract || '',
+    keywords: kws.join(', '),
+    notes: row.notes || '',
+    item_type: row.item_type || 'journalArticle',
+  }
+}
+
+// 文件名安全化
+function safeFilename(s, fallback = 'records') {
+  const cleaned = String(s || '').replace(/[^\w一-鿿\-]+/g, '_').slice(0, 60)
+  return cleaned || fallback
+}
+
+// 加载项目所有 records — 用于批量导出
+function loadProjectRecordsForExport(db, projectId, ids /* nullable */) {
+  if (ids && ids.length) {
+    const placeholders = ids.map(() => '?').join(',')
+    return db
+      .prepare(
+        `SELECT * FROM records
+         WHERE project_id = ? AND id IN (${placeholders})
+           AND duplicate_of_record_id IS NULL
+         ORDER BY (year IS NULL), year DESC, title`
+      )
+      .all(projectId, ...ids)
+  }
+  return db
+    .prepare(
+      `SELECT * FROM records
+       WHERE project_id = ? AND duplicate_of_record_id IS NULL
+       ORDER BY (year IS NULL), year DESC, title`
+    )
+    .all(projectId)
+}
+
+function parseIdsQuery(q) {
+  if (!q) return null
+  const ids = String(q).split(',').map((s) => s.trim()).filter(Boolean).slice(0, 5000)
+  return ids.length ? ids : null
+}
+
+// ============================================================
 // GET /projects/:id/records — 列表
 // ============================================================
 router.get('/:id/records', (req, res) => {
@@ -294,6 +512,226 @@ router.get('/:id/records', (req, res) => {
 })
 
 // ============================================================
+// 批量导出(放在 /:id/records/:recordId 之前 — 带扩展名,Express 不会误匹配)
+// ============================================================
+
+function sendExport(req, res, { mime, filenameExt, eventType, render }) {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res
+      .status(404)
+      .render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  const ids = parseIdsQuery(req.query.ids)
+  const rows = loadProjectRecordsForExport(db, project.id, ids)
+  const body = render(rows, project)
+  const filename = `${safeFilename(project.title || 'records')}-records.${filenameExt}`
+
+  audit(db, req, {
+    eventType: 'record_exported',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: {
+      format: eventType,
+      count: rows.length,
+      bytes: Buffer.byteLength(body, 'utf8'),
+      ids_subset: !!ids,
+    },
+  })
+
+  res.setHeader('Content-Type', `${mime}; charset=utf-8`)
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+  res.send(body)
+}
+
+router.get('/:id/records.bib', (req, res) => {
+  sendExport(req, res, {
+    mime: 'application/x-bibtex',
+    filenameExt: 'bib',
+    eventType: 'bibtex',
+    render: (rows, project) =>
+      exportBibTeX(rows, { collectionName: project.title || 'slr' }),
+  })
+})
+
+router.get('/:id/records.ris', (req, res) => {
+  sendExport(req, res, {
+    mime: 'application/x-research-info-systems',
+    filenameExt: 'ris',
+    eventType: 'ris',
+    render: (rows) => exportRIS(rows),
+  })
+})
+
+router.get('/:id/records.csl.json', (req, res) => {
+  sendExport(req, res, {
+    mime: 'application/vnd.citationstyles.csl+json',
+    filenameExt: 'csl.json',
+    eventType: 'csl_json',
+    render: (rows) => exportCslJson(rows),
+  })
+})
+
+router.get('/:id/records.refs.md', (req, res) => {
+  const style = ['apa', 'ieee', 'gb_t_7714', 'chicago', 'mla'].includes(req.query.style)
+    ? req.query.style
+    : 'apa'
+  sendExport(req, res, {
+    mime: 'text/markdown',
+    filenameExt: `${style}.md`,
+    eventType: `markdown_${style}`,
+    render: (rows) => exportReferencesSection(rows, { style }),
+  })
+})
+
+// ============================================================
+// GET /projects/:id/records/new — 手动新增表单
+// 必须在 /:id/records/:recordId 之前注册
+// ============================================================
+router.get('/:id/records/new', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res
+      .status(404)
+      .render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+
+  let progress = null
+  try {
+    progress = getProjectProgress(db, project.id)
+  } catch (e) {
+    console.error('[records:new] getProjectProgress failed:', e.message)
+  }
+
+  res.render('projects/records/new', {
+    title: `手动新增条目 · ${project.title}`,
+    project,
+    progress,
+    currentStep: 'screening',
+    stepLabel: '3. 筛选(Screening)',
+    formAction: `/projects/${project.id}/records`,
+    cancelHref: `/projects/${project.id}/records`,
+    form: recordFormDefaults(),
+    errors: [],
+    isEdit: false,
+  })
+})
+
+// ============================================================
+// POST /projects/:id/records/new/lookup-doi — AJAX DOI 元数据回填
+// ============================================================
+router.post('/:id/records/new/lookup-doi', async (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).json({ ok: false, error: 'project_not_found' })
+  }
+  const doi = cleanDoi(req.body?.doi)
+  if (!doi) {
+    return res.status(400).json({ ok: false, error: 'invalid_doi' })
+  }
+  try {
+    const meta = await fetchByDoi(doi, { timeoutMs: 5000 })
+    if (!meta) {
+      return res.json({ ok: false, error: 'not_found' })
+    }
+    // 把 authors 转成 textarea 显示用
+    const authors_text = meta.authors
+      .map((a) => a.full || `${a.surname || ''} ${a.givenName || ''}`.trim())
+      .filter(Boolean)
+      .join('\n')
+    return res.json({
+      ok: true,
+      data: {
+        title: meta.title,
+        authors_text,
+        year: meta.year || '',
+        journal: meta.journal || '',
+        publisher: meta.publisher || '',
+        doi: meta.doi,
+        url: meta.url || '',
+        abstract: meta.abstract || '',
+        item_type: meta.item_type || 'journalArticle',
+      },
+    })
+  } catch (e) {
+    console.error('[records:lookup-doi]', e.message)
+    return res.status(500).json({ ok: false, error: 'lookup_failed' })
+  }
+})
+
+// ============================================================
+// POST /projects/:id/records — 创建(手动,无 zotero_package_id,no_pdf)
+// ============================================================
+router.post('/:id/records', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res
+      .status(404)
+      .render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+
+  const { errors, values, raw } = collectRecordForm(req.body || {})
+  if (errors.length) {
+    let progress = null
+    try {
+      progress = getProjectProgress(db, project.id)
+    } catch {}
+    return res.status(400).render('projects/records/new', {
+      title: `手动新增条目 · ${project.title}`,
+      project,
+      progress,
+      currentStep: 'screening',
+      stepLabel: '3. 筛选(Screening)',
+      formAction: `/projects/${project.id}/records`,
+      cancelHref: `/projects/${project.id}/records`,
+      form: raw,
+      errors,
+      isEdit: false,
+    })
+  }
+
+  const id = randomId('rec')
+  db.prepare(
+    `INSERT INTO records (
+       id, project_id, package_id, zotero_item_id, zotero_rdf_about,
+       item_type, title, normalized_title,
+       authors_json, authors_text, year, date_text,
+       journal, publisher, doi, url, abstract, keywords_json, notes,
+       has_pdf, duplicate_group_id, duplicate_of_record_id
+     ) VALUES (?, ?, NULL, NULL, NULL,
+               ?, ?, ?,
+               ?, ?, ?, NULL,
+               ?, ?, ?, ?, ?, ?, ?,
+               0, NULL, NULL)`
+  ).run(
+    id, project.id,
+    values.item_type, values.title, values.normalized_title,
+    values.authors_json, values.authors_text, values.year,
+    values.journal, values.publisher, values.doi, values.url, values.abstract,
+    values.keywords_json, values.notes
+  )
+
+  audit(db, req, {
+    eventType: 'record_created',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: {
+      record_id: id,
+      title: values.title,
+      doi: values.doi,
+      source: 'manual',
+    },
+  })
+
+  req.session.flash = { type: 'success', message: '已新增文献条目' }
+  res.redirect(`/projects/${project.id}/records/${id}`)
+})
+
+// ============================================================
 // GET /projects/:id/records/:recordId — 详情
 // ============================================================
 router.get('/:id/records/:recordId', (req, res) => {
@@ -358,6 +796,14 @@ router.get('/:id/records/:recordId', (req, res) => {
     console.error('[records:detail] getProjectProgress failed:', e.message)
   }
 
+  // 5 种 style 的引文字符串(详情页"复制为..."按钮用)
+  let citations = null
+  try {
+    citations = formatAllStyles(record)
+  } catch (e) {
+    console.error('[records:detail] formatAllStyles failed:', e.message)
+  }
+
   res.render('projects/records/detail', {
     title: `${record.title} · ${project.title}`,
     project,
@@ -368,7 +814,187 @@ router.get('/:id/records/:recordId', (req, res) => {
     attachments,
     duplicateGroup,
     mergedInto,
+    citations,
   })
+})
+
+// ============================================================
+// GET /projects/:id/records/:recordId/edit — 编辑表单
+// ============================================================
+router.get('/:id/records/:recordId/edit', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res
+      .status(404)
+      .render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  const row = db
+    .prepare('SELECT * FROM records WHERE id = ? AND project_id = ?')
+    .get(req.params.recordId, project.id)
+  if (!row) {
+    return res
+      .status(404)
+      .render('error', { title: 'Not Found', message: '文献条目不存在' })
+  }
+
+  let progress = null
+  try {
+    progress = getProjectProgress(db, project.id)
+  } catch {}
+
+  res.render('projects/records/edit', {
+    title: `编辑条目 · ${row.title}`,
+    project,
+    progress,
+    currentStep: 'screening',
+    stepLabel: '3. 筛选(Screening)',
+    record: row,
+    formAction: `/projects/${project.id}/records/${row.id}/update`,
+    cancelHref: `/projects/${project.id}/records/${row.id}`,
+    form: recordToFormShape(row),
+    errors: [],
+    isEdit: true,
+  })
+})
+
+// ============================================================
+// POST /projects/:id/records/:recordId/update — 更新
+// ============================================================
+router.post('/:id/records/:recordId/update', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res
+      .status(404)
+      .render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  const row = db
+    .prepare('SELECT * FROM records WHERE id = ? AND project_id = ?')
+    .get(req.params.recordId, project.id)
+  if (!row) {
+    return res
+      .status(404)
+      .render('error', { title: 'Not Found', message: '文献条目不存在' })
+  }
+
+  const { errors, values, raw } = collectRecordForm(req.body || {})
+  if (errors.length) {
+    let progress = null
+    try {
+      progress = getProjectProgress(db, project.id)
+    } catch {}
+    return res.status(400).render('projects/records/edit', {
+      title: `编辑条目 · ${row.title}`,
+      project,
+      progress,
+      currentStep: 'screening',
+      stepLabel: '3. 筛选(Screening)',
+      record: row,
+      formAction: `/projects/${project.id}/records/${row.id}/update`,
+      cancelHref: `/projects/${project.id}/records/${row.id}`,
+      form: raw,
+      errors,
+      isEdit: true,
+    })
+  }
+
+  db.prepare(
+    `UPDATE records SET
+       item_type = ?, title = ?, normalized_title = ?,
+       authors_json = ?, authors_text = ?, year = ?,
+       journal = ?, publisher = ?, doi = ?, url = ?, abstract = ?,
+       keywords_json = ?, notes = ?
+     WHERE id = ? AND project_id = ?`
+  ).run(
+    values.item_type, values.title, values.normalized_title,
+    values.authors_json, values.authors_text, values.year,
+    values.journal, values.publisher, values.doi, values.url, values.abstract,
+    values.keywords_json, values.notes,
+    row.id, project.id
+  )
+
+  audit(db, req, {
+    eventType: 'record_updated',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: {
+      record_id: row.id,
+      title: values.title,
+      doi: values.doi,
+    },
+  })
+
+  req.session.flash = { type: 'success', message: '已更新文献条目' }
+  res.redirect(`/projects/${project.id}/records/${row.id}`)
+})
+
+// ============================================================
+// POST /projects/:id/records/:recordId/delete — 删除 + 级联清理附件文件
+// ============================================================
+router.post('/:id/records/:recordId/delete', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res
+      .status(404)
+      .render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  const row = db
+    .prepare('SELECT * FROM records WHERE id = ? AND project_id = ?')
+    .get(req.params.recordId, project.id)
+  if (!row) {
+    return res
+      .status(404)
+      .render('error', { title: 'Not Found', message: '文献条目不存在' })
+  }
+
+  // 先查附件路径(为了删 record 后从磁盘清掉文件)
+  const atts = db
+    .prepare('SELECT id, storage_path FROM attachments WHERE record_id = ?')
+    .all(row.id)
+
+  // DB 删除:attachments 有 ON DELETE CASCADE,会自动清掉行
+  // 同时清掉其他可能指向此 record 的副本记录的 duplicate_of_record_id
+  // (避免悬空指针)
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE records SET duplicate_of_record_id = NULL WHERE duplicate_of_record_id = ?')
+      .run(row.id)
+    db.prepare('DELETE FROM records WHERE id = ? AND project_id = ?').run(row.id, project.id)
+  })
+  tx()
+
+  // 物理删除附件文件 — 容错,任何失败只日志
+  let removed = 0
+  for (const a of atts) {
+    if (!a.storage_path) continue
+    try {
+      const abs = path.resolve(a.storage_path)
+      const rel = path.relative(UPLOADS_ROOT, abs)
+      const inside = abs === UPLOADS_ROOT ||
+        (!rel.startsWith('..') && !path.isAbsolute(rel))
+      if (!inside) continue
+      fs.unlinkSync(abs)
+      removed++
+    } catch (e) {
+      console.warn('[records:delete] unlink failed:', a.storage_path, e.message)
+    }
+  }
+
+  audit(db, req, {
+    eventType: 'record_deleted',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: {
+      record_id: row.id,
+      title: row.title,
+      attachments_removed: removed,
+      attachments_total: atts.length,
+    },
+  })
+
+  req.session.flash = { type: 'success', message: '已删除文献条目' }
+  res.redirect(`/projects/${project.id}/records`)
 })
 
 // ============================================================

@@ -20,6 +20,8 @@ import projectSearchRouter from './routes/projects/search.js'
 import projectPrismaRouter from './routes/projects/prisma.js'
 import projectZoteroRouter from './routes/projects/zotero.js'
 import projectRecordsRouter from './routes/projects/records.js'
+import projectScreeningRouter from './routes/projects/screening.js'
+import projectExtractionRouter from './routes/projects/extraction.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -97,7 +99,9 @@ app.use('/projects/:id/prisma', requireUser, projectPrismaRouter)
 app.use('/projects/:id/zotero', requireUser, projectZoteroRouter)
 app.use('/projects', requireUser, projectSearchRouter)
 app.use('/projects', requireUser, projectRecordsRouter)
-app.use('/projects', requireUser, projectsRouter)
+app.use('/projects', requireUser, projectScreeningRouter)
+app.use('/projects', requireUser, projectExtractionRouter)
+app.use('/projects', requireUser, projectsRouter)  // 主路由(含 synthesis + report 自挂)放最后
 
 // /account 仪表盘:登录用户的快速总览
 app.get('/account', requireUser, (req, res) => {

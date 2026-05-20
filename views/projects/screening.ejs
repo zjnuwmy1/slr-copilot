@@ -1,43 +1,333 @@
-<%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
+<%- include('../partials/header', { title }) %>
 <%- include('partials/project-header', { project }) %>
 
-<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
-  <%- include('partials/stepper', { project, progress, currentStep: 'screening' }) %>
+<%
+  // ===== helpers =====
+  function escAttr(v) { return v == null ? '' : String(v) }
+  function aiBadge(s) {
+    return ({
+      include:   ['bg-emerald-100 text-emerald-700', '建议纳入'],
+      exclude:   ['bg-rose-100 text-rose-700',       '建议排除'],
+      uncertain: ['bg-amber-100 text-amber-800',     '不确定'],
+      not_run:   ['bg-slate-100 text-slate-500',     '未跑'],
+    })[s] || ['bg-slate-100 text-slate-500', s]
+  }
+  function humanBadge(s) {
+    return ({
+      include:     ['bg-emerald-600 text-white',  '纳入'],
+      exclude:     ['bg-rose-600 text-white',     '排除'],
+      uncertain:   ['bg-amber-500 text-white',    '不确定'],
+      not_decided: ['bg-slate-200 text-slate-600','未决定'],
+    })[s] || ['bg-slate-200 text-slate-600', s]
+  }
+  const filterBase = `/projects/${project.id}/screening`
+  function filterHref(opts) {
+    const params = new URLSearchParams()
+    const ai = opts && Object.prototype.hasOwnProperty.call(opts, 'ai') ? opts.ai : filterAi
+    const hu = opts && Object.prototype.hasOwnProperty.call(opts, 'human') ? opts.human : filterHuman
+    if (ai)  params.set('ai', ai)
+    if (hu)  params.set('human', hu)
+    const qs = params.toString()
+    return qs ? `${filterBase}?${qs}` : filterBase
+  }
+  const hasAnyFilter = !!(filterAi || filterHuman)
+%>
 
-  <section class="space-y-6">
-    <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
-      <p class="text-xs font-medium uppercase tracking-wider text-blue-700">Step 3 of 8 · <%= stepLabel %></p>
-      <p class="mt-1 text-sm text-slate-600">
-        覆盖 PRISMA
-        <% stepItems.forEach((it, i) => { %><span class="font-mono">#<%= it.item_number %></span><%= i < stepItems.length - 1 ? ' · ' : '' %><% }) %>
-      </p>
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('partials/stepper', { project, progress: progress || { stepStatus: {}, prismaProgress: { donePct: 0, done: 0, total: 42 } }, currentStep: 'screening' }) %>
+
+  <section class="space-y-6 min-w-0">
+    <!-- 顶部标题 -->
+    <div class="flex items-start justify-between gap-4">
+      <div class="min-w-0">
+        <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Screening · 标题/摘要初筛</p>
+        <h2 class="mt-1 text-xl font-semibold text-slate-900">AI 初筛 · 三态决定</h2>
+        <p class="mt-1 text-sm text-slate-500">
+          基于已审批协议的纳排标准,对每条文献的标题/摘要/关键词跑一次 AI(haiku 4.5),给出 include / exclude / uncertain 建议;
+          你再做最终人工决定。覆盖 PRISMA #8(筛选过程)+ #9(筛选记录)。
+        </p>
+      </div>
+      <a href="<%= filterBase %>/export.csv"
+         class="flex-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100">
+        导出 CSV 筛选 log
+      </a>
     </div>
 
-    <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
-      <p class="text-2xl">🛠️</p>
-      <h2 class="mt-2 text-lg font-semibold text-slate-800">即将开放</h2>
-      <p class="mt-1 text-sm text-slate-500">本步骤将在 Phase 4 接入。届时支持双人独立筛选、AI 辅助打分、PRISMA flow diagram 自动生成。</p>
-      <div class="mt-4 flex justify-center gap-2">
-        <a href="/projects/<%= project.id %>/search" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">← 返回检索式</a>
-        <a href="/projects/<%= project.id %>" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">跳到协议</a>
+    <!-- 协议状态 -->
+    <% if (!protocol) { %>
+      <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+        <p class="text-sm font-medium text-amber-900">请先审批研究协议</p>
+        <p class="mt-1 text-sm text-amber-800">初筛必须依据已审批的纳入/排除标准。请回到第 1 步生成并审批协议。</p>
+        <a href="/projects/<%= project.id %>"
+           class="mt-3 inline-flex items-center rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white hover:bg-amber-500">前往协议步骤</a>
+      </div>
+    <% } else { %>
+      <div class="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+        <p class="text-sm font-medium text-emerald-900">已基于协议 v<%= protocol.version %> 进行筛选</p>
+        <p class="mt-0.5 text-xs text-emerald-800">
+          纳入标准 <%= (protocol.inclusion_criteria || []).length %> 条 ·
+          排除标准 <%= (protocol.exclusion_criteria || []).length %> 条
+        </p>
+      </div>
+    <% } %>
+
+    <!-- 统计卡 4 个 -->
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div class="rounded-xl border border-slate-200 bg-white p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-slate-400">总条数</p>
+        <p class="mt-1 text-2xl font-semibold text-slate-900"><%= stats.total %></p>
+        <p class="mt-0.5 text-[11px] text-slate-400">已去重</p>
+      </div>
+      <div class="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-blue-700">AI 已建议</p>
+        <p class="mt-1 text-2xl font-semibold text-blue-900"><%= stats.ai_done %></p>
+        <p class="mt-0.5 text-[11px] text-blue-700/80">
+          纳 <%= stats.ai_include %> · 排 <%= stats.ai_exclude %> · 疑 <%= stats.ai_uncertain %>
+        </p>
+      </div>
+      <div class="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-emerald-700">人工已决</p>
+        <p class="mt-1 text-2xl font-semibold text-emerald-900"><%= stats.human_done %></p>
+        <p class="mt-0.5 text-[11px] text-emerald-700/80">
+          纳 <%= stats.human_include %> · 排 <%= stats.human_exclude %> · 疑 <%= stats.human_uncertain %>
+        </p>
+      </div>
+      <div class="rounded-xl border border-amber-100 bg-amber-50/40 p-4">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-amber-700">待决定</p>
+        <p class="mt-1 text-2xl font-semibold text-amber-900"><%= stats.human_pending %></p>
+        <p class="mt-0.5 text-[11px] text-amber-700/80">还有 <%= stats.ai_pending %> 条未跑 AI</p>
       </div>
     </div>
 
-    <div class="rounded-2xl border border-slate-200 bg-white p-6">
-      <h3 class="text-sm font-medium uppercase text-slate-400">本步骤覆盖的 PRISMA 2020 清单项</h3>
-      <ul class="mt-3 space-y-3 text-sm">
-        <% stepItems.forEach(it => { %>
-          <li class="flex gap-3">
-            <span class="flex-none rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">#<%= it.item_number %></span>
-            <div class="min-w-0">
-              <p class="font-medium text-slate-800"><%= it.topic %> <span class="text-xs font-normal text-slate-400">· <%= it.section %></span></p>
-              <p class="mt-0.5 text-xs text-slate-500"><%= it.recommendation %></p>
-            </div>
-          </li>
+    <!-- 批量运行 + 进度 -->
+    <% if (protocol) { %>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p class="text-sm font-medium text-slate-900">批量 AI 初筛</p>
+            <p class="mt-0.5 text-xs text-slate-500">
+              对所有未跑 AI 的条目串行调用(~15-25s 每条)。批量任务跑在内存,Node 重启 / 进程崩溃会丢进度(可重启再点)。
+            </p>
+          </div>
+          <form method="post" action="<%= filterBase %>/run-batch"
+                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='启动中…';">
+            <button type="submit"
+                    class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:bg-slate-500 disabled:cursor-wait"
+                    <%= (batch && batch.status === 'running') ? 'disabled' : '' %>>
+              <% if (batch && batch.status === 'running') { %>
+                正在运行(<%= batch.done %>/<%= batch.total %>)
+              <% } else if (stats.ai_pending === 0) { %>
+                全部已跑(可重新生成单条)
+              <% } else { %>
+                对未跑的 <%= stats.ai_pending %> 条运行 AI
+              <% } %>
+            </button>
+          </form>
+        </div>
+
+        <!-- 进度条 — 即使没在跑也保留一次结果展示;运行中由 JS 轮询更新 -->
+        <div id="batch-progress" class="mt-3 <%= batch ? '' : 'hidden' %>">
+          <div class="flex items-center justify-between text-xs text-slate-500">
+            <span id="bp-status"><%= batch && batch.status === 'running' ? '运行中' : (batch ? '已完成' : '') %></span>
+            <span id="bp-counts"><%= batch ? (batch.done + '/' + batch.total + (batch.errors ? ' · 错 ' + batch.errors : '')) : '' %></span>
+          </div>
+          <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+            <div id="bp-bar" class="h-full bg-blue-500 transition-all duration-300"
+                 style="width: <%= batch && batch.total ? Math.round((batch.done / batch.total) * 100) : 0 %>%"></div>
+          </div>
+          <p id="bp-current" class="mt-1 truncate text-[11px] text-slate-400">
+            <%= batch && batch.current_title ? '正在处理:' + batch.current_title : '' %>
+          </p>
+        </div>
+      </div>
+    <% } %>
+
+    <!-- 过滤 -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-4">
+      <p class="text-xs font-medium uppercase tracking-wider text-slate-400">过滤</p>
+      <div class="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        <span class="text-slate-500">AI 建议:</span>
+        <% ['include', 'exclude', 'uncertain', 'not_run'].forEach(v => {
+             const [cls, label] = aiBadge(v)
+             const active = filterAi === v
+        %>
+          <a href="<%= filterHref({ ai: active ? '' : v }) %>"
+             class="rounded-full px-2.5 py-0.5 <%= cls %> <%= active ? 'ring-2 ring-offset-1 ring-blue-400' : '' %>">
+            <%= label %>
+          </a>
         <% }) %>
-      </ul>
+        <span class="mx-2 text-slate-300">|</span>
+        <span class="text-slate-500">人工决定:</span>
+        <% ['include', 'exclude', 'uncertain', 'not_decided'].forEach(v => {
+             const [cls, label] = humanBadge(v)
+             const active = filterHuman === v
+        %>
+          <a href="<%= filterHref({ human: active ? '' : v }) %>"
+             class="rounded-full px-2.5 py-0.5 <%= cls %> <%= active ? 'ring-2 ring-offset-1 ring-blue-400' : '' %>">
+            <%= label %>
+          </a>
+        <% }) %>
+        <% if (hasAnyFilter) { %>
+          <a href="<%= filterBase %>" class="ml-2 text-slate-500 underline hover:text-slate-900">清空过滤</a>
+        <% } %>
+      </div>
     </div>
+
+    <!-- 列表 -->
+    <% if (rows.length === 0) { %>
+      <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">
+        <% if (hasAnyFilter) { %>
+          当前过滤下没有匹配的条目。<a href="<%= filterBase %>" class="text-blue-700 hover:underline">清空过滤</a>。
+        <% } else { %>
+          还没有导入文献条目。先去 <a href="/projects/<%= project.id %>/zotero" class="text-blue-700 hover:underline">Zotero 导入</a>。
+        <% } %>
+      </div>
+    <% } else { %>
+      <div class="rounded-2xl border border-slate-200 bg-white">
+        <% rows.forEach((r, idx) => {
+             const [aiCls, aiLabel] = aiBadge(r.ai_suggestion)
+             const [huCls, huLabel] = humanBadge(r.human_decision)
+        %>
+          <article id="row-<%= r.id %>"
+                   class="border-b border-slate-100 p-4 last:border-b-0 <%= r.human_decision === 'include' ? 'bg-emerald-50/30' : r.human_decision === 'exclude' ? 'bg-rose-50/20' : '' %>">
+
+            <header class="flex items-start justify-between gap-4">
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 text-xs">
+                  <span class="text-slate-400">#<%= idx + 1 %></span>
+                  <% if (r.year) { %><span class="font-mono text-slate-500"><%= r.year %></span><% } %>
+                  <% if (r.journal) { %><span class="truncate text-slate-500"><%= r.journal %></span><% } %>
+                  <% if (!r.has_abstract) { %>
+                    <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">缺摘要</span>
+                  <% } %>
+                </div>
+                <a href="/projects/<%= project.id %>/records/<%= r.id %>"
+                   class="mt-1 block text-sm font-medium text-slate-900 hover:text-blue-700">
+                  <%= r.title || '(无标题)' %>
+                </a>
+                <% if (r.authors_text) { %>
+                  <p class="mt-0.5 truncate text-xs text-slate-500"><%= r.authors_text %></p>
+                <% } %>
+              </div>
+              <div class="flex flex-none items-center gap-2">
+                <span class="rounded-full px-2.5 py-0.5 text-[11px] font-medium <%= aiCls %>"><%= aiLabel %></span>
+                <% if (r.ai_confidence != null) { %>
+                  <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono text-slate-500" title="置信度">
+                    <%= r.ai_confidence.toFixed(2) %>
+                  </span>
+                <% } %>
+                <span class="rounded-full px-2.5 py-0.5 text-[11px] font-medium <%= huCls %>"><%= huLabel %></span>
+              </div>
+            </header>
+
+            <!-- AI 理由 -->
+            <% if (r.ai_suggestion !== 'not_run' && r.ai_reason) { %>
+              <div class="mt-2 rounded-lg bg-slate-50/80 p-3 text-xs text-slate-700">
+                <p class="font-medium text-slate-500">AI 理由<% if (r.ai_model) { %> <span class="font-mono text-slate-400">· <%= r.ai_model %></span><% } %></p>
+                <p class="mt-1 leading-relaxed"><%= r.ai_reason %></p>
+                <% if (r.ai_matched_inclusion && r.ai_matched_inclusion.length) { %>
+                  <p class="mt-1 text-emerald-700">命中纳入:<%= r.ai_matched_inclusion.join(' · ') %></p>
+                <% } %>
+                <% if (r.ai_matched_exclusion && r.ai_matched_exclusion.length) { %>
+                  <p class="mt-1 text-rose-700">命中排除:<%= r.ai_matched_exclusion.join(' · ') %></p>
+                <% } %>
+                <% if (r.ai_need_full_text && r.ai_need_full_text.length) { %>
+                  <p class="mt-1 text-amber-700">需看全文:<%= r.ai_need_full_text.join(' · ') %></p>
+                <% } %>
+              </div>
+            <% } %>
+
+            <!-- 操作行 -->
+            <div class="mt-3 flex flex-wrap items-end justify-between gap-3">
+              <!-- 单条 AI 重跑 -->
+              <% if (protocol) { %>
+                <form method="post" action="<%= filterBase %>/run-one/<%= r.id %>"
+                      onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='跑 AI 中…';">
+                  <button type="submit"
+                          class="rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60">
+                    <%= r.ai_suggestion === 'not_run' ? '让 AI 建议' : '重跑 AI' %>
+                  </button>
+                </form>
+              <% } else { %>
+                <span class="text-xs text-slate-400">先审批协议才能跑 AI</span>
+              <% } %>
+
+              <!-- 人工决定 -->
+              <form method="post" action="<%= filterBase %>/decide/<%= r.id %>"
+                    class="flex flex-wrap items-center gap-2">
+                <% ['include', 'exclude', 'uncertain'].forEach(v => {
+                     const [cls, label] = humanBadge(v)
+                     const checked = r.human_decision === v
+                %>
+                  <label class="inline-flex items-center gap-1 rounded-md border <%= checked ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-300' %> px-2 py-1 text-xs cursor-pointer hover:bg-slate-50">
+                    <input type="radio" name="decision" value="<%= v %>" <%= checked ? 'checked' : '' %> class="h-3 w-3" />
+                    <%= label %>
+                  </label>
+                <% }) %>
+                <input type="text" name="reason" maxlength="2000"
+                       value="<%= escAttr(r.human_reason) %>"
+                       placeholder="人工备注(可选)"
+                       class="w-56 rounded-md border border-slate-300 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none" />
+                <button type="submit" class="rounded-md bg-slate-900 px-2.5 py-1 text-xs text-white hover:bg-slate-700">
+                  保存
+                </button>
+              </form>
+            </div>
+          </article>
+        <% }) %>
+      </div>
+
+      <% if (rows.length >= 500) { %>
+        <p class="text-center text-xs text-slate-400">列表上限 500 条;数据集更大时请用过滤器分批查看。</p>
+      <% } %>
+    <% } %>
+
   </section>
 </div>
+
+<script>
+(function() {
+  // 批量进度轮询
+  var pjId = <%- JSON.stringify(project.id) %>;
+  var box = document.getElementById('batch-progress');
+  var bar = document.getElementById('bp-bar');
+  var status = document.getElementById('bp-status');
+  var counts = document.getElementById('bp-counts');
+  var current = document.getElementById('bp-current');
+  if (!box) return;
+
+  var initialBatch = <%- JSON.stringify(batch || null) %>;
+  var poll = function() {
+    fetch('/projects/' + pjId + '/screening/progress.json', { credentials: 'same-origin' })
+      .then(function(r) { return r.json() })
+      .then(function(p) {
+        if (!p || !p.total) {
+          box.classList.add('hidden');
+          return;
+        }
+        box.classList.remove('hidden');
+        var pct = p.pct || 0;
+        bar.style.width = pct + '%';
+        status.textContent = p.running ? '运行中(' + pct + '%)' : '已完成';
+        counts.textContent = p.done + '/' + p.total + (p.errors ? ' · 错 ' + p.errors : '');
+        current.textContent = p.current_title ? '正在处理:' + p.current_title : '';
+        if (p.running) {
+          setTimeout(poll, 3000);
+        } else {
+          // 完成后 2 秒刷新页面,把新结果显出来
+          setTimeout(function() { window.location.reload(); }, 2000);
+        }
+      })
+      .catch(function() {
+        // 出错就 8s 后再试一次
+        setTimeout(poll, 8000);
+      });
+  };
+  // 只有当前有任务在跑时才轮询(根据初始状态)
+  if (initialBatch && initialBatch.status === 'running') {
+    setTimeout(poll, 1500);
+  }
+})();
+</script>
 
 <%- include('../partials/footer') %>
