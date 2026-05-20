@@ -11,9 +11,29 @@
   <header class="border-b border-slate-200 bg-white">
     <div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
       <a href="/" class="text-lg font-semibold tracking-tight">SLR Copilot</a>
-      <nav class="text-sm text-slate-500">
-        <span>AI 辅助系统性文献综述平台</span>
+      <nav class="flex items-center gap-4 text-sm">
+        <% if (typeof user !== 'undefined' && user) { %>
+          <a href="/account" class="text-slate-600 hover:text-slate-900">账户</a>
+          <a href="/account/credentials" class="text-slate-600 hover:text-slate-900">凭证</a>
+          <% if (user.role === 'admin') { %>
+            <a href="/admin" class="text-slate-600 hover:text-slate-900">管理后台</a>
+          <% } %>
+          <span class="text-slate-400">|</span>
+          <span class="text-slate-500"><%= user.display_name || user.email %><% if (user.role === 'admin') { %> <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">ADMIN</span><% } %></span>
+          <form action="/logout" method="post" class="inline">
+            <button type="submit" class="text-slate-500 hover:text-slate-900">登出</button>
+          </form>
+        <% } else { %>
+          <a href="/login" class="rounded-lg bg-slate-900 px-3 py-1.5 text-white hover:bg-slate-700">登录</a>
+        <% } %>
       </nav>
     </div>
   </header>
+  <% if (typeof flash !== 'undefined' && flash) { %>
+    <div class="mx-auto max-w-5xl px-6 pt-4">
+      <div class="rounded-lg border <%= flash.type === 'error' ? 'border-red-200 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800' %> px-4 py-2 text-sm">
+        <%= flash.message %>
+      </div>
+    </div>
+  <% } %>
   <main class="mx-auto max-w-5xl px-6 py-10">
