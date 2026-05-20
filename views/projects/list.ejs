@@ -1,0 +1,55 @@
+<%- include('../partials/header', { title }) %>
+
+<section class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Projects</p>
+      <h1 class="mt-1 text-2xl font-semibold tracking-tight">研究项目</h1>
+      <p class="mt-1 text-sm text-slate-500">每个项目独立维护协议、检索式、文献与综述草稿。</p>
+    </div>
+    <a href="/projects/new" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">
+      + 新建项目
+    </a>
+  </div>
+
+  <% if (projects.length === 0) { %>
+    <div class="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-10 text-center">
+      <p class="text-base text-slate-600">还没有项目。</p>
+      <a href="/projects/new" class="mt-4 inline-block rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+        创建第一个研究项目
+      </a>
+    </div>
+  <% } else { %>
+    <div class="grid gap-4 md:grid-cols-2">
+      <% projects.forEach(p => { %>
+        <a href="/projects/<%= p.id %>" class="block rounded-2xl border border-slate-200 bg-white p-6 transition hover:border-slate-400 hover:shadow-sm">
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-slate-900"><%= p.title %></h2>
+            <% const statusCfg = ({
+              draft: ['bg-slate-100 text-slate-600', '草稿'],
+              protocol_pending: ['bg-amber-100 text-amber-700', '待审批'],
+              protocol_approved: ['bg-emerald-100 text-emerald-700', '协议已审批'],
+              searching: ['bg-blue-100 text-blue-700', '检索中'],
+              screening: ['bg-blue-100 text-blue-700', '筛选中'],
+              extracting: ['bg-blue-100 text-blue-700', '抽取中'],
+              synthesizing: ['bg-blue-100 text-blue-700', '综合中'],
+              complete: ['bg-emerald-100 text-emerald-700', '已完成'],
+              archived: ['bg-slate-100 text-slate-500', '归档'],
+            })[p.status] || ['bg-slate-100 text-slate-600', p.status] %>
+            <span class="rounded-full px-2 py-0.5 text-xs <%= statusCfg[0] %>"><%= statusCfg[1] %></span>
+          </div>
+          <p class="mt-2 line-clamp-3 text-sm text-slate-600"><%= p.topic %></p>
+          <div class="mt-3 flex items-center gap-3 text-xs text-slate-400">
+            <% if (p.discipline) { %><span><%= p.discipline %></span><% } %>
+            <% if (p.year_start || p.year_end) { %><span><%= p.year_start || '?' %>–<%= p.year_end || '?' %></span><% } %>
+            <% if (p.approved_version) { %><span>协议 v<%= p.approved_version %> ✓</span>
+            <% } else if (p.latest_version) { %><span>协议 v<%= p.latest_version %>(未审批)</span><% } %>
+            <span class="ml-auto"><%= p.updated_at %></span>
+          </div>
+        </a>
+      <% }) %>
+    </div>
+  <% } %>
+</section>
+
+<%- include('../partials/footer') %>

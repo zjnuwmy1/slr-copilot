@@ -14,6 +14,8 @@ import adminUsageRouter from './routes/admin/usage.js'
 import adminAuditRouter from './routes/admin/audit.js'
 import credentialsRouter from './routes/account/credentials.js'
 import oauthRouter from './routes/account/oauth.js'
+import llmRouter from './routes/account/llm.js'
+import projectsRouter from './routes/projects/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -84,6 +86,8 @@ app.use('/', authRouter)
 // Agent B + C:用户账户与凭证(/account/*)
 app.use('/account/credentials', requireUser, credentialsRouter)
 app.use('/account/oauth', requireUser, oauthRouter)
+app.use('/account/llm', requireUser, llmRouter)
+app.use('/projects', requireUser, projectsRouter)
 
 // /account 仪表盘:登录用户的快速总览
 app.get('/account', requireUser, (req, res) => {

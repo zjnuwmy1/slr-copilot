@@ -13,6 +13,7 @@
       <a href="/" class="text-lg font-semibold tracking-tight">SLR Copilot</a>
       <nav class="flex items-center gap-4 text-sm">
         <% if (typeof user !== 'undefined' && user) { %>
+          <a href="/projects" class="text-slate-600 hover:text-slate-900">项目</a>
           <a href="/account" class="text-slate-600 hover:text-slate-900">账户</a>
           <a href="/account/credentials" class="text-slate-600 hover:text-slate-900">凭证</a>
           <% if (user.role === 'admin') { %>

@@ -133,3 +133,54 @@ CREATE TABLE IF NOT EXISTS oauth_bind_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_oauth_bind_user ON oauth_bind_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_bind_state ON oauth_bind_sessions(state);
+
+-- ========================================
+-- Phase 2: 研究项目 + 协议
+-- ========================================
+
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  review_type TEXT,                    -- systematic_review | scoping_review | bibliometric | meta_analysis | mixed_methods
+  discipline TEXT,                     -- 学科领域
+  topic TEXT NOT NULL,                 -- 用户原始主题描述
+  goal TEXT,                           -- 初步目标
+  year_start INTEGER,
+  year_end INTEGER,
+  databases TEXT,                      -- JSON array: ['wos','scopus',...]
+  language_limits TEXT,                -- JSON array
+  document_types TEXT,                 -- JSON array
+  seed_titles TEXT,                    -- JSON array of seed 文献题名
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','protocol_pending','protocol_approved','searching','screening','extracting','synthesizing','complete','archived')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+
+-- 协议:每次 AI 生成或人工编辑都写一个新 version
+CREATE TABLE IF NOT EXISTS protocols (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  research_questions TEXT,             -- JSON array of strings
+  inclusion_criteria TEXT,             -- JSON array
+  exclusion_criteria TEXT,             -- JSON array
+  concept_groups TEXT,                 -- JSON: [{name, terms: []}, ...]
+  recommended_review_type TEXT,
+  rationale TEXT,
+  clarification_questions TEXT,        -- JSON array (LLM 提的待澄清问题)
+  generated_by TEXT NOT NULL CHECK (generated_by IN ('ai','user','ai_edited')),
+  model TEXT,                          -- 用到的 LLM 模型
+  approved_by_user INTEGER NOT NULL DEFAULT 0,
+  approved_at TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_protocols_project ON protocols(project_id);
+CREATE INDEX IF NOT EXISTS idx_protocols_version ON protocols(project_id, version);

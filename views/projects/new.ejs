@@ -1,0 +1,116 @@
+<%- include('../partials/header', { title }) %>
+
+<section class="max-w-3xl space-y-6">
+  <div>
+    <a href="/projects" class="text-sm text-slate-500 hover:text-slate-900">← 返回项目列表</a>
+    <h1 class="mt-2 text-2xl font-semibold tracking-tight">新建研究项目</h1>
+    <p class="mt-1 text-sm text-slate-500">填完后下一步会让 Claude 生成研究问题 + 纳排标准。这里**不必完美** — 是种子,后面可改。</p>
+  </div>
+
+  <form method="post" action="/projects" class="space-y-5">
+    <div>
+      <label class="text-sm font-medium text-slate-700">项目标题 <span class="text-red-500">*</span></label>
+      <input name="title" value="<%= values.title || '' %>" required maxlength="200"
+             class="mt-1 block w-full rounded-md border-slate-300 px-3 py-2 text-sm" />
+      <% if (errors.title) { %><p class="mt-1 text-xs text-red-600"><%= errors.title %></p><% } %>
+    </div>
+
+    <div>
+      <label class="text-sm font-medium text-slate-700">研究主题 <span class="text-red-500">*</span></label>
+      <textarea name="topic" rows="4" required maxlength="5000"
+                placeholder="例:生成式 AI 在高等教育中的应用及其对学习成效的影响"
+                class="mt-1 block w-full rounded-md border-slate-300 px-3 py-2 text-sm"><%= values.topic || '' %></textarea>
+      <% if (errors.topic) { %><p class="mt-1 text-xs text-red-600"><%= errors.topic %></p><% } %>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-2">
+      <div>
+        <label class="text-sm font-medium text-slate-700">学科领域</label>
+        <input name="discipline" value="<%= values.discipline || '' %>" placeholder="教育技术 / 医学 / 公共卫生..."
+               class="mt-1 block w-full rounded-md border-slate-300 px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="text-sm font-medium text-slate-700">综述类型(可让 AI 推荐)</label>
+        <select name="review_type" class="mt-1 block w-full rounded-md border-slate-300 px-3 py-2 text-sm">
+          <option value="">让 AI 推荐</option>
+          <option value="systematic_review">系统性综述</option>
+          <option value="scoping_review">范围综述(scoping)</option>
+          <option value="bibliometric">文献计量</option>
+          <option value="meta_analysis">Meta 分析</option>
+          <option value="mixed_methods">混合方法</option>
+        </select>
+      </div>
+    </div>
+
+    <div>
+      <label class="text-sm font-medium text-slate-700">初步目标</label>
+      <textarea name="goal" rows="2" placeholder="想回答什么问题?预期读者是谁?"
+                class="mt-1 block w-full rounded-md border-slate-300 px-3 py-2 text-sm"><%= values.goal || '' %></textarea>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-2">
+      <div>
+        <label class="text-sm font-medium text-slate-700">起始年份</label>
+        <input name="year_start" type="number" min="1900" max="2100" value="<%= values.year_start || '' %>"
+               class="mt-1 block w-full rounded-md border-slate-300 px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="text-sm font-medium text-slate-700">结束年份</label>
+        <input name="year_end" type="number" min="1900" max="2100" value="<%= values.year_end || '' %>"
+               class="mt-1 block w-full rounded-md border-slate-300 px-3 py-2 text-sm" />
+      </div>
+    </div>
+
+    <div>
+      <p class="text-sm font-medium text-slate-700">目标数据库</p>
+      <div class="mt-2 flex flex-wrap gap-3 text-sm text-slate-700">
+        <% ['Web of Science','Scopus','PubMed','IEEE','ERIC','ACM','PsycINFO'].forEach(d => { %>
+          <label class="inline-flex items-center gap-2 rounded border border-slate-200 px-3 py-1.5">
+            <input type="checkbox" name="databases" value="<%= d %>" class="rounded">
+            <%= d %>
+          </label>
+        <% }) %>
+      </div>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-2">
+      <div>
+        <p class="text-sm font-medium text-slate-700">语言限制</p>
+        <div class="mt-2 flex flex-wrap gap-2 text-sm">
+          <% ['English','Chinese'].forEach(l => { %>
+            <label class="inline-flex items-center gap-2 rounded border border-slate-200 px-3 py-1.5">
+              <input type="checkbox" name="language_limits" value="<%= l %>" class="rounded">
+              <%= l %>
+            </label>
+          <% }) %>
+        </div>
+      </div>
+      <div>
+        <p class="text-sm font-medium text-slate-700">文献类型</p>
+        <div class="mt-2 flex flex-wrap gap-2 text-sm">
+          <% ['Journal Article','Review','Conference Paper','Book Chapter'].forEach(t => { %>
+            <label class="inline-flex items-center gap-2 rounded border border-slate-200 px-3 py-1.5">
+              <input type="checkbox" name="document_types" value="<%= t %>" class="rounded">
+              <%= t %>
+            </label>
+          <% }) %>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <label class="text-sm font-medium text-slate-700">种子文献题名(可选,每行一篇)</label>
+      <textarea name="seed_titles" rows="4" placeholder="贴几篇你已知的关键文献题名,有助于 AI 扩展同义词"
+                class="mt-1 block w-full rounded-md border-slate-300 px-3 py-2 font-mono text-xs"><%= values.seed_titles || '' %></textarea>
+    </div>
+
+    <div class="flex items-center justify-end gap-3 border-t border-slate-200 pt-4">
+      <a href="/projects" class="text-sm text-slate-500 hover:text-slate-900">取消</a>
+      <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+        创建项目
+      </button>
+    </div>
+  </form>
+</section>
+
+<%- include('../partials/footer') %>
