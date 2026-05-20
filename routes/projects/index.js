@@ -234,7 +234,7 @@ router.post('/:id/protocol/generate', async (req, res) => {
     prompt: userPrompt,
     expectJson: true,
     model: 'heavy',
-    maxTokens: 4096,
+    maxTokens: 8192,  // 4096 在中文输出场景偶尔会被截断,Sonnet 默认支持到 8192
     timeoutMs: 180_000,
   })
 
@@ -248,6 +248,33 @@ router.post('/:id/protocol/generate', async (req, res) => {
 
   // 提取并标准化
   const normalized = normalizeProtocolOutput(result.data || null)
+
+  // JSON 解析失败(parse_failed),或者解析后内容明显空 → 不要写空版本入库
+  const isEmpty = (
+    !normalized.research_questions.length &&
+    !normalized.inclusion_criteria.length &&
+    !normalized.exclusion_criteria.length &&
+    !normalized.concept_groups.length
+  )
+  if (isEmpty) {
+    audit(db, req, {
+      eventType: 'protocol_generate_failed',
+      userId: req.user.id,
+      projectId: project.id,
+      payload: {
+        reason: result.data ? 'normalized_empty' : 'json_parse_failed',
+        model: result.model,
+        provider: result.provider,
+        duration_ms: result.durationMs,
+        usage_log_id: result.usageLogId,
+      },
+    })
+    req.session.flash = {
+      type: 'error',
+      message: `Claude 返回的内容没解析出有效协议(usage log #${result.usageLogId} 已存原文片段)。请管理员去 /admin/usage 查看原始输出 → 调整 prompt 后重试。`,
+    }
+    return res.redirect(`/projects/${project.id}`)
+  }
 
   // 下一个 version
   const { maxV } = db

@@ -87,37 +87,94 @@ function pickCredential(db, { userId, credentialId, preferredProvider, preferred
   return { ok: true, cred: candidates[0] }
 }
 
-/** 从 LLM 回复文本里尽力提取 JSON */
+/** 从 LLM 回复文本里尽力提取 JSON。失败返回 null。 */
 export function extractJson(text) {
   if (typeof text !== 'string' || text.length === 0) return null
-  // 1) ```json ... ``` fenced
-  const fence = text.match(/```(?:json)?\s*\n([\s\S]+?)\n```/i)
-  if (fence) {
-    try { return JSON.parse(fence[1]) } catch {}
+
+  // 1) 任意 ```json ... ``` / ``` ... ``` 围栏(允许 \r\n、无尾换行)
+  const fenceRe = /```(?:json|JSON)?\s*([\s\S]+?)```/g
+  let m
+  while ((m = fenceRe.exec(text)) !== null) {
+    const inner = m[1].trim()
+    const parsed = tryParseLenient(inner)
+    if (parsed !== undefined) return parsed
   }
-  // 2) 第一个 { 或 [ 起 depth-balance 扫描
-  let start = -1
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]
-    if (c === '{' || c === '[') { start = i; break }
+
+  // 2) 扫描每个 { 或 [ 作为起点,做 depth-balanced。
+  //    如果整段扫到最后 depth 仍 > 0(截断),尝试补齐括号再解析。
+  for (let s = 0; s < text.length; s++) {
+    const c = text[s]
+    if (c !== '{' && c !== '[') continue
+    const result = scanBalanced(text, s)
+    if (result == null) continue
+    const parsed = tryParseLenient(result.slice)
+    if (parsed !== undefined) return parsed
+    // 截断的情况:result.truncated == true
+    if (result.truncated) {
+      const repaired = tryRepairTruncated(result.slice, result.openStack)
+      if (repaired !== undefined) return repaired
+    }
   }
-  if (start === -1) return null
+
+  return null
+}
+
+/** 从 text[start] 开始 depth-balanced 扫描。返回 { slice, truncated, openStack }。 */
+function scanBalanced(text, start) {
   let depth = 0, inStr = false, esc = false
+  const stack = []
   for (let i = start; i < text.length; i++) {
     const c = text[i]
     if (esc) { esc = false; continue }
-    if (c === '\\') { esc = true; continue }
+    if (c === '\\' && inStr) { esc = true; continue }
     if (c === '"') { inStr = !inStr; continue }
     if (inStr) continue
-    if (c === '{' || c === '[') depth++
+    if (c === '{' || c === '[') { stack.push(c); depth++ }
     else if (c === '}' || c === ']') {
+      stack.pop()
       depth--
       if (depth === 0) {
-        try { return JSON.parse(text.slice(start, i + 1)) } catch { return null }
+        return { slice: text.slice(start, i + 1), truncated: false, openStack: [] }
       }
     }
   }
-  return null
+  // 走到末尾还没闭合:截断
+  return { slice: text.slice(start), truncated: true, openStack: stack }
+}
+
+/** 宽容解析:原样,然后剥行尾逗号,然后剥单行 // 注释。 */
+function tryParseLenient(s) {
+  if (typeof s !== 'string') return undefined
+  const candidates = [
+    s,
+    s.replace(/,\s*([}\]])/g, '$1'),                            // 剥行尾逗号
+    s.replace(/^\s*\/\/.*$/gm, '').replace(/,\s*([}\]])/g, '$1'), // 剥 // 注释 + 行尾逗号
+  ]
+  for (const c of candidates) {
+    try {
+      const v = JSON.parse(c)
+      if (v != null && (typeof v === 'object')) return v
+    } catch {}
+  }
+  return undefined
+}
+
+/** 截断修复:openStack 是未闭合的开括号栈,顺序追加对应闭括号。 */
+function tryRepairTruncated(slice, openStack) {
+  if (!openStack || openStack.length === 0) return undefined
+  // 切掉最后一个不完整的 token(常见:字符串没闭合、数字没写完、逗号孤立)
+  let s = slice
+  // 如果以未闭合的双引号结尾,尝试补一个 "
+  const openQuotes = (s.match(/(?<!\\)"/g) || []).length
+  if (openQuotes % 2 === 1) {
+    // 找最后一个 " 之后是不是有意义内容,补 "
+    s += '"'
+  }
+  // 倒序补闭括号
+  for (let i = openStack.length - 1; i >= 0; i--) {
+    s += openStack[i] === '{' ? '}' : ']'
+  }
+  return tryParseLenient(s)
 }
 
 function recordUsage(db, fields) {
@@ -285,14 +342,19 @@ export async function runLlm(db, opts) {
   const text = providerResult.text ?? ''
   const usage = providerResult.usage ?? null
   const data = expectJson ? extractJson(text) : undefined
+  const jsonParseFailed = expectJson && (data == null)
 
-  // 6. 落 usage_logs
+  // 6. 落 usage_logs — 解析失败的明确标 parse_failed 并保存原文片段供 debug
   const usageLogId = recordUsage(db, {
     userId, credentialId: cred.id, projectId, actionType,
     provider: cred.provider, authType: cred.auth_type, model,
     promptTokens: usage?.input_tokens ?? null,
     completionTokens: usage?.output_tokens ?? null,
-    durationMs, status: 'success',
+    durationMs,
+    status: jsonParseFailed ? 'parse_failed' : 'success',
+    errorMessage: jsonParseFailed
+      ? `json_parse_failed; raw_text(first 1800):\n${text.slice(0, 1800)}`
+      : null,
   })
 
   // 7. 更新凭证 last_used_at
