@@ -113,6 +113,16 @@ export function getProjectProgress(db, projectId) {
     stepStatus[key] = { status: 'not_started', summary: '尚未开放(Phase 4+)' }
   }
 
+  // certainty 真实状态:有 grade_assessments 即视为 done(Phase 6.5 GRADE)
+  try {
+    const g = db
+      .prepare('SELECT COUNT(*) AS c FROM grade_assessments WHERE project_id = ?')
+      .get(projectId)
+    if (g.c > 0) {
+      stepStatus.certainty = { status: 'done', summary: `${g.c} 个 outcome 已 GRADE 评级` }
+    }
+  } catch {}
+
   // 简单的"锁"规则:协议未审批前后续不能开始
   if (stepStatus.protocol.status !== 'done') {
     for (const key of ['screening', 'extraction', 'rob', 'synthesis', 'certainty', 'report']) {

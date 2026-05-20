@@ -464,7 +464,7 @@ const STEP_LABELS = {
   screening:  '3. 筛选(Screening)',
   extraction: '4. 抽取(Extraction)',
   rob:        '5. 偏倚风险(Risk of Bias)',
-  certainty:  '7. 证据强度(Certainty)',
+  // certainty 由 ./certainty.js 接管(Phase 6.5 GRADE 详细评估)
 }
 for (const stepId of Object.keys(STEP_LABELS)) {
   router.get(`/:id/${stepId}`, (req, res) => {

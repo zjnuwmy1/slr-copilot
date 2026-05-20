@@ -485,3 +485,67 @@ CREATE TABLE IF NOT EXISTS system_settings (
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_by_user_id TEXT
 );
+
+-- ========================================
+-- Phase 6.5: GRADE 详细证据评估
+-- ========================================
+--
+-- 每个 theme 下可以有 0..N 个 outcome(结局指标),每个 outcome 一份 GRADE 评估。
+-- 例:一个"AI 对学习效果"的主题下,可以拆出"学习成绩 / 学生参与度 / 知识保留率"3 个 outcome。
+--
+-- 5 个下调维度(每个 not_serious / serious / very_serious):
+--   risk_of_bias / inconsistency / indirectness / imprecision / publication_bias
+-- 3 个上调因素(观察性研究专用):
+--   large_effect / dose_response / plausible_confounding
+-- 最终 certainty(high / moderate / low / very_low)自动算 + 可人工 override。
+--
+CREATE TABLE IF NOT EXISTS grade_assessments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  theme_id TEXT NOT NULL,
+  outcome_label TEXT NOT NULL,                -- "学习成绩" / "学生参与度" 等
+  outcome_description TEXT,
+  importance TEXT CHECK (importance IN ('critical','important','low')) DEFAULT 'critical',
+
+  -- 起始等级:RCT 默认 high,观察性默认 low
+  starting_certainty TEXT NOT NULL DEFAULT 'high' CHECK (starting_certainty IN ('high','moderate','low','very_low')),
+
+  -- 5 个下调维度
+  risk_of_bias        TEXT DEFAULT 'not_serious' CHECK (risk_of_bias        IN ('not_serious','serious','very_serious')),
+  inconsistency       TEXT DEFAULT 'not_serious' CHECK (inconsistency       IN ('not_serious','serious','very_serious')),
+  indirectness        TEXT DEFAULT 'not_serious' CHECK (indirectness        IN ('not_serious','serious','very_serious')),
+  imprecision         TEXT DEFAULT 'not_serious' CHECK (imprecision         IN ('not_serious','serious','very_serious')),
+  publication_bias    TEXT DEFAULT 'undetected'  CHECK (publication_bias    IN ('undetected','suspected','strongly_suspected')),
+
+  -- 5 个维度的中文理由(JSON 字符串)
+  rationales TEXT,    -- {risk_of_bias:'...', inconsistency:'...', indirectness:'...', imprecision:'...', publication_bias:'...'}
+
+  -- 3 个上调因素(可选,观察性研究才用)
+  large_effect          TEXT DEFAULT 'none' CHECK (large_effect IN ('none','large','very_large')),
+  dose_response         INTEGER NOT NULL DEFAULT 0,
+  plausible_confounding TEXT DEFAULT 'none' CHECK (plausible_confounding IN ('none','would_reduce','would_increase')),
+
+  -- 最终评级
+  final_certainty TEXT CHECK (final_certainty IN ('high','moderate','low','very_low')),
+  final_manual_override INTEGER NOT NULL DEFAULT 0,
+
+  -- SoF 表用的"What happens?"一句话总结
+  summary_of_findings TEXT,
+  effect_size_text TEXT,                -- e.g. "RR 1.35 (95% CI 1.10-1.65)" or "narrative"
+  num_studies INTEGER,
+  num_participants INTEGER,
+
+  generated_by TEXT NOT NULL DEFAULT 'user' CHECK (generated_by IN ('user','ai','ai_edited')),
+  model TEXT,
+  notes TEXT,
+  display_order INTEGER,
+
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (theme_id) REFERENCES themes(id) ON DELETE CASCADE,
+  UNIQUE(theme_id, outcome_label)
+);
+CREATE INDEX IF NOT EXISTS idx_grade_project ON grade_assessments(project_id);
+CREATE INDEX IF NOT EXISTS idx_grade_theme ON grade_assessments(theme_id);

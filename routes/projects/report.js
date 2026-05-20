@@ -18,6 +18,7 @@ import { randomId } from '../../services/crypto.js'
 import { audit } from '../../services/audit.js'
 import { runLlm } from '../../services/llm.js'
 import { exportReferencesSection } from '../../services/reference-export.js'
+import { renderSoFMarkdown } from '../../services/grade.js'
 import {
   getSectionSystem,
   SECTION_ORDER,
@@ -519,6 +520,17 @@ router.get('/:id/report/export.md', (req, res) => {
   if (sections.results?.content_markdown) {
     parts.push(sections.results.content_markdown)
     parts.push('')
+  }
+
+  // Summary of Findings — GRADE 详细评估表(Phase 6.5)
+  try {
+    const sofMd = renderSoFMarkdown(db, project.id)
+    if (sofMd && sofMd.trim()) {
+      parts.push(sofMd)
+      parts.push('')
+    }
+  } catch (e) {
+    console.error('[report/export.md] SoF render failed:', e.message)
   }
 
   // Discussion
