@@ -68,6 +68,15 @@ function binForProvider(provider) {
   throw new Error(`unknown provider: ${provider}`)
 }
 
+// 实测的真实子命令(用 `<bin> --help` 探测出来):
+//   claude:  `claude auth login`  → 打印 OAuth URL,从 stdin 读 code
+//   codex:   待真二进制确认,先假设 `codex login`(SUMMARY-C.md 已注明)
+function loginArgsForProvider(provider) {
+  if (provider === 'anthropic') return ['auth', 'login']
+  if (provider === 'openai') return ['login']
+  throw new Error(`unknown provider: ${provider}`)
+}
+
 function isMock(provider) {
   if (provider === 'anthropic') return (process.env.CLAUDE_BIN || '').toLowerCase() === 'mock'
   if (provider === 'openai') return (process.env.CODEX_BIN || '').toLowerCase() === 'mock'
@@ -124,7 +133,7 @@ export function startLogin({ db, sessionId, userId, provider, req = null }) {
       XDG_DATA_HOME: path.join(stageHome, '.local/share'),
       XDG_CACHE_HOME: path.join(stageHome, '.cache'),
     }
-    proc = spawn(bin, ['login'], {
+    proc = spawn(bin, loginArgsForProvider(provider), {
       cwd: stageHome,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -415,14 +424,21 @@ async function finalizeSuccess(db, sessionId, entry, req) {
     return
   }
 
-  const subdir = row.provider === 'anthropic' ? '.claude' : '.codex'
-  const credDir = path.join(entry.stageHome, subdir)
-  if (!fs.existsSync(credDir)) {
+  // 真实 claude auth login 成功后凭证落点不固定:可能是
+  //   ~/.claude/                (Claude Code 传统路径)
+  //   ~/.claude.json            (单文件格式)
+  //   ~/.config/claude/         (XDG)
+  // 所以宽容检测:exit 0 + stage 下有任何 claude/codex 相关文件即可。
+  const candidates = row.provider === 'anthropic'
+    ? ['.claude', '.claude.json', '.config/claude']
+    : ['.codex', '.codex.json', '.config/codex']
+  const hit = candidates.find((p) => fs.existsSync(path.join(entry.stageHome, p)))
+  if (!hit) {
     return finalizeFailed(
       db,
       sessionId,
       entry,
-      `cli_exited_0_but_no_${subdir}_dir`,
+      `cli_exited_0_but_no_credential_artifact (looked for ${candidates.join(', ')})`,
       req
     )
   }
