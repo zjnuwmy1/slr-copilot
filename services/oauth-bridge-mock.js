@@ -58,6 +58,8 @@ export function startLogin({ db, sessionId, userId, provider, req = null }) {
     stdoutBuf: '',
     stderrBuf: '',
     mock: true,
+    isCodex: provider === 'openai',
+    deviceCode: null, // 在 timer1 里给 codex 填一个假 code
   }
   sessions.set(sessionId, entry)
 
@@ -67,15 +69,28 @@ export function startLogin({ db, sessionId, userId, provider, req = null }) {
     payload: { provider, sessionId, mock: true },
   })
 
-  // 1s 后吐出 fake URL
+  // 1s 后吐出 fake URL(codex 模式同时给个 fake device code)
   entry.timer1 = setTimeout(() => {
     if (entry.exited) return
-    const fakeUrl = `https://example.test/auth?session=${sessionId}&provider=${provider}`
+    const fakeUrl = entry.isCodex
+      ? 'https://example.test/codex/device'
+      : `https://example.test/auth?session=${sessionId}&provider=${provider}`
     entry.stdoutBuf += `Open this URL to authorize:\n  ${fakeUrl}\n`
+    if (entry.isCodex) {
+      entry.deviceCode = 'TEST-CODE'
+      entry.stdoutBuf += `Enter this one-time code (expires in 15 minutes)\n  ${entry.deviceCode}\n`
+    }
     updateSession(db, sessionId, {
       prompt_url: fakeUrl,
       state: 'awaiting_code',
     })
+    // codex 模式:device-auth 流不需要等用户 paste,2s 后自动"完成"
+    if (entry.isCodex) {
+      entry.timer2 = setTimeout(() => {
+        if (entry.exited) return
+        completeSuccess(db, sessionId, req)
+      }, 2000)
+    }
   }, 1000)
 
   // 5 分钟超时(mock 也保留行为一致)
@@ -89,6 +104,10 @@ export function submitCode({ db, sessionId, code, req = null }) {
   const entry = sessions.get(sessionId)
   if (!entry) return { ok: false, error: 'session_not_in_memory' }
   if (entry.exited) return { ok: false, error: 'already_finished' }
+  if (entry.isCodex) {
+    // codex device-auth:用户在浏览器输 code,这里只 ack
+    return { ok: true, note: 'codex_device_auth_no_stdin' }
+  }
   if (entry.code) return { ok: false, error: 'code_already_submitted' }
   entry.code = code
 

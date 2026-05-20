@@ -1,16 +1,26 @@
 <%- include('../../partials/header', { title }) %>
 
-<section class="mx-auto max-w-2xl space-y-6" data-session-id="<%= session.id %>">
+<%
+  const isCodex = session.provider === 'openai'
+  const initialDeviceCode = (typeof deviceCode !== 'undefined' && deviceCode) ? deviceCode : null
+%>
+
+<section class="mx-auto max-w-2xl space-y-6" data-session-id="<%= session.id %>" data-is-codex="<%= isCodex ? '1' : '0' %>">
   <div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
     <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-semibold tracking-tight">正在绑定 <%= session.provider === 'anthropic' ? 'Claude' : 'Codex' %>…</h1>
+      <h1 class="text-2xl font-semibold tracking-tight">正在绑定 <%= isCodex ? 'Codex' : 'Claude' %>…</h1>
       <span id="state-pill" class="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
-        <%= session.state === 'awaiting_url' ? '等待 CLI 输出授权 URL' : '等待粘贴 code' %>
+        <%
+          let pill
+          if (session.state === 'awaiting_url') pill = '等待 CLI 输出授权 URL'
+          else if (isCodex) pill = '等待你在浏览器输入 code'
+          else pill = '等待粘贴 code'
+        %><%= pill %>
       </span>
     </div>
 
     <div id="url-block" class="mt-6 <%= session.prompt_url ? '' : 'hidden' %>">
-      <p class="text-sm text-slate-700">第 1 步:在你的浏览器打开下面这个链接,完成授权:</p>
+      <p class="text-sm text-slate-700">第 1 步:在你的浏览器打开下面这个链接,登录账号:</p>
       <div class="mt-2 flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
         <a
           id="prompt-url"
@@ -34,31 +44,70 @@
       </div>
     </div>
 
-    <form id="code-form" action="/account/oauth/<%= session.id %>/code" method="post" class="mt-6 space-y-3">
-      <label class="block text-sm font-medium text-slate-700">
-        第 2 步:把授权页给你的 code 粘进来
-      </label>
-      <textarea
-        name="code"
-        rows="3"
-        required
-        autocomplete="off"
-        spellcheck="false"
-        placeholder="例如:abc123…"
-        class="block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
-      ></textarea>
-      <div class="flex items-center justify-between">
+    <% if (isCodex) { %>
+      <!-- Codex device-auth:展示大字号 device code,无 paste-back 输入框 -->
+      <div id="device-code-block" class="mt-6 <%= initialDeviceCode ? '' : 'hidden' %>">
+        <p class="text-sm text-slate-700">第 2 步:在浏览器页面输入下面这个一次性 code:</p>
+        <div class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-slate-300 bg-slate-50 px-4 py-4">
+          <div
+            id="device-code"
+            class="select-all font-mono text-3xl font-semibold tracking-widest text-slate-900"
+          ><%= initialDeviceCode || '' %></div>
+          <button
+            type="button"
+            id="copy-code-btn"
+            class="shrink-0 rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-white"
+          >复制 code</button>
+        </div>
+        <p class="mt-2 text-xs text-slate-500">
+          Code 15 分钟内有效。不要把它发给任何人 — device code 是常见的钓鱼目标。
+          完成浏览器授权后这个页面会自动跳转。
+        </p>
+      </div>
+
+      <div id="waiting-code-block" class="mt-6 <%= initialDeviceCode ? 'hidden' : '' %>">
+        <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-500"></span>
+          正在从 CLI 抓取 device code,稍候…
+        </div>
+      </div>
+
+      <div class="mt-6 flex items-center justify-between">
         <form action="/account/oauth/<%= session.id %>/cancel" method="post">
           <button type="submit" class="text-xs text-slate-500 hover:text-red-700">取消会话</button>
         </form>
-        <button
-          type="submit"
-          id="submit-code-btn"
-          class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
-          <%= session.state === 'awaiting_code' ? '' : 'disabled' %>
-        >提交 code</button>
+        <div class="text-xs text-slate-400">
+          继续等待 CLI 检测授权完成…
+        </div>
       </div>
-    </form>
+    <% } else { %>
+      <!-- Anthropic:原 paste-back 输入框 -->
+      <form id="code-form" action="/account/oauth/<%= session.id %>/code" method="post" class="mt-6 space-y-3">
+        <label class="block text-sm font-medium text-slate-700">
+          第 2 步:把授权页给你的 code 粘进来
+        </label>
+        <textarea
+          name="code"
+          rows="3"
+          required
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="例如:abc123…"
+          class="block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+        ></textarea>
+        <div class="flex items-center justify-between">
+          <form action="/account/oauth/<%= session.id %>/cancel" method="post">
+            <button type="submit" class="text-xs text-slate-500 hover:text-red-700">取消会话</button>
+          </form>
+          <button
+            type="submit"
+            id="submit-code-btn"
+            class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+            <%= session.state === 'awaiting_code' ? '' : 'disabled' %>
+          >提交 code</button>
+        </div>
+      </form>
+    <% } %>
   </div>
 
   <details class="rounded-xl border border-slate-200 bg-white/60 p-4 text-xs text-slate-500">
@@ -75,14 +124,21 @@
 
 <script>
 (function () {
-  const sid = document.currentScript.parentElement.querySelector('[data-session-id]').dataset.sessionId
+  const root = document.currentScript.parentElement.querySelector('[data-session-id]')
+  const sid = root.dataset.sessionId
+  const isCodex = root.dataset.isCodex === '1'
+
   const urlBlock = document.getElementById('url-block')
   const waitingBlock = document.getElementById('waiting-url-block')
   const promptUrl = document.getElementById('prompt-url')
   const statePill = document.getElementById('state-pill')
   const dbgState = document.getElementById('dbg-state')
-  const submitBtn = document.getElementById('submit-code-btn')
+  const submitBtn = document.getElementById('submit-code-btn') // Anthropic only
   const copyBtn = document.getElementById('copy-url-btn')
+  const deviceCodeBlock = document.getElementById('device-code-block')
+  const deviceCodeEl = document.getElementById('device-code')
+  const waitingCodeBlock = document.getElementById('waiting-code-block')
+  const copyCodeBtn = document.getElementById('copy-code-btn')
 
   copyBtn?.addEventListener('click', async () => {
     const u = promptUrl?.getAttribute('href')
@@ -93,6 +149,18 @@
       setTimeout(() => { copyBtn.textContent = '复制' }, 1500)
     } catch {
       copyBtn.textContent = '复制失败'
+    }
+  })
+
+  copyCodeBtn?.addEventListener('click', async () => {
+    const c = (deviceCodeEl?.textContent || '').trim()
+    if (!c) return
+    try {
+      await navigator.clipboard.writeText(c)
+      copyCodeBtn.textContent = '已复制'
+      setTimeout(() => { copyCodeBtn.textContent = '复制 code' }, 1500)
+    } catch {
+      copyCodeBtn.textContent = '复制失败'
     }
   })
 
@@ -113,12 +181,19 @@
         urlBlock?.classList.remove('hidden')
         waitingBlock?.classList.add('hidden')
       }
+      if (isCodex && j.device_code && deviceCodeEl) {
+        deviceCodeEl.textContent = j.device_code
+        deviceCodeBlock?.classList.remove('hidden')
+        waitingCodeBlock?.classList.add('hidden')
+      }
       if (j.state === 'awaiting_code') {
-        statePill.textContent = '等待粘贴 code'
-        statePill.className = 'rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700'
+        if (statePill) {
+          statePill.textContent = isCodex ? '等待你在浏览器输入 code' : '等待粘贴 code'
+          statePill.className = 'rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700'
+        }
         if (submitBtn) submitBtn.disabled = false
       } else if (j.state === 'awaiting_url') {
-        statePill.textContent = '等待 CLI 输出授权 URL'
+        if (statePill) statePill.textContent = '等待 CLI 输出授权 URL'
       }
       if (j.finished) {
         stopped = true

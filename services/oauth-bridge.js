@@ -69,13 +69,26 @@ function binForProvider(provider) {
 }
 
 // 实测的真实子命令(用 `<bin> --help` 探测出来):
-//   claude:  `claude auth login`  → 打印 OAuth URL,从 stdin 读 code
-//   codex:   待真二进制确认,先假设 `codex login`(SUMMARY-C.md 已注明)
+//   claude:  `claude auth login`         → 打印 OAuth URL,从 stdin 读 code
+//   codex:   `codex login --device-auth` → 打印 URL + 单独一行 device code,
+//                                          用户在浏览器输 code,CLI 自己 poll,
+//                                          不需要把 code 粘回 stdin
 function loginArgsForProvider(provider) {
   if (provider === 'anthropic') return ['auth', 'login']
-  if (provider === 'openai') return ['login']
+  if (provider === 'openai') return ['login', '--device-auth']
   throw new Error(`unknown provider: ${provider}`)
 }
+
+// codex 走 device-auth 流:不需要从 stdin 接 code,而是用户在浏览器
+// 完成授权后 CLI 自动 exit。视图也需要据此切换。
+function isCodexFlow(provider) {
+  return provider === 'openai'
+}
+
+// 抓 codex device code 的正则。实测形如 "C2O1-U5SXE"(全大写字母数字 + 短横线,4-12 字符)。
+// 必须独占一行(整行去 trim 后只剩这串),避免误抓 URL 路径里的片段。
+// 同时要求附近的上下文有 "code" 字样,降低误命中。
+const CODE_LINE_REGEX = /^[A-Z0-9]{3,6}(?:-[A-Z0-9]{3,6})+$/
 
 function isMock(provider) {
   if (provider === 'anthropic') return (process.env.CLAUDE_BIN || '').toLowerCase() === 'mock'
@@ -166,6 +179,9 @@ export function startLogin({ db, sessionId, userId, provider, req = null }) {
     userId,
     provider,
     gotUrl: false,
+    gotDeviceCode: false,
+    deviceCode: null, // codex device-auth 模式才有
+    isCodex: isCodexFlow(provider),
     exited: false,
     sessionId,
   }
@@ -184,18 +200,7 @@ export function startLogin({ db, sessionId, userId, provider, req = null }) {
     if (entry.stdoutBuf.length < STDOUT_CAP) {
       entry.stdoutBuf = (entry.stdoutBuf + chunk).slice(-STDOUT_CAP)
     }
-    if (!entry.gotUrl) {
-      const m = entry.stdoutBuf.match(URL_REGEX)
-      if (m) {
-        entry.gotUrl = true
-        const url = m[0]
-        try {
-          updateSession(db, sessionId, { prompt_url: url, state: 'awaiting_code' })
-        } catch (e) {
-          console.error('[oauth-bridge] db update prompt_url failed:', e.message)
-        }
-      }
-    }
+    scanForUrlAndCode(db, sessionId, entry, entry.stdoutBuf)
   })
 
   proc.stderr.on('data', (chunk) => {
@@ -203,18 +208,7 @@ export function startLogin({ db, sessionId, userId, provider, req = null }) {
       entry.stderrBuf = (entry.stderrBuf + chunk).slice(-STDOUT_CAP)
     }
     // 有些 CLI 把 URL 打到 stderr;也试着抓
-    if (!entry.gotUrl) {
-      const m = entry.stderrBuf.match(URL_REGEX)
-      if (m) {
-        entry.gotUrl = true
-        const url = m[0]
-        try {
-          updateSession(db, sessionId, { prompt_url: url, state: 'awaiting_code' })
-        } catch (e) {
-          console.error('[oauth-bridge] db update prompt_url failed:', e.message)
-        }
-      }
-    }
+    scanForUrlAndCode(db, sessionId, entry, entry.stderrBuf)
   })
 
   proc.on('error', (err) => {
@@ -266,6 +260,9 @@ export function startLogin({ db, sessionId, userId, provider, req = null }) {
 
 /**
  * 用户提交 code → 找内存 entry → 写子进程 stdin
+ *
+ * Codex device-auth 流不需要 paste-back code,这里对 codex provider 直接 ack 但不写 stdin
+ * (stdin 早已没人在读)。Anthropic 仍走原 stdin 路径。
  */
 export function submitCode({ db, sessionId, code, req = null }) {
   const entry = sessions.get(sessionId)
@@ -278,6 +275,10 @@ export function submitCode({ db, sessionId, code, req = null }) {
   if (entry.mock) {
     // mock 模式的 entry 没有 proc,delegate
     return mockBridge.submitCode({ db, sessionId, code, req })
+  }
+  if (entry.isCodex) {
+    // Codex device-auth:code 在浏览器输,CLI 自己 poll;不写 stdin。
+    return { ok: true, note: 'codex_device_auth_no_stdin' }
   }
   try {
     entry.proc.stdin.write(String(code).trim() + '\n')
@@ -407,6 +408,41 @@ export function reconcileSession(db, sessionId, req = null) {
 }
 
 // --- internal helpers ---
+
+/**
+ * 扫一个 stdout/stderr 缓冲区,尝试抓 URL + (codex 专属)device code。
+ * 抓到 URL → 写 DB prompt_url + state='awaiting_code'。
+ * 抓到 device code → 只存内存 entry.deviceCode(schema 没有列存,前端通过 state.json 拿)。
+ */
+function scanForUrlAndCode(db, sessionId, entry, buf) {
+  if (!entry.gotUrl) {
+    const m = buf.match(URL_REGEX)
+    if (m) {
+      entry.gotUrl = true
+      const url = m[0]
+      try {
+        updateSession(db, sessionId, { prompt_url: url, state: 'awaiting_code' })
+      } catch (e) {
+        console.error('[oauth-bridge] db update prompt_url failed:', e.message)
+      }
+    }
+  }
+  // codex 专属:抓 device code(单独一行的 X3XX-XXXXX)
+  if (entry.isCodex && !entry.gotDeviceCode) {
+    const lines = buf.split(/\r?\n/)
+    for (const ln of lines) {
+      const t = ln.trim()
+      if (!t) continue
+      if (CODE_LINE_REGEX.test(t)) {
+        // 排除 URL 内片段(URL 已经被 split 拆开,但 host 单独行也可能误中 — 避免)
+        if (t.includes('/') || t.includes(':')) continue
+        entry.deviceCode = t
+        entry.gotDeviceCode = true
+        break
+      }
+    }
+  }
+}
 
 function clearTimer(entry) {
   if (entry.timer) {

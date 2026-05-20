@@ -1,0 +1,125 @@
+<%- include('../partials/header', { title }) %>
+
+<section class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin · Settings</p>
+      <h1 class="mt-1 text-2xl font-semibold tracking-tight">步骤模型配置</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        配置每一步 LLM 调用使用的模型。空值 = 用步骤默认 tier(按用户已绑 provider 解析)。
+      </p>
+    </div>
+    <a href="/admin" class="text-sm text-slate-500 hover:text-slate-900">← 返回管理后台</a>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-5">
+    <p class="text-xs font-medium uppercase text-slate-400">当前状态</p>
+    <p class="mt-2 text-sm text-slate-700">
+      已配置 <span class="font-semibold text-slate-900"><%= configuredCount %></span>
+      / <%= totalCount %> 个步骤,其余用默认。
+    </p>
+  </div>
+
+  <form method="post" action="/admin/settings" class="space-y-4">
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <table class="min-w-full text-sm">
+        <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase text-slate-500">
+          <tr>
+            <th class="px-4 py-2">步骤</th>
+            <th class="px-4 py-2">说明 / 默认 tier</th>
+            <th class="px-4 py-2">使用的模型</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          <% stepKeys.forEach((key) => { %>
+            <% const spec = stepSpecs[key] %>
+            <% const curVal = current[key] || '' %>
+            <tr class="align-top">
+              <td class="px-4 py-3">
+                <p class="font-semibold text-slate-800"><%= spec.label %></p>
+                <p class="mt-1 font-mono text-[10px] text-slate-400"><%= key %></p>
+              </td>
+              <td class="px-4 py-3 text-xs text-slate-600">
+                <p><%= spec.description %></p>
+                <p class="mt-1 text-slate-400">
+                  默认 tier:
+                  <span class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">
+                    <%= spec.defaultTier %>
+                  </span>
+                </p>
+              </td>
+              <td class="px-4 py-3">
+                <select
+                  name="step_model.<%= key %>"
+                  class="w-full rounded-md border-slate-300 px-3 py-1.5 text-sm"
+                >
+                  <option value="" <%= curVal === '' ? 'selected' : '' %>>(空 — 用默认)</option>
+                  <optgroup label="── alias ──">
+                    <option value="heavy"    <%= curVal === 'heavy'    ? 'selected' : '' %>>heavy(= flagship)</option>
+                    <option value="standard" <%= curVal === 'standard' ? 'selected' : '' %>>standard</option>
+                    <option value="light"    <%= curVal === 'light'    ? 'selected' : '' %>>light</option>
+                  </optgroup>
+                  <optgroup label="── Anthropic ──">
+                    <% availableModels.anthropic.forEach((m) => { %>
+                      <option value="<%= m.id %>" <%= curVal === m.id ? 'selected' : '' %>>
+                        <%= m.label %>
+                      </option>
+                    <% }) %>
+                  </optgroup>
+                  <optgroup label="── OpenAI ──">
+                    <% availableModels.openai.forEach((m) => { %>
+                      <option value="<%= m.id %>" <%= curVal === m.id ? 'selected' : '' %>>
+                        <%= m.label %>
+                      </option>
+                    <% }) %>
+                  </optgroup>
+                </select>
+                <% if (curVal) { %>
+                  <p class="mt-1 font-mono text-[10px] text-emerald-600">当前:<%= curVal %></p>
+                <% } else { %>
+                  <p class="mt-1 text-[10px] text-slate-400">未配置 — 用默认 tier</p>
+                <% } %>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flex items-center justify-between">
+      <button
+        type="submit"
+        class="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+      >
+        保存所有
+      </button>
+      <p class="text-xs text-slate-400">
+        保存只对实际变化的字段写库与审计。
+      </p>
+    </div>
+  </form>
+
+  <form
+    method="post"
+    action="/admin/settings/reset"
+    onsubmit="return confirm('确定要重置所有步骤模型配置吗?所有步骤都会回到默认 tier。')"
+    class="rounded-xl border border-red-200 bg-red-50/50 p-4"
+  >
+    <div class="flex items-center justify-between gap-4">
+      <div>
+        <p class="text-sm font-semibold text-red-800">重置全部</p>
+        <p class="mt-1 text-xs text-red-700">
+          清空所有 <code class="font-mono">step_model.*</code> 配置,所有步骤回到代码默认 tier。
+        </p>
+      </div>
+      <button
+        type="submit"
+        class="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100"
+      >
+        重置全部
+      </button>
+    </div>
+  </form>
+</section>
+
+<%- include('../partials/footer') %>

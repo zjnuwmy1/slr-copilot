@@ -40,6 +40,13 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 echo "==> Claude CLI: $(claude --version 2>/dev/null || echo unknown)"
 
+# ---------- 2b. OpenAI Codex CLI ----------
+if ! command -v codex >/dev/null 2>&1; then
+  echo "==> 安装 OpenAI Codex CLI"
+  npm install -g @openai/codex
+fi
+echo "==> Codex CLI: $(codex --version 2>/dev/null || echo unknown)"
+
 # ---------- 3. /etc/slr.env(只在不存在时生成) ----------
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "==> 生成 $ENV_FILE"

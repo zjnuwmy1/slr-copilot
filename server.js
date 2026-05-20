@@ -13,6 +13,7 @@ import adminUsersRouter from './routes/admin/users.js'
 import adminUsageRouter from './routes/admin/usage.js'
 import adminAuditRouter from './routes/admin/audit.js'
 import adminProjectsRouter from './routes/admin/projects.js'
+import adminSettingsRouter from './routes/admin/settings.js'
 import credentialsRouter from './routes/account/credentials.js'
 import oauthRouter from './routes/account/oauth.js'
 import llmRouter from './routes/account/llm.js'
@@ -122,6 +123,7 @@ app.get('/account', requireUser, (req, res) => {
 app.use('/admin/usage', requireAdmin, adminUsageRouter)
 app.use('/admin/audit', requireAdmin, adminAuditRouter)
 app.use('/admin/projects', requireAdmin, adminProjectsRouter)
+app.use('/admin/settings', requireAdmin, adminSettingsRouter)
 app.use('/admin', requireAdmin, adminUsersRouter)
 
 // 404 fallback

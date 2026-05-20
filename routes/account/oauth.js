@@ -21,6 +21,7 @@ import {
   cancel,
   killUserActiveSessions,
   reconcileSession,
+  getInMemorySession,
   constants as bridgeConstants,
 } from '../../services/oauth-bridge.js'
 
@@ -133,9 +134,12 @@ router.get('/:id', (req, res) => {
     })
   }
   // awaiting_url / awaiting_code
+  // codex device-auth 流:把内存里的 device_code 一并塞进视图
+  const mem = getInMemorySession(row.id)
   res.render('account/oauth/awaiting', {
     title: '正在绑定…',
     session: row,
+    deviceCode: (mem && mem.deviceCode) || null,
   })
 })
 
@@ -147,10 +151,12 @@ router.get('/:id/state.json', (req, res) => {
   if (!row) return res.status(404).json({ error: 'not_found' })
   if (row.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' })
   const finished = row.state === 'completed' || row.state === 'failed' || row.state === 'timeout'
+  const mem = getInMemorySession(row.id)
   res.json({
     id: row.id,
     state: row.state,
     prompt_url: row.prompt_url || null,
+    device_code: (mem && mem.deviceCode) || null,
     error_message: row.error_message || null,
     finished,
   })
