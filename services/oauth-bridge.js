@@ -48,6 +48,12 @@ import * as mockBridge from './oauth-bridge-mock.js'
 
 const TIMEOUT_MS = 5 * 60 * 1000
 const STDOUT_CAP = 64 * 1024 // 防止 CLI 无限输出爆内存
+// 注意:codex CLI 即使没接 tty 也会输出 ANSI 颜色码(claude 不会)。
+// 抓 URL / code 前先剥 ANSI,否则 URL 会带尾巴 \x1b[0m 复制就 404。
+// ANSI escape: ESC[ … letter — 主要是颜色重置 \x1b[0m / 颜色开关 \x1b[94m 等
+const ANSI_RE = /\x1B\[[0-9;]*[A-Za-z]/g
+function stripAnsi(s) { return (s || '').replace(ANSI_RE, '') }
+
 const URL_REGEX = /https?:\/\/[^\s'"<>`]+/i
 
 const DATA_DIR = process.env.DATA_DIR || './.data'
@@ -415,6 +421,8 @@ export function reconcileSession(db, sessionId, req = null) {
  * 抓到 device code → 只存内存 entry.deviceCode(schema 没有列存,前端通过 state.json 拿)。
  */
 function scanForUrlAndCode(db, sessionId, entry, buf) {
+  // 先剥 ANSI,否则 codex 的 \x1b[94m...\x1b[0m 会把转义码黏进 URL 里
+  buf = stripAnsi(buf)
   if (!entry.gotUrl) {
     const m = buf.match(URL_REGEX)
     if (m) {
