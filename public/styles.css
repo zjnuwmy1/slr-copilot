@@ -1,9 +1,167 @@
-/* Tailwind 通过 CDN 加载,这里只放偶尔需要的自定义样式 */
-:root {
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+/* SLR Copilot — visual polish layer
+ * Tailwind via CDN 已经在 header.ejs 注入主题(Inter / JetBrains Mono / shadow / animation)。
+ * 这里只放 Tailwind utility 力所不及的全局细节:focus 环、滚动条、表单输入、动画。
+ */
+
+/* ── 全局基础 ── */
+html {
+  scroll-behavior: smooth;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-code {
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+body {
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  letter-spacing: -0.005em;
+}
+
+code, pre, .font-mono {
+  font-variant-ligatures: none;
   font-size: 0.875em;
+}
+
+/* ── 主要内容区域:进入时柔和淡入 ── */
+main {
+  animation: page-fade-in 0.25s ease-out;
+}
+
+@keyframes page-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 滚动条 ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(203 213 225) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background-color: rgb(203 213 225);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(148 163 184);
+}
+
+/* ── 表单输入统一焦点环(Tailwind 默认 ring 太宽且偏蓝) ── */
+input:not([type='checkbox']):not([type='radio']):not([type='submit']):not([type='button']):not([type='file']),
+textarea,
+select {
+  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+input:focus:not([type='checkbox']):not([type='radio']):not([type='submit']):not([type='button']):not([type='file']),
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: rgb(71 85 105);  /* slate-600 */
+  box-shadow: 0 0 0 3px rgb(71 85 105 / 0.12);
+}
+
+/* checkbox / radio 也给微环 */
+input[type='checkbox']:focus-visible,
+input[type='radio']:focus-visible {
+  outline: 2px solid rgb(71 85 105);
+  outline-offset: 2px;
+}
+
+/* ── 按钮:统一过渡 + active 缩放反馈 ── */
+button, a[role='button'], input[type='submit'], input[type='button'] {
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.05s;
+}
+button:active:not(:disabled),
+a[role='button']:active,
+input[type='submit']:active,
+input[type='button']:active {
+  transform: scale(0.985);
+}
+
+button:disabled,
+input[type='submit']:disabled,
+input[type='button']:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ── 链接默认带轻微 underline-offset(更好看) ── */
+a:hover {
+  text-underline-offset: 3px;
+}
+
+/* ── code 块和 inline code 美化 ── */
+:not(pre) > code {
+  background-color: rgb(241 245 249);  /* slate-100 */
+  color: rgb(51 65 85);                /* slate-700 */
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  font-size: 0.875em;
+}
+
+pre {
+  background-color: rgb(248 250 252);  /* slate-50 */
+  border: 1px solid rgb(226 232 240);  /* slate-200 */
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* ── 表格美化 ── */
+table {
+  border-collapse: collapse;
+}
+
+/* ── 卡片 / 容器 hover 微抬升 ── */
+a.group:hover,
+[class*='hover:border-slate-400']:hover,
+[class*='hover:shadow-sm']:hover {
+  transform: translateY(-1px);
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+/* ── flash 消息进入动画 ── */
+[class*='bg-emerald-50'],
+[class*='bg-red-50'],
+[class*='bg-amber-50'] {
+  animation: slide-in-flash 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes slide-in-flash {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── details / summary 微调 ── */
+details > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+details > summary::-webkit-details-marker { display: none; }
+details[open] > summary::after { transform: rotate(0deg); }
+
+/* ── 选中文本 ── */
+::selection {
+  background-color: rgb(15 23 42 / 0.92);
+  color: white;
+}
+
+/* ── 减少动画(尊重用户系统设置) ── */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+  html { scroll-behavior: auto; }
 }

@@ -4,30 +4,73 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title><%= title %> · SLR Copilot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Tailwind 主题扩展 — 给所有 utility class 加更精致的默认值
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', '"PingFang SC"', '"Microsoft YaHei"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+          },
+          boxShadow: {
+            // 比 Tailwind 默认 shadow-sm 更柔和;给卡片用
+            'subtle': '0 1px 2px 0 rgba(15, 23, 42, 0.04), 0 1px 1px 0 rgba(15, 23, 42, 0.03)',
+            'card':   '0 1px 3px 0 rgba(15, 23, 42, 0.05), 0 1px 2px -1px rgba(15, 23, 42, 0.03)',
+            'hover':  '0 4px 12px -2px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.04)',
+          },
+          animation: {
+            'fade-in':   'fadeIn 0.25s ease-out',
+            'slide-up':  'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+          },
+          keyframes: {
+            fadeIn:  { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+            slideUp: { '0%': { opacity: 0, transform: 'translateY(8px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+          },
+        },
+      },
+    }
+  </script>
   <link rel="stylesheet" href="/styles.css">
 </head>
-<body class="min-h-screen bg-slate-50 text-slate-900 antialiased">
-  <header class="border-b border-slate-200 bg-white">
-    <div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-      <a href="/" class="text-lg font-semibold tracking-tight">SLR Copilot</a>
-      <nav class="flex items-center gap-4 text-sm">
-        <% if (typeof user !== 'undefined' && user) { %>
-          <a href="/projects" class="text-slate-600 hover:text-slate-900">项目</a>
-          <a href="/account" class="text-slate-600 hover:text-slate-900">账户</a>
-          <a href="/account/credentials" class="text-slate-600 hover:text-slate-900">凭证</a>
-          <% if (user.role === 'admin') { %>
-            <a href="/admin" class="text-slate-600 hover:text-slate-900">管理后台</a>
-          <% } %>
-          <span class="text-slate-400">|</span>
-          <span class="text-slate-500"><%= user.display_name || user.email %><% if (user.role === 'admin') { %> <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">ADMIN</span><% } %></span>
-          <form action="/logout" method="post" class="inline">
-            <button type="submit" class="text-slate-500 hover:text-slate-900">登出</button>
-          </form>
-        <% } else { %>
-          <a href="/login" class="rounded-lg bg-slate-900 px-3 py-1.5 text-white hover:bg-slate-700">登录</a>
+<body class="min-h-screen bg-slate-50 text-slate-900 antialiased font-sans">
+  <header class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/85 backdrop-blur">
+    <div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-3.5">
+      <a href="/" class="flex items-center gap-2 text-base font-semibold tracking-tight text-slate-900 hover:text-slate-700 transition">
+        <span class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-slate-900 to-slate-700 text-[11px] font-bold text-white">SLR</span>
+        Copilot
+      </a>
+      <% if (typeof user !== 'undefined' && user) {
+           const currentPath = (typeof req !== 'undefined' && req && req.path) ? req.path : ''
+           function navCls(prefix) {
+             const active = currentPath === prefix || currentPath.startsWith(prefix + '/')
+             return active
+               ? 'rounded-md px-2.5 py-1 text-slate-900 bg-slate-100 font-medium transition'
+               : 'rounded-md px-2.5 py-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition'
+           }
+      %>
+      <nav class="flex items-center gap-1 text-sm">
+        <a href="/projects" class="<%= navCls('/projects') %>">项目</a>
+        <a href="/account" class="<%= navCls('/account') %>">账户</a>
+        <a href="/account/credentials" class="<%= navCls('/account/credentials') %>">凭证</a>
+        <% if (user.role === 'admin') { %>
+          <a href="/admin" class="<%= navCls('/admin') %>">管理后台</a>
         <% } %>
+        <div class="mx-2 h-4 w-px bg-slate-200"></div>
+        <span class="text-slate-500 text-xs"><%= user.display_name || user.email %><% if (user.role === 'admin') { %> <span class="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">ADMIN</span><% } %></span>
+        <form action="/logout" method="post" class="inline">
+          <button type="submit" class="ml-1 rounded-md px-2.5 py-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition">登出</button>
+        </form>
       </nav>
+      <% } else { %>
+      <nav>
+        <a href="/login" class="rounded-lg bg-slate-900 px-3.5 py-1.5 text-sm text-white shadow-subtle hover:bg-slate-700 hover:shadow-hover transition">登录</a>
+      </nav>
+      <% } %>
     </div>
   </header>
   <% if (typeof flash !== 'undefined' && flash) { %>
