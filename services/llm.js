@@ -353,7 +353,7 @@ export async function runLlm(db, opts) {
     durationMs,
     status: jsonParseFailed ? 'parse_failed' : 'success',
     errorMessage: jsonParseFailed
-      ? `json_parse_failed; raw_text(first 1800):\n${text.slice(0, 1800)}`
+      ? `json_parse_failed; raw_text_length=${text.length}; raw_text(first 8000):\n${text.slice(0, 8000)}`
       : null,
   })
 

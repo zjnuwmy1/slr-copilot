@@ -262,11 +262,30 @@ router.post('/:id/protocol/generate', async (req, res) => {
     const reason = result.data ? 'normalized_empty' : 'json_parse_failed'
     if (reason === 'normalized_empty' && result.usageLogId && result.text) {
       try {
+        const textLen = result.text.length
+        const parsedKeys = result.data && typeof result.data === 'object'
+          ? (Array.isArray(result.data)
+              ? `Array(length=${result.data.length})`
+              : `Object{${Object.keys(result.data).join(', ')}}`)
+          : String(typeof result.data)
+        // 用明确分隔符,方便后续从 DB 把 raw_text 干净取出来
+        const sep = '\n<<<<<<<< SECTION_DIVIDER >>>>>>>>\n'
+        const blob = [
+          `meta:`,
+          `  reason=normalize_empty`,
+          `  raw_text_length=${textLen}`,
+          `  parsed_shape=${parsedKeys}`,
+          sep,
+          `RAW_TEXT_BEGIN`,
+          result.text.slice(0, 8000),
+          `RAW_TEXT_END_${textLen > 8000 ? 'truncated_at_8000' : 'full'}`,
+          sep,
+          `PARSED_JSON_BEGIN`,
+          JSON.stringify(result.data).slice(0, 1200),
+          `PARSED_JSON_END`,
+        ].join('\n')
         db.prepare(`UPDATE usage_logs SET status = 'parse_failed', error_message = ? WHERE id = ?`)
-          .run(
-            `normalize_empty; raw_text(first 1800):\n${result.text.slice(0, 1800)}\n\n--- parsed JSON (first 800) ---\n${JSON.stringify(result.data).slice(0, 800)}`,
-            result.usageLogId,
-          )
+          .run(blob, result.usageLogId)
       } catch (e) {
         console.error('[protocol_gen] failed to attach raw text to usage_log', e.message)
       }
