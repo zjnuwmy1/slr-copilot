@@ -123,6 +123,17 @@ export function buildSearchSystem({ targetDatabases }) {
 请根据用户提供的已审批协议(概念组 + 研究问题 + 纳排标准 + 时间范围 + 文献类型限定 + 语言限定),
 为**用户实际勾选的数据库**(本次:${dbList})生成可直接粘贴执行的检索式。
 
+🔒 **严格按协议(不要发挥、不要替换、不要漂移)**:
+   - **year_range 必须逐字使用协议给的起止年**。
+     例:协议是 2016-2026 → query_text 里就写 2016-2026,不要换成 "last 10 years" / "近 10 年" /
+     "recent decade"。\`filters.year_range\` 也必须 = 协议的 [起, 止],不要私自截尾。
+   - **document_types 必须逐字使用协议的允许列表**,显式 NOT 出去协议未勾选的(尤其会议论文 /
+     摘要 / 社论 / 通讯)。
+   - **language 必须逐字使用协议指定的**。协议未指定 = 不写语言过滤。不要私自加 English 限定。
+   - **concept_groups 以协议的概念组为骨架**。允许扩同义词 / 缩写 / 词形变体,但 **不能漂移核心概念**。
+     如果协议说 "deep learning for medical imaging",不要扩到 "machine learning for genomics"。
+   - 命中数太多 / 太少 → 在 rationale / warnings 里向用户说明,**不要私自压缩或扩大年份范围 / 文献类型 / 语言**。
+
 ⚠ **方法学硬性要求(SLR 跨库一致性)**:
    同一个 query_type 版本(high_recall / balanced / high_precision)的**全部库 query_text 必须共享同一套**:
      - 同样的概念组 + 同样的同义词扩展
@@ -132,6 +143,22 @@ export function buildSearchSystem({ targetDatabases }) {
    **唯一允许的差异是每个库的字段标签和语法**(TS= vs TITLE-ABS-KEY vs [MeSH Terms]、PY= vs PUBYEAR vs [Date - Publication])。
    如果你想给 high_recall 加一个同义词,你必须**同时**给该 query_type 下的全部库都加上,不能只加在某一个库里。
    如果某概念组在 PubMed 有 MeSH 词、其他库没有 MeSH,只允许加 MeSH 行 — 自由词部分必须严格一致。
+
+📖 **WoS / Scopus 年份语义差异(常识,放进 rationale / warnings 里)**:
+   - WoS 的 Year Published **同时包含 Early Access 年份和 Final Publication 年份**。
+     一篇 Final 2025 但 Early Access 2024 的文章,在 WoS 会被归到 2024。
+   - Scopus 偏向最终出版年份。
+   - 同样设 PY=(2016-2026),两个平台命中数 **可能不完全一致 — 这是正常现象**,
+     不要为了对齐数字改 query_text 或 year_range。
+
+⏰ **当前年份不完整(若适用,在 warnings 里加一条,不要私自改 year_range)**:
+   - 如果协议结束年 = 当前年(例如 2026 年中跑 2016-2026),该年文献仍在持续收录,
+     在 warnings 里建议用户考虑是否截止前一年。**不要擅自改 query_text 的年份**。
+
+📝 **PRISMA Methods 段标准措辞(rationale 引用时用这个句式)**:
+   "Literature was retrieved from <Database1> and <Database2> for publications
+    between <start> and <end>."
+   这样后续 review 的方法学部分能直接复用。
 
 工作准则:
 
@@ -229,12 +256,25 @@ export function buildSearchUserPrompt({ protocol, projectInput, targetDatabases 
   const yEnd = pi.year_end || pi.yearEnd
   if (yStart || yEnd) {
     lines.push(
-      `**时间范围(必须写进每条 query_text)**: ${yStart || '(协议未指定起始)'} - ${yEnd || '(协议未指定结束,Pubmed 用 3000)'}`
+      `**时间范围(必须逐字写进每条 query_text,不允许私自改)**: ${yStart || '(协议未指定起始)'} - ${yEnd || '(协议未指定结束,PubMed 用 3000)'}`
     )
   } else {
     lines.push(
       '时间范围: 协议未指定 — 请默认近 8 年(当前 - 7 到当前),并显式写进 query_text。'
     )
+  }
+
+  // 方法学常识注入(WoS/Scopus 年份差异 + 当前年份不完整)
+  const currentYear = new Date().getFullYear()
+  const hasWosAndScopus = Array.isArray(dbs) && dbs.includes('wos') && dbs.includes('scopus')
+  if (hasWosAndScopus) {
+    lines.push(`  · WoS / Scopus 年份语义不完全一致(WoS 含 Early Access),`)
+    lines.push(`    两库命中数可能略有差异 — 这是正常现象,不要为了对齐数字改 query_text。`)
+  }
+  if (yEnd && Number(yEnd) >= currentYear) {
+    lines.push(`  · 协议结束年 ${yEnd} 与当前年 ${currentYear} 相同/相邻 — 当年文献仍在持续收录,`)
+    lines.push(`    请在 warnings 里加一条提示用户(例如:"${yEnd} 年文献可能不完整,严格 bibliometric 分析可截止 ${currentYear - 1} 年")。`)
+    lines.push(`    **但不要私自改 query_text 的年份,要逐字按协议**。`)
   }
 
   // 文献类型 — 关键

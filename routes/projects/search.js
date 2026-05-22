@@ -602,9 +602,15 @@ router.post('/:id/search/recommend-best', async (req, res) => {
   }
 
   const knownStrategyIds = new Set(logged.map((s) => s.id))
+  const protocolYearRange = (project.year_start || project.year_end)
+    ? [project.year_start || null, project.year_end || null].filter((x) => x != null).map((x) => Number(x))
+    : null
   const normalized = normalizeRecommendOutput(result.data || null, {
     targetDatabases,
     knownStrategyIds,
+    protocolYearRange: (Array.isArray(protocolYearRange) && protocolYearRange.length === 2) ? protocolYearRange : null,
+    protocolDocumentTypes: Array.isArray(project.document_types) ? project.document_types : null,
+    protocolLanguages: Array.isArray(project.language_limits) ? project.language_limits : null,
   })
 
   if (!normalized.ok) {
@@ -712,9 +718,14 @@ router.post('/:id/search/recommend-best', async (req, res) => {
   const missingHint = (normalized.data.missing_databases || []).length
     ? `(漏了 ${normalized.data.missing_databases.join(', ')},可重试)`
     : ''
+  // 把协议合规警告(⚠ 开头)拼到 flash 里,用户必看
+  const complianceWarnings = (normalized.data.warnings || []).filter((w) => w.startsWith('⚠'))
+  const warnMsg = complianceWarnings.length
+    ? ` · 注意:${complianceWarnings.join(' ')}`
+    : ''
   req.session.flash = {
-    type: 'success',
-    message: `已生成主检索 v${mainVersion}:${summary}${missingHint}`,
+    type: complianceWarnings.length ? 'error' : 'success',
+    message: `已生成主检索 v${mainVersion}:${summary}${missingHint}${warnMsg}`,
   }
   res.redirect(`/projects/${project.id}/search`)
 })

@@ -66,6 +66,22 @@ export function buildRecommendSystem({ targetDatabases }) {
 任务:基于"已审批协议 + 用户跑过的 exploration 检索式命中数",
 为本项目用户勾选的 ${N} 个库(${dbList})合成主检索。
 
+🔒 **严格按协议(优化只能在协议框架内,不要漂移)**:
+   - **year_range 必须 = 协议给的起止年**,逐字使用。不要 "last 10 years" / "近 10 年" /
+     "recent decade",不要私自把 2016-2026 改成 2016-2025 或 2020-2026。
+   - **document_types 必须 = 协议允许列表**;**excluded_document_types** 包含所有协议未勾选的常见类型
+     (Conference Paper / Editorial / Letter / Comment / Meeting Abstract)。
+   - **language 必须 = 协议指定**。协议未指定则不写。
+   - **concept_groups 以协议为骨架**,允许扩同义词 / 缩写,但不能漂移核心概念。
+
+📊 **优化只能动以下几样(在协议框架内,基于命中数反馈)**:
+   - concept_groups 内部的同义词增删 / 词形变体
+   - 字段标签(全文 vs 标题/关键词,例如 high_recall 用 TITLE-ABS-KEY,
+     主检索可能更偏向标题字段以收紧)
+   - 截词位置 / 邻近运算符
+   - **不要**:动 year_range / 动 document_types / 动 language。
+     如果命中数太多 / 太少,在 rationale 里说明并 warning 给用户,**不要私自压缩或扩大协议范围**。
+
 ⚠ **方法学硬性要求(SLR 跨库一致性)**:
    主检索是 **一套共享的概念规格**(\`concept_set\`),在 ${N} 个库里用各自的语法分别**渲染**一遍。
    - 概念组(包括同义词扩展)、年份范围、允许的文献类型、排除的文献类型、语言 ——
@@ -73,6 +89,14 @@ export function buildRecommendSystem({ targetDatabases }) {
    - 当你想优化(加同义词 / 加排除项 / 收紧字段)时,**先优化 \`concept_set\`**,
      然后**所有库**用新的 concept_set 重新渲染一遍 query_text。
    - 唯一允许的差异 = 数据库语法标签(TS= / TITLE-ABS-KEY / [MeSH Terms]、PY= / PUBYEAR / [Date - Publication] 等)。
+
+📖 **WoS / Scopus 年份语义差异(在 warnings 里提到)**:
+   - WoS 的 Year Published 同时包含 Early Access + Final Publication 年份;Scopus 偏向最终出版年。
+   - 同样的 year_range 在两库命中数会略有差异,**这是正常现象**,不要为对齐数字改 query_text。
+
+⏰ **当前年份不完整(若 year_range 包含当前年,在 warnings 里加一条)**:
+   - 协议结束年 = 当前年 → 该年文献还在持续收录,建议告知用户严格 bibliometric 可截止前一年。
+   - **不要私自改 year_range**,只给提醒。
 
 **输出格式 — 严格 JSON,字段名一字不差**(不要包在 result/data/output 任何 envelope 里,直接顶层输出):
 {
@@ -182,15 +206,15 @@ export function buildRecommendPrompt({
   if (pi.discipline) lines.push(`学科: ${pi.discipline}`)
   if (pi.goal) lines.push(`研究目标: ${pi.goal}`)
 
-  // —— 协议(必带 4 类过滤的依据) ——
+  // —— 协议(必带 4 类过滤的依据 — 这些值 LLM 必须逐字使用,不允许私改)——
   const yStart = pi.year_start || pi.yearStart
   const yEnd = pi.year_end || pi.yearEnd
   if (yStart || yEnd) {
-    lines.push(`**时间范围(必须写进每条 query_text)**: ${yStart || '(协议未指定)'} - ${yEnd || '(协议未指定)'}`)
+    lines.push(`**时间范围(必须**逐字**写进每条 query_text + concept_set.year_range,不允许私改)**: ${yStart || '(协议未指定)'} - ${yEnd || '(协议未指定)'}`)
   }
   if (Array.isArray(pi.document_types) && pi.document_types.length) {
     lines.push('')
-    lines.push(`**文献类型限定(必须写进每条 query_text,且必须显式 NOT 排除未列出的类型)**:`)
+    lines.push(`**文献类型限定(必须逐字写进每条 query_text + concept_set.document_types,并显式 NOT 排除未列出的类型)**:`)
     pi.document_types.forEach((t) => lines.push(`  - 允许: ${t}`))
     const allowedLower = pi.document_types.map((t) => String(t).toLowerCase())
     const mustExclude = [
@@ -201,12 +225,28 @@ export function buildRecommendPrompt({
     ]
     for (const [label, aliases] of mustExclude) {
       const isAllowed = aliases.some((a) => allowedLower.some((al) => al.includes(a)))
-      if (!isAllowed) lines.push(`  - **排除**: ${label}(在 query_text 里显式写 NOT/AND NOT)`)
+      if (!isAllowed) lines.push(`  - **排除**: ${label}(在 query_text + concept_set.excluded_document_types 里都要)`)
     }
   }
   if (Array.isArray(pi.language_limits) && pi.language_limits.length) {
     lines.push('')
-    lines.push(`**语言限定(必须写进每条 query_text)**: ${pi.language_limits.join(', ')}`)
+    lines.push(`**语言限定(必须逐字写进每条 query_text + concept_set.language)**: ${pi.language_limits.join(', ')}`)
+  }
+
+  // 方法学常识动态注入(WoS/Scopus 差异 + 当前年份不完整)
+  const currentYear = new Date().getFullYear()
+  const hasWosAndScopus = Array.isArray(dbs) && dbs.includes('wos') && dbs.includes('scopus')
+  if (hasWosAndScopus) {
+    lines.push('')
+    lines.push('📖 注:WoS 的 Year Published 含 Early Access 年份,Scopus 偏向最终出版年份。')
+    lines.push('   同一个 year_range 在两库的命中数可能略有差异,这是正常现象 ——')
+    lines.push('   **不要为了对齐两库数字而改 query_text 或 year_range**;请在 warnings 里向用户解释。')
+  }
+  if (yEnd && Number(yEnd) >= currentYear) {
+    lines.push('')
+    lines.push(`⏰ 注:协议结束年 ${yEnd} = 当前年 ${currentYear}(或更晚),该年文献仍在持续收录。`)
+    lines.push(`   请在 warnings 里加一条建议(如:"${yEnd} 年文献可能不完整,严格 bibliometric 可考虑截止 ${currentYear - 1} 年"),`)
+    lines.push(`   **但不要私自改 query_text / concept_set.year_range — 必须逐字按协议**。`)
   }
 
   // —— 协议主体 ——
@@ -371,7 +411,7 @@ function readQueryText(obj) {
  * @param {Set<string>} [ctx.knownStrategyIds]  exploration strategy id 集合(用于校验 based_on_strategy_ids)
  * @returns {{ ok: boolean, error?: string, data?: object }}
  */
-export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyIds } = {}) {
+export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyIds, protocolYearRange, protocolDocumentTypes, protocolLanguages } = {}) {
   if (!raw || typeof raw !== 'object') {
     return { ok: false, error: 'LLM 返回不是有效 JSON 对象' }
   }
@@ -499,6 +539,40 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
   // 若 LLM 没给 concept_set,在 warnings 里加一条提醒(不阻断 — 兼容老输出)
   if (!conceptSet) {
     warnings.push('AI 未输出 concept_set 顶层字段;跨库一致性无法机器校验(可重试以拿到 concept_set)')
+  }
+
+  // 协议合规校验(LLM 偶尔不老实,这里捕获偏差到 warnings)
+  if (conceptSet) {
+    // year_range 必须 = 协议
+    if (Array.isArray(protocolYearRange) && protocolYearRange.length === 2 && Array.isArray(conceptSet.year_range) && conceptSet.year_range.length === 2) {
+      const [ps, pe] = protocolYearRange
+      const [cs2, ce] = conceptSet.year_range
+      if (Number(ps) !== Number(cs2) || Number(pe) !== Number(ce)) {
+        warnings.unshift(`⚠ AI 私改了年份范围:协议 ${ps}-${pe},AI 给的 ${cs2}-${ce} — 已自动改回协议值。`)
+        conceptSet.year_range = [Number(ps), Number(pe)]
+      }
+    }
+    // document_types 私加协议外类型?
+    if (Array.isArray(protocolDocumentTypes) && protocolDocumentTypes.length && Array.isArray(conceptSet.document_types)) {
+      const allowedSet = new Set(protocolDocumentTypes.map((s) => String(s).toLowerCase()))
+      const extra = conceptSet.document_types.filter((t) => !allowedSet.has(String(t).toLowerCase()))
+      if (extra.length) {
+        warnings.unshift(`⚠ AI 在 document_types 加了协议外的:${extra.join(', ')} — 已自动剔除。`)
+        conceptSet.document_types = conceptSet.document_types.filter((t) => allowedSet.has(String(t).toLowerCase()))
+      }
+    }
+    // language 私加协议外语言?
+    if (Array.isArray(protocolLanguages) && protocolLanguages.length && Array.isArray(conceptSet.language)) {
+      const allowedSet = new Set(protocolLanguages.map((s) => String(s).toLowerCase()))
+      const extra = conceptSet.language.filter((t) => !allowedSet.has(String(t).toLowerCase()))
+      if (extra.length) {
+        warnings.unshift(`⚠ AI 在 language 加了协议外的:${extra.join(', ')} — 已自动剔除。`)
+        conceptSet.language = conceptSet.language.filter((t) => allowedSet.has(String(t).toLowerCase()))
+      }
+    } else if ((!Array.isArray(protocolLanguages) || protocolLanguages.length === 0) && Array.isArray(conceptSet.language) && conceptSet.language.length) {
+      warnings.unshift(`⚠ 协议未指定语言,但 AI 私加了 ${conceptSet.language.join(', ')} — 已清空。`)
+      conceptSet.language = []
+    }
   }
 
   return {
