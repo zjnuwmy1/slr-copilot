@@ -189,6 +189,7 @@ export function buildRecommendPrompt({
   projectInput,
   targetDatabases,
   previousStrategies,
+  userTargetHits,         // { min: number|null, max: number|null, note: string|null }
 }) {
   const p = protocol || {}
   const pi = projectInput || {}
@@ -200,6 +201,29 @@ export function buildRecommendPrompt({
   lines.push(`请基于以下"已审批协议 + 已跑过的 exploration 检索式命中数",`)
   lines.push(`为 **${dbs.map((k) => k.toUpperCase()).join(' / ')}** 各重新合成 1 条优化主检索(共 ${dbs.length} 条):`)
   lines.push('')
+
+  // —— 用户期望命中数(若有,作为强约束让 LLM 调整 concept_set 广度)——
+  if (userTargetHits && (userTargetHits.min || userTargetHits.max || userTargetHits.note)) {
+    const tmin = userTargetHits.min
+    const tmax = userTargetHits.max
+    lines.push('🎯 **用户对主检索的期望(关键 — 优化时必须向这个目标靠)**:')
+    if (tmin != null && tmax != null) {
+      lines.push(`   - 每个库的命中数大约落在 **${tmin} - ${tmax}** 条`)
+    } else if (tmin != null) {
+      lines.push(`   - 每个库的命中数 **至少 ${tmin}** 条(下限)`)
+    } else if (tmax != null) {
+      lines.push(`   - 每个库的命中数 **不超过 ${tmax}** 条(上限)`)
+    }
+    if (userTargetHits.note) {
+      lines.push(`   - 用户附加说明: ${String(userTargetHits.note).trim().slice(0, 300)}`)
+    }
+    lines.push('   - 优化策略:')
+    lines.push('     * exploration 命中数过宽于目标 → concept_set 减同义词 / 加标题字段限定')
+    lines.push('     * exploration 命中数过窄于目标 → concept_set 扩同义词 / 放宽到 TITLE-ABS-KEY')
+    lines.push('     * 每条 optimized_queries[].expected_count_estimate 必须落在用户给定区间内')
+    lines.push('     * **依旧不可** 私改 year_range / document_types / language(协议优先级 > 用户目标)')
+    lines.push('')
+  }
 
   // —— 项目背景 ——
   if (topic) lines.push(`项目主题: ${topic}`)

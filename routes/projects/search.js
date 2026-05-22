@@ -531,6 +531,30 @@ router.post('/:id/search/recommend-best', async (req, res) => {
     return res.redirect(`/projects/${project.id}/search`)
   }
 
+  // 用户期望命中数(form: target_min_hits / target_max_hits / target_note)—— 可选
+  const parsePosInt = (v) => {
+    if (v == null) return null
+    const s = String(v).trim()
+    if (!s) return null
+    const n = Number.parseInt(s, 10)
+    return (Number.isFinite(n) && n >= 0) ? n : null
+  }
+  const tmin = parsePosInt(req.body.target_min_hits)
+  const tmax = parsePosInt(req.body.target_max_hits)
+  // 校验:若两个都给,min ≤ max
+  let userTargetHits = null
+  if (tmin != null || tmax != null || (req.body.target_note && String(req.body.target_note).trim())) {
+    if (tmin != null && tmax != null && tmin > tmax) {
+      req.session.flash = { type: 'error', message: `期望命中数下限 ${tmin} > 上限 ${tmax},请检查后重试。` }
+      return res.redirect(`/projects/${project.id}/search`)
+    }
+    userTargetHits = {
+      min: tmin,
+      max: tmax,
+      note: req.body.target_note ? String(req.body.target_note).trim().slice(0, 500) : null,
+    }
+  }
+
   audit(db, req, {
     eventType: 'search_recommend_requested',
     userId: req.user.id,
@@ -538,6 +562,7 @@ router.post('/:id/search/recommend-best', async (req, res) => {
     payload: {
       logged_count: logged.length,
       target_databases: targetDatabases,
+      user_target_hits: userTargetHits,
     },
   })
 
@@ -562,6 +587,7 @@ router.post('/:id/search/recommend-best', async (req, res) => {
       rationale: s.rationale,
       query_text: s.query_text,
     })),
+    userTargetHits,
   })
 
   let result

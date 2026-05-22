@@ -224,10 +224,43 @@
             </p>
           </div>
           <form method="post" action="/projects/<%= project.id %>/search/recommend-best"
-                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='AI 优化中…(约 1-3 分钟)';">
+                onsubmit="this.querySelector('button[type=submit]').disabled=true; this.querySelector('button[type=submit]').innerText='AI 优化中…(约 1-3 分钟)';"
+                class="space-y-2 min-w-0">
+            <!-- 期望命中数:可选,AI 会向这个目标调 concept_set 广度 -->
+            <details class="rounded-lg border border-indigo-200 bg-white/60 text-xs" <%= mainV == null ? 'open' : '' %>>
+              <summary class="cursor-pointer px-3 py-1.5 font-medium text-indigo-800">
+                🎯 期望每个库命中数(可选)
+              </summary>
+              <div class="space-y-2 border-t border-indigo-100 px-3 py-2">
+                <p class="text-[11px] text-indigo-700">
+                  填了的话,AI 会向这个区间调 concept_set 同义词广度(SLR 常见 sweet spot 100-2000)。
+                  <strong>不会改协议的年份 / 文献类型 / 语言。</strong>
+                </p>
+                <div class="grid grid-cols-2 gap-2">
+                  <div>
+                    <label class="text-[11px] text-slate-500">下限</label>
+                    <input type="number" name="target_min_hits" min="0" step="50"
+                           placeholder="例如 200"
+                           class="mt-0.5 block w-full rounded-md border-slate-300 px-2 py-1 text-xs">
+                  </div>
+                  <div>
+                    <label class="text-[11px] text-slate-500">上限</label>
+                    <input type="number" name="target_max_hits" min="0" step="50"
+                           placeholder="例如 1500"
+                           class="mt-0.5 block w-full rounded-md border-slate-300 px-2 py-1 text-xs">
+                  </div>
+                </div>
+                <div>
+                  <label class="text-[11px] text-slate-500">附加说明(可选)</label>
+                  <input type="text" name="target_note" maxlength="200"
+                         placeholder="例:更重视医学影像方向,可适当收紧"
+                         class="mt-0.5 block w-full rounded-md border-slate-300 px-2 py-1 text-xs">
+                </div>
+              </div>
+            </details>
             <button type="submit"
                     <% if (!canRecommend) { %>disabled title="先填至少 2 条命中数"<% } %>
-                    class="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-500 disabled:bg-slate-300 disabled:cursor-not-allowed disabled:text-slate-500">
+                    class="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-500 disabled:bg-slate-300 disabled:cursor-not-allowed disabled:text-slate-500">
               <%= mainV != null ? '重新优化主检索' : '让 AI 优化主检索' %>
             </button>
           </form>
