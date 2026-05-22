@@ -12,13 +12,23 @@
       prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
     }) %>
 
-    <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
-      <p class="text-2xl">⚖️</p>
-      <h2 class="mt-2 text-lg font-semibold text-slate-800">即将开放</h2>
-      <p class="mt-1 text-sm text-slate-500">本步骤将在 Phase 4 接入。支持 RoB 2 / ROBINS-I / Newcastle-Ottawa,AI 辅助初评 + 人工复核。</p>
-      <div class="mt-4 flex justify-center gap-2">
-        <a href="/projects/<%= project.id %>/extraction" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">← 返回抽取</a>
-        <a href="/projects/<%= project.id %>" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">跳到协议</a>
+    <div class="rounded-2xl border border-slate-200 bg-white p-8">
+      <div class="flex flex-wrap items-start gap-6">
+        <div class="flex-1 min-w-0">
+          <h2 class="text-lg font-semibold text-slate-900">偏倚风险评估</h2>
+          <p class="mt-2 text-sm leading-relaxed text-slate-600">
+            站内的偏倚风险工具暂未开放。对当前工作流没有阻断 —— 你可以:
+          </p>
+          <ul class="mt-2 space-y-1 text-sm text-slate-600 list-disc pl-5">
+            <li>在 <a href="/projects/<%= project.id %>/synthesis" class="text-slate-900 underline hover:no-underline">综合</a> 阶段把"研究质量"作为主题维度讨论;</li>
+            <li>在 <a href="/projects/<%= project.id %>/certainty" class="text-slate-900 underline hover:no-underline">证据强度</a> 步骤的 risk_of_bias 维度里填整体评级 + 理由;</li>
+            <li>在外部用 Cochrane RoB 2 / ROBINS-I / Newcastle-Ottawa 完成评估后,在最终报告的"方法"章节注明评估方式与结论。</li>
+          </ul>
+        </div>
+        <div class="flex flex-none flex-col gap-2">
+          <a href="/projects/<%= project.id %>/extraction" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition">← 返回矩阵</a>
+          <a href="/projects/<%= project.id %>/synthesis" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 transition">下一步:综合 →</a>
+        </div>
       </div>
     </div>
 

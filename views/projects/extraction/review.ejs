@@ -266,7 +266,7 @@
         <p class="mt-1 text-[11px] text-slate-500">点击 <code>用</code> 按钮把 chunk_id 复制到当前选中的 finding。</p>
         <% if (chunks.length === 0) { %>
           <p class="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
-            未发现 PDF 切片(Agent L 未跑或失败)。抽取使用 abstract 兜底。
+            未找到 PDF 切片 —— PDF 可能尚未解析或解析失败。AI 抽取已自动改用 abstract。
           </p>
         <% } %>
         <div class="mt-3 max-h-[640px] overflow-y-auto pr-1 space-y-2">

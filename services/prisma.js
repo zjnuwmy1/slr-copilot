@@ -110,7 +110,7 @@ export function getProjectProgress(db, projectId) {
 
   // ---- 3-8. 占位 ----
   for (const key of ['screening', 'extraction', 'rob', 'synthesis', 'certainty', 'report']) {
-    stepStatus[key] = { status: 'not_started', summary: '尚未开放(Phase 4+)' }
+    stepStatus[key] = { status: 'not_started', summary: '尚未开始' }
   }
 
   // certainty 真实状态:有 grade_assessments 即视为 done(Phase 6.5 GRADE)

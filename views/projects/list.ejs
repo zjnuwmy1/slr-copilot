@@ -50,7 +50,7 @@
           </a>
           <!-- 删除按钮:hover 卡片才显示,点击不触发卡片链接 -->
           <form method="post" action="/projects/<%= p.id %>/delete"
-                onsubmit="return confirm('确认删除项目「<%= p.title %>」?将级联清掉所有协议 / 检索式 / 文献 / 抽取 / 主题 / 综述草稿 + 服务器上的 PDF。**不可撤销。**')"
+                onsubmit="return confirm('确认删除项目「<%= p.title %>」?\n该项目的协议、检索式、文献、抽取、主题、综述草稿以及上传的 PDF 都会一并清除,无法撤销。')"
                 class="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition">
             <button type="submit"
                     title="删除项目"

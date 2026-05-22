@@ -195,9 +195,7 @@
         <p class="text-xs text-slate-400">历史检索式版本:<%= olderVersions.map(v => 'v' + v).join(' · ') %>(导出 Markdown 仅包含最新版)</p>
       <% } %>
 
-      <!-- ============================================================
-           AI 推荐主检索(Phase 9 Agent T)
-           ============================================================ -->
+      <!-- AI 推荐主检索 -->
       <%
         const totalLatest = (latestBatch || []).length
         const loggedNum = (typeof loggedCount === 'number') ? loggedCount : 0

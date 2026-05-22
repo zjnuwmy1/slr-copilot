@@ -73,11 +73,16 @@ app.use((req, res, next) => {
 
 // === 公开页 ===
 app.get('/', (req, res) => {
+  let projectCount = 0
+  if (req.user) {
+    try {
+      const row = db.prepare('SELECT COUNT(*) AS n FROM projects WHERE user_id = ?').get(req.user.id)
+      projectCount = row?.n || 0
+    } catch { /* table not ready */ }
+  }
   res.render('index', {
     title: 'SLR Copilot',
-    phase: 'Phase 1 已上线 · 认证 / 凭证 / 管理员',
-    dbPath: process.env.DB_PATH || '(default: ./.data/slr.db)',
-    nodeEnv: process.env.NODE_ENV || 'development',
+    projectCount,
   })
 })
 

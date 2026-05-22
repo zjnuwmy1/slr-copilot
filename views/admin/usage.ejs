@@ -5,7 +5,7 @@
     <div>
       <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin · Usage</p>
       <h1 class="mt-1 text-2xl font-semibold tracking-tight">LLM 使用记录</h1>
-      <p class="mt-1 text-sm text-slate-500">所有用户的 LLM 调用历史。Phase 2 接入 Project Wizard 后开始有数据。</p>
+      <p class="mt-1 text-sm text-slate-500">所有用户的 LLM 调用历史 · 按时间倒序。</p>
     </div>
     <a href="/admin" class="text-sm text-slate-500 hover:text-slate-900">← 返回管理后台</a>
   </div>
@@ -48,7 +48,7 @@
 
   <% if (rows.length === 0) { %>
     <div class="rounded-xl border border-dashed border-slate-300 bg-white/60 p-10 text-center text-sm text-slate-500">
-      暂无使用记录。Phase 2 接入 LLM 后调用会自动落库到此。
+      暂无 LLM 调用记录。任何用户调用模型后会自动落库,新记录最多 1 秒后出现。
     </div>
   <% } else { %>
     <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">

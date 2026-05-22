@@ -1,44 +1,99 @@
 <%- include('partials/header', { title }) %>
 
-<section class="space-y-6">
-  <div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-    <p class="text-xs font-medium uppercase tracking-wider text-emerald-600">Ready</p>
-    <h1 class="mt-2 text-3xl font-semibold tracking-tight">SLR Copilot</h1>
-    <p class="mt-3 text-sm text-slate-600">
-      AI 辅助的系统性文献综述平台。本页面是 <strong>Phase 0</strong> 的占位页,说明部署管道已经打通,
-      后续 Phase 1 起会逐步接入 Project Wizard、检索式生成、Zotero 上传、PDF 抽取、Evidence Matrix 与综述初稿生成。
-    </p>
-    <div class="mt-6 inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">
-      <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
-      <%= phase %>
+<section class="space-y-10">
+  <!-- Hero -->
+  <div class="rounded-2xl border border-slate-200 bg-white p-8 shadow-card animate-fade-in">
+    <div class="flex flex-wrap items-start justify-between gap-6">
+      <div class="max-w-2xl">
+        <h1 class="text-3xl font-semibold tracking-tight text-slate-900">系统性文献综述 · 协作工作台</h1>
+        <p class="mt-3 text-sm leading-relaxed text-slate-600">
+          从研究问题到可投稿初稿,8 步走完一篇 PRISMA 2020 合规的综述。
+          AI 帮你起草协议、推荐检索式、初筛文献,你来做判断;矩阵、证据图、最终成稿都按学术规范导出。
+        </p>
+      </div>
+      <% if (user) { %>
+        <div class="flex flex-col items-stretch gap-2 sm:items-end">
+          <% if (projectCount > 0) { %>
+            <a href="/projects" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-subtle hover:bg-slate-700 hover:shadow-hover transition">
+              进入我的项目 <span class="ml-1 text-slate-300">(<%= projectCount %>)</span>
+            </a>
+            <a href="/projects/new" class="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition">
+              + 新建项目
+            </a>
+          <% } else { %>
+            <a href="/projects/new" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-subtle hover:bg-slate-700 hover:shadow-hover transition">
+              开始第一个项目
+            </a>
+            <a href="/projects" class="text-xs text-slate-500 hover:text-slate-700 text-right">查看项目列表 →</a>
+          <% } %>
+        </div>
+      <% } else { %>
+        <a href="/login" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-subtle hover:bg-slate-700 hover:shadow-hover transition">
+          登录开始
+        </a>
+      <% } %>
     </div>
   </div>
 
-  <div class="grid gap-4 md:grid-cols-3">
-    <div class="rounded-xl border border-slate-200 bg-white p-5">
-      <p class="text-xs font-medium uppercase text-slate-400">Runtime</p>
-      <p class="mt-2 text-sm text-slate-700"><%= nodeEnv %></p>
-    </div>
-    <div class="rounded-xl border border-slate-200 bg-white p-5">
-      <p class="text-xs font-medium uppercase text-slate-400">Database</p>
-      <p class="mt-2 break-all text-sm text-slate-700"><%= dbPath %></p>
-    </div>
-    <div class="rounded-xl border border-slate-200 bg-white p-5">
-      <p class="text-xs font-medium uppercase text-slate-400">LLM</p>
-      <p class="mt-2 text-sm text-slate-700">Claude Code CLI(headless,Phase 1 接入)</p>
+  <!-- 工作流概览 -->
+  <div>
+    <h2 class="text-xs font-medium uppercase tracking-wider text-slate-500">工作流</h2>
+    <div class="mt-3 grid gap-3 sm:grid-cols-3">
+      <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-subtle hover:shadow-hover transition">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-slate-400">第 1–2 步</p>
+        <p class="mt-2 text-sm font-medium text-slate-900">理清问题 · 准备检索</p>
+        <p class="mt-1 text-xs leading-relaxed text-slate-500">
+          AI 起草研究问题、纳排标准、PICO 概念组;按命中数推荐最佳检索式组合,WoS / Scopus / PubMed 都覆盖。
+        </p>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-subtle hover:shadow-hover transition">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-slate-400">第 3–5 步</p>
+        <p class="mt-2 text-sm font-medium text-slate-900">导入 · 筛选 · 整理矩阵</p>
+        <p class="mt-1 text-xs leading-relaxed text-slate-500">
+          上传数据库导出 CSV,自动去重;AI 给标题摘要初筛建议,你拍板;纳入文献按可定制矩阵列整理,字段可复制 prompt 让外部 AI 协助填。
+        </p>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-subtle hover:shadow-hover transition">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-slate-400">第 6–8 步</p>
+        <p class="mt-2 text-sm font-medium text-slate-900">主题综合 · GRADE · 成稿</p>
+        <p class="mt-1 text-xs leading-relaxed text-slate-500">
+          主题聚类 + 证据强度评级,按目标期刊样稿风格生成 9 章节初稿,导出 Markdown 含 PRISMA flow / SoF table / 27 项清单附录。
+        </p>
+      </div>
     </div>
   </div>
 
-  <div class="rounded-xl border border-dashed border-slate-300 bg-white/60 p-6 text-sm text-slate-600">
-    <h2 class="text-base font-semibold text-slate-800">下一步</h2>
-    <ol class="mt-3 list-decimal space-y-1 pl-5">
-      <li>DNS 加 <code class="rounded bg-slate-100 px-1">slr.yourai.asia A 47.236.207.143</code></li>
-      <li>SSH 上服务器跑 <code class="rounded bg-slate-100 px-1">deploy/install-server.sh</code></li>
-      <li>给 <code class="rounded bg-slate-100 px-1">slr</code> 用户登录 Claude(OAuth)</li>
-      <li>Certbot 签 HTTPS</li>
-      <li>进入 Phase 1:Project Wizard + Protocol 生成</li>
-    </ol>
-  </div>
+  <% if (user) { %>
+    <!-- 快捷入口 -->
+    <div>
+      <h2 class="text-xs font-medium uppercase tracking-wider text-slate-500">快捷入口</h2>
+      <div class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <a href="/projects" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-slate-400 hover:shadow-hover transition">
+          <p class="text-sm font-medium text-slate-900">📚 我的项目</p>
+          <p class="mt-0.5 text-xs text-slate-500">共 <%= projectCount %> 个</p>
+        </a>
+        <a href="/account/credentials" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-slate-400 hover:shadow-hover transition">
+          <p class="text-sm font-medium text-slate-900">🔑 LLM 凭证</p>
+          <p class="mt-0.5 text-xs text-slate-500">绑定 Claude / Codex / API key</p>
+        </a>
+        <a href="/account" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-slate-400 hover:shadow-hover transition">
+          <p class="text-sm font-medium text-slate-900">👤 账户设置</p>
+          <p class="mt-0.5 text-xs text-slate-500">概览 · 调用诊断</p>
+        </a>
+        <% if (user.role === 'admin') { %>
+          <a href="/admin" class="rounded-xl border border-amber-200 bg-amber-50/40 p-4 hover:border-amber-400 hover:shadow-hover transition">
+            <p class="text-sm font-medium text-amber-900">🛠 管理后台</p>
+            <p class="mt-0.5 text-xs text-amber-700">用户 · 使用 · 储存</p>
+          </a>
+        <% } else { %>
+          <a href="/account/credentials" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-slate-400 hover:shadow-hover transition">
+            <p class="text-sm font-medium text-slate-900">📊 使用记录</p>
+            <p class="mt-0.5 text-xs text-slate-500">查看你的 LLM 调用</p>
+          </a>
+        <% } %>
+      </div>
+    </div>
+  <% } %>
 </section>
 
 <%- include('partials/footer') %>
