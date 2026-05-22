@@ -206,21 +206,72 @@ function scanBalanced(text, start) {
   return { slice: text.slice(start), truncated: true, openStack: stack }
 }
 
-/** 宽容解析:原样,然后剥行尾逗号,然后剥单行 // 注释。 */
+/** 宽容解析:原样,然后剥行尾逗号,然后剥单行 // 注释,最后修内嵌未转义双引号。 */
 function tryParseLenient(s) {
   if (typeof s !== 'string') return undefined
   const candidates = [
     s,
-    s.replace(/,\s*([}\]])/g, '$1'),                            // 剥行尾逗号
-    s.replace(/^\s*\/\/.*$/gm, '').replace(/,\s*([}\]])/g, '$1'), // 剥 // 注释 + 行尾逗号
+    s.replace(/,\s*([}\]])/g, '$1'),                              // 剥行尾逗号
+    s.replace(/^\s*\/\/.*$/gm, '').replace(/,\s*([}\]])/g, '$1'),  // 剥 // 注释 + 行尾逗号
+    repairInnerDoubleQuotes(s),                                   // 修内嵌未转义 " (中文 LLM 常见)
+    repairInnerDoubleQuotes(s.replace(/,\s*([}\]])/g, '$1')),     // 双修
   ]
   for (const c of candidates) {
+    if (c === undefined) continue
     try {
       const v = JSON.parse(c)
       if (v != null && (typeof v === 'object')) return v
     } catch {}
   }
   return undefined
+}
+
+/**
+ * 修 LLM 输出 JSON 时字符串值内部包了未转义半角双引号的情况。
+ *
+ * 典型坑(中文 LLM 高频):
+ *   "summary": "协议要求"同时涉及设计思维"过窄"
+ *                       ↑↑ 内部 " 没转义,JSON.parse 在第一个就当 string 结束了
+ *
+ * 启发式:从左到右扫,跟踪 inString 状态。遇到 \`"\` 时看下一个非空白字符:
+ *   - 是 \`,\` \`}\` \`]\` \`:\` 或 EOF → 这是 string 的合法闭引号
+ *   - 否则 → 这是字符串内部的引号,替换为 \\\"
+ *
+ * 这个函数尽力而为 — 若启发式判断错了,后续 JSON.parse 仍会失败,
+ * 不会让本来能 parse 的 JSON 变得 parse 不了(因为我们只在 inString=true 时改)。
+ */
+function repairInnerDoubleQuotes(text) {
+  if (typeof text !== 'string') return undefined
+  let out = ''
+  let inString = false
+  let escapeNext = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (escapeNext) { out += c; escapeNext = false; continue }
+    if (c === '\\') { out += c; escapeNext = true; continue }
+    if (c !== '"') { out += c; continue }
+
+    if (!inString) {
+      // 开引号
+      out += c
+      inString = true
+    } else {
+      // 已在字符串内:这是闭引号还是内嵌引号?
+      // 向后看到第一个非空白字符
+      let j = i + 1
+      while (j < text.length && /\s/.test(text[j])) j++
+      const next = text[j]
+      if (next === undefined || next === ',' || next === '}' || next === ']' || next === ':') {
+        // 合法闭引号
+        out += c
+        inString = false
+      } else {
+        // 内嵌引号 — 转义掉
+        out += '\\"'
+      }
+    }
+  }
+  return out
 }
 
 /** 截断修复:openStack 是未闭合的开括号栈,顺序追加对应闭括号。 */
