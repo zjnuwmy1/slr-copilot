@@ -1,45 +1,71 @@
-# SLR Copilot
+# SLR Copilot · 系统性文献综述协作工作台
 
-AI 辅助的系统性文献综述(Systematic Literature Review)平台。从研究主题到完整综述初稿,8 步走完整条 PRISMA 2020 流水线。
+> **🇨🇳 中文版** · [English](./README.en.md)
 
-**生产**: https://slr.yourai.asia · 单机部署,内存占用 ~35MB
+AI 辅助的系统性文献综述(Systematic Literature Review)平台。从研究主题到 PRISMA 2020 合规的可投稿初稿,8 步完整闭环。
+
+🌐 **生产环境**:https://slr.yourai.asia · 单机部署 · 内存占用 < 100 MB
 
 ---
 
-## 功能矩阵(Phase 0-7 全部上线)
+## 工作流(8 步)
 
-### 用户能干的(完整 SLR 闭环)
+```
+理清研究问题  →  准备检索词  →  导入文献  →  整理矩阵  →
+RoB(可选) →  主题综合   →  GRADE 评级 →  写成可投稿综述
+```
 
-| Step | 功能 | LLM 调用 |
+| Step | 用户在干 | LLM 在干 |
 |---|---|---|
-| **0** | 注册(凭邀请码)+ 登录 + 绑定 LLM 凭证 | — |
-| **1 Protocol** | 输入主题 → AI 生成研究问题 + 纳入/排除标准 + 概念组 → 编辑 → 审批 | claude / gpt |
-| **2 Search** | AI 生成 WoS / Scopus / PubMed × 高召回/平衡/高精确 共 9 条检索式 → 复制粘到数据库 → 回填命中数 → 导出 Markdown 附录 | claude / gpt |
-| **Zotero 导入** | 上传 Zotero RDF zip(含 PDF 附件 + 笔记) → 自动解析 + 去重(DOI / normalized title) | — |
-| **References 管理** | 增删改查 + Crossref DOI 自动填 + 5 种引文格式复制(APA/IEEE/GB-T-7714/Chicago/MLA)+ 批量导出 BibTeX/RIS/CSL JSON | — |
-| **3 Screening** | 标题摘要 AI 初筛(include/exclude/uncertain)+ 人工最终决定 → 导出 PRISMA 风格 CSV | haiku / gpt-mini |
-| **4 Extraction** | 全文 PDF 解析(pdf-parse + 章节切分)+ Claude 结构化抽取 JSON(study type / sample / findings / limitations / chunk 反向链)+ 人工审阅 | sonnet / opus / gpt |
-| **5 RoB** | (Phase 8 GRADE 详细评估,暂占位) | — |
-| **6 Synthesis** | 跨论文主题聚类 + Evidence Matrix(records × themes)+ 一致/矛盾 findings + 证据空白 | opus / gpt |
-| **7 Certainty** | 人工标 evidence_strength(strong/moderate/weak/unclear) | — |
-| **8 Drafting** | AI 写 9 章节(title/abstract/intro/methods/results/discussion/limitations/conclusion/references)+ 引用占位符 `[record_id]` 强校验 + PRISMA flow Mermaid(从 DB 精确算)+ 整文 Markdown 导出 | sonnet / opus / gpt |
+| **1** 协议 | 输入主题、纳排标准、概念组 | 旗舰模型从输入起草研究问题、纳入/排除标准、PICO 概念组 |
+| **2** 检索式 | 按勾选的数据库自动生成 → 真实跑命中 → 回填数 → 锁定最终方案 | 按用户实际勾的库(WoS/Scopus/PubMed)各 3 版 + 1 条 AI 优化主检索(共享概念规格,跨库一致,仅语法不同) |
+| **3** 导入 CSV/XLSX | 一次拖多个库的导出文件 | — |
+| **4** 文献矩阵 | 在线表格填字段 / 下 XLSX 模板线下填 / AI 自动抽 | 可选每列复制 prompt 到外部 AI 协助 |
+| **5** RoB | (站内工具暂未开放,在 GRADE 步骤的 risk_of_bias 维度评级或外部用 RoB 2 等) | — |
+| **6** 综合 | 跨论文主题聚类、Evidence Matrix、一致/矛盾发现 | 旗舰模型从矩阵主动聚类 + 找证据空白 |
+| **7** GRADE | 五维度 certainty 评级(RoB / inconsistency / indirectness / imprecision / publication bias)+ SoF 表 | — |
+| **8** 成稿 | 一键生成 9 章节 + PRISMA flow + 27 项 checklist 附录 + Markdown 导出 | 旗舰模型按 PRISMA 2020 合规渲染英文成稿(中文输入,英文输出),每条事实自动挂回原文献 |
 
-### 管理员额外功能
+**🔄 全流程任意阶段都可触发"复盘 & 迭代协议"**(第 v_next 版本):AI 综合所有前序数据(协议 + 检索 + 导入 + 筛选 + 每条 AI 判断 + 排除原因 + 主题 + GRADE)反推问题,产出优化后的新协议供用户重新审批。
 
-- `/admin` 仪表盘:总用户 / 活跃 / 邀请码 / 项目总数
-- `/admin/users` 用户 CRUD + 角色 + 启停 + **配额**(每日调用上限 / 每月 token / 允许的 provider)
-- `/admin/users/new` 生成邀请码(7 天过期默认)
-- `/admin/users/:id/projects` 看任意用户的项目(只读)
-- `/admin/projects` 全平台项目列表 + 详情 + 严格 405 防写
-- `/admin/usage` 全平台 LLM 使用记录 + 24h/7d/30d 汇总
-- `/admin/audit` 审计日志(登录 / 注册 / 凭证 / 共享 / admin 动作)
-- `/admin/settings` **每步用什么模型**(空=用默认 tier,或选 alias / 具体型号)
+---
 
-### 凭证体系
+## 核心特性
 
-- **绑定方式**:粘 API key(Anthropic / OpenAI)+ Web 化 OAuth 订阅绑定(Claude `auth login` paste-back + Codex `--device-auth` 输 code)
-- **共享**:owner 可把自己绑的凭证共享给指定用户,被共享方调用时优先自己的、回落共享的
-- **凭证库存**:5 个 Anthropic 模型(opus/sonnet/haiku/...)+ 5 个 OpenAI 模型(gpt-5/o3/gpt-4o/...)
+### 🔐 三层用户体系 + 平台共享凭证
+- **Super Admin**(唯一)— 配置平台 Claude / Codex token,所有其他用户共享。`zjnuwmy1@gmail.com` 自动晋升
+- **Admin** — 用户管理 / 看使用记录 / 储存空间;不能创建管理员、不能改平台凭证
+- **User** — 走平台凭证调 LLM,无需自己绑
+
+### 🤝 协议→检索→筛选→优化 的闭环
+- 协议审批后 → 检索式按协议年份/文献类型/语言**逐字**生成(代码层守卫,LLM 不能漂移)
+- 每条 query 都包含 4 类过滤(概念组 + 年份 + 文献类型 NOT 排除 + 语言),跨库共享同一套概念规格
+- AI 主检索可基于用户期望命中数微调 concept_set 广度
+- 用户锁定最终方案后才允许上传 CSV
+
+### 🔍 复盘 & 迭代机制(v2.0 protocol)
+- 项目页右上角 **🔄 复盘 & 迭代** 按钮(常驻)
+- 筛选页纳入率 < 10% 自动弹 callout 建议
+- LLM 拿到:用户反馈 + 协议 + 检索式 + 命中数 + 锁定方案 + **每条 record 的 AI ↔ human 判断**(按信号强度分桶 disagree/uncertain/agree/ai_only,最多 2000 条)+ Top 排除原因 + 主题 + GRADE
+- 用 `flagship + high reasoning`(Claude Opus 4.7 ultrathink 或 GPT-5.5 high)
+- 输出 diagnosis(置信度色编码)+ proposed_changes(typed)+ 完整新协议 + next_steps
+- 用户审批 → 写新 protocol version,iteration_metadata 完整保存审计链
+
+### 📚 多源文献管理
+- 一次上传多个文件(WoS xlsx + Scopus csv + PubMed csv)
+- 跨库去重:同一篇被多库收录,自动合并 `source_databases: ["wos","scopus"]`
+- records 列表用颜色 badge 显示来源(蓝/琥珀/绿)
+- WoS Export-to-Excel(.xlsx)直接拖,自动 sheet_to_csv 进同一识别 pipeline
+
+### 🌏 双语流
+- 用户工作过程用中文(协议 / 主题 / 笔记 / 反馈)
+- 最终论文导出强制英文(SLR 学术规范);PRISMA flow / SoF table / 27 项附录全英文
+
+### 🤖 LLM 路由
+- Anthropic OAuth(Claude Code CLI)+ Anthropic API + OpenAI OAuth(Codex CLI device-auth)+ OpenAI API 四路径
+- 每步可独立配置模型 + **思考强度**(Claude:think / think hard / ultrathink;Codex:minimal / low / medium / high)
+- 跨 provider 翻译:配置 "ultrathink" 在 OpenAI 自动映射为 "high"
+- 协议合规守卫:LLM 私改年份/文献类型/语言时自动改回 + 警告
 
 ---
 
@@ -47,119 +73,87 @@ AI 辅助的系统性文献综述(Systematic Literature Review)平台。从研�
 
 | 层 | 选型 | 备注 |
 |---|---|---|
-| 应用框架 | Node 18+ / Express / EJS | partial include 模式 |
-| 数据库 | SQLite(better-sqlite3) | 23 张表,WAL 模式,单文件 |
-| 前端 | Tailwind via CDN + 少量 vanilla JS | 无构建步骤 |
-| LLM 适配器 | Anthropic API + OpenAI API + Claude CLI(`claude auth login` + `-p`)+ Codex CLI(`codex login --device-auth` + `exec --json`) | 4 路径 |
-| PDF 解析 | pdf-parse + 启发式 section 切分 | 8 种 section + chunk |
-| Zotero | fast-xml-parser + adm-zip | 单文件 RDF zip 上传 |
-| 凭证加密 | AES-256-GCM(`ENCRYPTION_KEY` 32 字节) | OAuth token / API key 全加密 |
-| 部署 | systemd + Nginx + Certbot | knowledge-share 同机不冲突 |
+| 应用框架 | Node 18+ / Express / EJS | partial include 模式,无构建 |
+| 数据库 | SQLite (better-sqlite3) | ~28 张表,WAL,单文件 |
+| 前端 | Tailwind CDN + Inter / JetBrains Mono | 无构建,生产 prod 直接服务 |
+| LLM | Anthropic + OpenAI(API + CLI 共 4 通道) | provider 抽象层 |
+| 凭证加密 | AES-256-GCM,`ENCRYPTION_KEY` 32 字节 | OAuth token / API key 全加密 |
+| PDF | pdf-parse + 启发式 section 切分 | 章节切分 + chunk |
+| Excel | xlsx(社区版) | WoS Export 直拖 + 矩阵模板 |
+| Zotero | fast-xml-parser + adm-zip | RDF zip + PDF 附件 |
+| 部署 | systemd + Nginx + Certbot | proxy_buffer_size 64K,timeout 1h |
 
 ---
 
-## 目录结构
+## 数据模型
+
+主表(完整 28 张):
 
 ```
-slr-copilot/
-├── server.js                          # Express 入口,挂载所有 router
-├── db/
-│   ├── index.js                       # SQLite 初始化(WAL + FK)
-│   └── schema.sql                     # 23 张表 schema
-├── middleware/auth.js                 # loadUser / requireUser / requireAdmin
-├── services/
-│   ├── audit.js                       # 审计日志助手
-│   ├── bootstrap.js                   # BOOTSTRAP_ADMIN_* 首次启动建 admin
-│   ├── credentials.js                 # 凭证 CRUD + 加密 + 测活
-│   ├── credential-sharing.js          # 共享 facade
-│   ├── crossref.js                    # DOI 自动填
-│   ├── crypto.js                      # AES-256-GCM + randomId + 邀请码
-│   ├── llm.js                         # LLM 路由器(per-user + 模型 resolve)
-│   ├── oauth-bridge.js                # Web 化 OAuth login dance
-│   ├── oauth-bridge-mock.js           # 本地 mock(CLAUDE_BIN/CODEX_BIN=mock)
-│   ├── pdf-parse.js                   # PDF 抽文本 + section 切分
-│   ├── prisma.js                      # PRISMA 27 项 + 进度计算
-│   ├── prisma-flow.js                 # PRISMA flow diagram 数据 + Mermaid
-│   ├── settings.js                    # system_settings + step-model resolver
-│   ├── zotero-ingest.js               # RDF 解析 + 去重
-│   ├── dedup.js                       # DOI + normalized title 去重
-│   ├── citation-format.js             # APA/IEEE/GB-T-7714/Chicago/MLA
-│   ├── reference-export.js            # BibTeX/RIS/CSL JSON
-│   ├── prompts/                       # 6 个 LLM 步骤 prompt 模块
-│   │   ├── protocol.js
-│   │   ├── search.js
-│   │   ├── screening.js
-│   │   ├── extraction.js
-│   │   ├── synthesis.js
-│   │   └── drafting.js
-│   └── providers/                     # LLM 适配器
-│       ├── anthropic-api.js
-│       ├── anthropic-cli.js
-│       ├── openai-api.js
-│       └── openai-cli.js
-├── routes/
-│   ├── auth.js                        # /login /logout /register
-│   ├── account/
-│   │   ├── credentials.js             # /account/credentials/*
-│   │   └── oauth.js                   # /account/oauth/* (Claude + Codex)
-│   ├── admin/
-│   │   ├── users.js                   # /admin /admin/users/*
-│   │   ├── projects.js                # /admin/projects/*(只读)
-│   │   ├── settings.js                # /admin/settings/*
-│   │   ├── usage.js                   # /admin/usage
-│   │   └── audit.js                   # /admin/audit
-│   └── projects/
-│       ├── index.js                   # /projects 主体(含 synthesis/report 子挂)
-│       ├── search.js                  # /:id/search/*
-│       ├── prisma.js                  # /:id/prisma/*
-│       ├── zotero.js                  # /:id/zotero/*
-│       ├── records.js                 # /:id/records/* + /:id/attachments/:id/download
-│       ├── screening.js               # /:id/screening/*
-│       ├── extraction.js              # /:id/extraction/*
-│       ├── synthesis.js               # /:id/synthesis/*
-│       └── report.js                  # /:id/report/*
-├── views/                             # EJS 模板(全部)
-├── deploy/                            # systemd / nginx / install 脚本
-├── SUMMARY-A.md … SUMMARY-S.md        # 19 个并行 agent 的产出报告
-└── DEPLOY.md                          # 部署操作手册
+users  ─ invite_codes ─ user_credentials ─ user_quotas ─ credential_shares
+       └ projects ─ protocols ─ search_strategies ─ final_search_records
+                  ├ records ─ attachments
+                  ├ paper_chunks ─ screening_decisions ─ extractions
+                  ├ literature_matrix ─ matrix_columns
+                  ├ themes ─ evidence_points ─ grade_assessments
+                  ├ draft_sections
+                  ├ prisma_checklist
+                  ├ target_journal_templates
+                  └ pending_iterations
+audit_events / usage_logs / system_settings / oauth_bind_sessions
+zotero_packages
 ```
+
+迁移幂等:`db/index.js` 启动时 `ALTER TABLE ADD COLUMN` 增量字段(`is_super_admin` / `search_locked_at` / `search_concept_set_json` / `source_databases` / `iteration_metadata`)。
 
 ---
 
-## 本地开发
+## 部署
 
 ```bash
-cp .env.example .env
-# 至少改 ENCRYPTION_KEY / BOOTSTRAP_ADMIN_PASSWORD,把 COOKIE_SECURE 改 false
+# 服务器准备
+adduser --system --group --home /opt/slr --shell /bin/bash slr
+mkdir -p /opt/slr /var/lib/slr/{uploads,pdfs,db,claude-home}
+chown -R slr:slr /opt/slr /var/lib/slr
 
-npm install
-npm run dev
-# 访问 http://127.0.0.1:3001
+# 系统装 Claude / Codex CLI
+npm install -g @anthropic-ai/claude-code
+npm install -g @openai/codex
+sudo -u slr -H bash -c 'HOME=/var/lib/slr/claude-home claude login'
+
+# 部署代码
+cd /opt/slr && npm install --omit=dev
+cp deploy/slr.env /etc/slr.env  # 编辑 SESSION_SECRET / ENCRYPTION_KEY
+cp deploy/slr.service /etc/systemd/system/
+cp deploy/nginx.conf /etc/nginx/sites-available/slr
+ln -sf /etc/nginx/sites-available/slr /etc/nginx/sites-enabled/
+systemctl enable --now slr
+certbot --nginx -d slr.yourai.asia --redirect
 ```
 
-本地无 Claude / Codex CLI 时,设 `CLAUDE_BIN=mock CODEX_BIN=mock` 跑 oauth 流是假数据但能完整走通流程。
+`.env` 关键变量:`PORT=3001` / `DB_PATH=/var/lib/slr/db/slr.db` / `SESSION_SECRET=...` / `ENCRYPTION_KEY=...`(64 hex)/ `BOOTSTRAP_ADMIN_EMAIL=zjnuwmy1@gmail.com` / `BOOTSTRAP_ADMIN_PASSWORD=...`
 
 ---
 
-## 部署到 slr.yourai.asia
+## 关键稳定性修复(已知雷区)
 
-详见 [DEPLOY.md](./DEPLOY.md)。
-
-关键步骤:
-1. DNS 设 A 记录
-2. `rsync` 推到 /opt/slr
-3. `bash deploy/install-server.sh`(幂等,自动装 Node deps + Claude CLI + Codex CLI + systemd + Nginx)
-4. 补 `/etc/slr.env` 加 `ENCRYPTION_KEY` + `BOOTSTRAP_ADMIN_*`
-5. `certbot --nginx -d slr.yourai.asia`
-6. 用户在 `/account/credentials/new?type=oauth` 走浏览器 OAuth(交互一次)
+| 问题 | 根因 | 修复 |
+|---|---|---|
+| 复盘 502 Bad Gateway | LLM 输出几 KB 塞进 cookie-session,Set-Cookie 超过 nginx `proxy_buffer_size 8K` | 改为 `pending_iterations` 表存,session 只存触发标志;nginx buffer bump 到 64K |
+| 用户复制锁定 query 后 WoS 语言过滤失效 | EJS `<%= %>` + 多余的 `.replace(/"/g, '&quot;')` 双重转义 | 删多余 .replace;DB 一次性清洗已脏 `&quot;` → `"` |
+| LLM 中文输出 JSON 内嵌 `"` 没转义 | `summary: "协议要求"同时涉及"过窄"` parser 崩 | `tryParseLenient` 加 `repairInnerDoubleQuotes` 启发式,所有 LLM 调用受益 |
+| Recommend normalize 误判 | 不同模型 envelope wrap / field naming 漂移 | BFS 递归深查 PRIMARY_KEY_RE,接受 11 个别名(primary / best / chosen / ...)|
 
 ---
 
-## MVP 不做的事(防 scope creep,后续 Phase 8+ 可加)
+## License
 
-- 不连 WoS / Scopus / PubMed 官方 API(走 Zotero 手动导入)
-- 不自动下载 PDF(版权 + 反爬)
-- 不做 meta-analysis(只做 narrative / thematic synthesis)
-- 不做完整 GRADE 评估(只做 evidence_strength 4 档)
-- 不做实时协作(单用户编辑)
-- 不做 DOCX 导出(只 Markdown)
+私人项目,无 license。代码版权归项目所有者。
+
+---
+
+## 联系
+
+Issues / 改动建议直接通过本仓库的 issue 反馈。
+
+Co-developed with Claude.
