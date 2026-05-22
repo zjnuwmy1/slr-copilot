@@ -1,66 +1,110 @@
 <%- include('../partials/header', { title }) %>
 
+<%
+  const canEdit = !!(user && user.is_super_admin)
+  const effectivePreset = presets.find(function(p) { return p.id === effectiveId }) || null
+%>
 <div class="mx-auto max-w-4xl px-4 py-6">
   <header class="mb-6">
     <p class="text-xs font-medium uppercase tracking-wider text-slate-400">账户偏好</p>
-    <h1 class="mt-1 text-2xl font-bold text-slate-900">模型方案</h1>
+    <h1 class="mt-1 text-2xl font-bold text-slate-900">模型方案(Plan)</h1>
     <p class="mt-1 text-sm text-slate-600">
-      选一套预设,影响你后续所有项目的 AI 调用(协议生成 / 检索式 / 初筛 / 抽取 / 综合 / 写作)。
-      系统默认 = <strong><%= defaultId %></strong>;你当前生效 = <strong><%= effectiveId %></strong>
-      <%= userExplicitChoice ? '(自选)' : '(跟随默认)' %>。
+      <% if (canEdit) { %>
+        (超管)你可以为自己选预设,普通用户由超管在
+        <a href="/admin/users" class="text-blue-700 underline">/admin/users</a> 代为分配。
+      <% } else { %>
+        你的 plan 由管理员分配,影响所有项目的 AI 调用(协议 / 检索式 / 筛选 / 抽取 / 综合 / 写作 / 复盘)。
+        如需调整请联系管理员。
+      <% } %>
     </p>
   </header>
 
-  <form method="post" action="/account/preferences" class="space-y-4">
-    <!-- 跟随系统默认 -->
-    <label class="block rounded-2xl border-2 <%= userExplicitChoice == null ? 'border-blue-500 bg-blue-50/40' : 'border-slate-200 bg-white' %> p-5 cursor-pointer hover:border-blue-400">
-      <div class="flex items-start gap-3">
-        <input type="radio" name="preset" value="" <%= userExplicitChoice == null ? 'checked' : '' %> class="mt-1" />
-        <div class="flex-1">
-          <p class="font-medium text-slate-900">跟随系统默认</p>
-          <p class="mt-1 text-sm text-slate-600">超管选的默认预设(当前 = <strong><%= defaultId %></strong>)。超管未来改方案时自动跟随。</p>
-        </div>
+  <!-- 当前生效:始终显示,所有用户都能看 -->
+  <section class="rounded-2xl border-2 border-emerald-300 bg-emerald-50/40 p-5 mb-6">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <p class="text-xs font-medium uppercase tracking-wider text-emerald-700">当前生效</p>
+        <h2 class="mt-1 text-lg font-bold text-emerald-900"><%= effectivePreset ? effectivePreset.label : effectiveId %></h2>
+        <p class="mt-1 text-sm text-emerald-800">
+          <%= effectivePreset ? effectivePreset.description : '' %>
+        </p>
+        <p class="mt-2 text-xs text-emerald-700">
+          <% if (userExplicitChoice) { %>
+            (超管为你单独分配的)
+          <% } else { %>
+            (跟随系统默认 = <%= defaultId %>;超管改默认时自动跟随)
+          <% } %>
+        </p>
       </div>
-    </label>
+    </div>
+    <!-- 当前方案的每步模型 -->
+    <% if (effectivePreset) { %>
+      <div class="mt-4 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
+        <% stepKeys.forEach(function(step) {
+             const m = effectivePreset.config?.step_model?.[step] || '(默认 tier)'
+             const r = effectivePreset.config?.step_reasoning?.[step] || ''
+        %>
+          <div class="flex items-center justify-between border-b border-emerald-100 pb-1">
+            <span class="text-emerald-700"><%= stepSpecs[step].label.split(' (')[0] %></span>
+            <span class="text-right">
+              <code class="font-mono text-[10px] text-emerald-900"><%= m.replace('claude-', '').replace('gpt-', 'gpt') %></code>
+              <% if (r) { %><span class="text-[9px] text-emerald-600">/<%= r %></span><% } %>
+            </span>
+          </div>
+        <% }) %>
+      </div>
+    <% } %>
+  </section>
 
-    <!-- 3 套预设 -->
-    <% presets.forEach(function(p) { %>
-      <label class="block rounded-2xl border-2 <%= userExplicitChoice === p.id ? 'border-blue-500 bg-blue-50/40' : 'border-slate-200 bg-white' %> p-5 cursor-pointer hover:border-blue-400">
+  <% if (canEdit) { %>
+    <!-- 超管:可改 -->
+    <h2 class="text-base font-semibold text-slate-800 mb-3">切换预设(仅超管可见)</h2>
+    <form method="post" action="/account/preferences" class="space-y-3">
+      <label class="block rounded-xl border-2 <%= userExplicitChoice == null ? 'border-blue-500 bg-blue-50/40' : 'border-slate-200 bg-white' %> p-4 cursor-pointer hover:border-blue-400">
         <div class="flex items-start gap-3">
-          <input type="radio" name="preset" value="<%= p.id %>" <%= userExplicitChoice === p.id ? 'checked' : '' %> class="mt-1" />
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2">
-              <p class="font-medium text-slate-900"><%= p.label %></p>
-              <% if (p.id === defaultId) { %><span class="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">系统默认</span><% } %>
-            </div>
-            <p class="mt-1 text-sm text-slate-600"><%= p.description %></p>
-
-            <!-- 摘要表:仅显示模型 -->
-            <div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3">
-              <% stepKeys.forEach(function(step) {
-                   const m = p.config?.step_model?.[step] || '(默认 tier)'
-              %>
-                <div class="flex items-center justify-between border-b border-slate-100 pb-1">
-                  <span class="text-slate-500"><%= stepSpecs[step].label.split(' (')[0] %></span>
-                  <span class="font-mono text-[10px] text-slate-700"><%= m.replace('claude-', '').replace('gpt-', 'gpt') %></span>
-                </div>
-              <% }) %>
-            </div>
+          <input type="radio" name="preset" value="" <%= userExplicitChoice == null ? 'checked' : '' %> />
+          <div>
+            <p class="font-medium text-slate-900">跟随系统默认(<%= defaultId %>)</p>
+            <p class="mt-0.5 text-xs text-slate-600">超管改默认时自动跟随。</p>
           </div>
         </div>
       </label>
-    <% }) %>
-
-    <div class="flex justify-end pt-4">
-      <button type="submit" class="rounded-lg bg-slate-900 px-5 py-2 text-sm text-white hover:bg-slate-700">
-        保存选择
-      </button>
+      <% presets.forEach(function(p) { %>
+        <label class="block rounded-xl border-2 <%= userExplicitChoice === p.id ? 'border-blue-500 bg-blue-50/40' : 'border-slate-200 bg-white' %> p-4 cursor-pointer hover:border-blue-400">
+          <div class="flex items-start gap-3">
+            <input type="radio" name="preset" value="<%= p.id %>" <%= userExplicitChoice === p.id ? 'checked' : '' %> />
+            <div>
+              <p class="font-medium text-slate-900"><%= p.label %></p>
+              <p class="mt-0.5 text-xs text-slate-600"><%= p.description %></p>
+            </div>
+          </div>
+        </label>
+      <% }) %>
+      <div class="flex justify-end pt-2">
+        <button type="submit" class="rounded-lg bg-slate-900 px-5 py-2 text-sm text-white hover:bg-slate-700">保存选择</button>
+      </div>
+    </form>
+    <p class="mt-4 text-xs text-slate-500">
+      每个预设的具体 step×模型 配置 → <a href="/admin/step-presets" class="text-blue-700 underline">/admin/step-presets</a>(超管编辑)
+    </p>
+  <% } else { %>
+    <!-- 普通用户:只读三栏对比 -->
+    <h2 class="text-base font-semibold text-slate-800 mb-3">所有 plan 对比(只读)</h2>
+    <div class="grid gap-3 md:grid-cols-3">
+      <% presets.forEach(function(p) {
+           const isCurrent = p.id === effectiveId
+      %>
+        <div class="rounded-xl border-2 <%= isCurrent ? 'border-emerald-400 bg-emerald-50/30' : 'border-slate-200 bg-white' %> p-4">
+          <div class="flex items-center gap-2">
+            <p class="font-medium text-slate-900"><%= p.label %></p>
+            <% if (isCurrent) { %><span class="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white">当前</span><% } %>
+            <% if (p.id === defaultId) { %><span class="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">默认</span><% } %>
+          </div>
+          <p class="mt-1 text-xs text-slate-600"><%= p.description %></p>
+        </div>
+      <% }) %>
     </div>
-  </form>
-
-  <p class="mt-6 text-xs text-slate-500">
-    提示:每个预设的具体配置由超管在 <a href="/admin/step-presets" class="text-blue-700 underline">/admin/step-presets</a> 维护(普通用户无权访问)。
-  </p>
+  <% } %>
 </div>
 
 <%- include('../partials/footer') %>

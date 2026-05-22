@@ -88,6 +88,7 @@ router.get('/users', (req, res) => {
   const users = db
     .prepare(
       `SELECT id, email, display_name, role, is_active, is_super_admin,
+              step_model_preset,
               created_at, last_login_at
        FROM users
        ORDER BY created_at DESC`
@@ -102,10 +103,16 @@ router.get('/users', (req, res) => {
        LIMIT 20`
     )
     .all()
+  // 默认 preset(列表渲染时用,显示"跟随默认 → X")
+  const defaultPresetRow = db
+    .prepare(`SELECT id FROM step_model_presets WHERE is_default = 1 LIMIT 1`)
+    .get()
   res.render('admin/users-list', {
     title: '用户管理',
     users,
     invites,
+    defaultPresetId: defaultPresetRow ? defaultPresetRow.id : 'balanced',
+    presetIds: ['performance', 'balanced', 'economy'],
   })
 })
 
@@ -435,6 +442,48 @@ router.post('/users/:id/quota', (req, res) => {
 
   flash(req, 'success', '配额已更新')
   res.redirect(`/admin/users/${encodeURIComponent(id)}`)
+})
+
+// ============== 改用户的 plan(step_model_preset)— 超管专用 ==============
+// POST /users/:id/preset
+//   body.preset: 'performance' | 'balanced' | 'economy' | '' (空 = 跟随默认)
+router.post('/users/:id/preset', (req, res) => {
+  if (!requireSuperAdminInline(req, res)) return
+  const db = req.app.locals.db
+  const id = String(req.params.id)
+  const u = db.prepare('SELECT id, email FROM users WHERE id = ?').get(id)
+  if (!u) {
+    flash(req, 'error', '用户不存在')
+    return res.redirect('/admin/users')
+  }
+  const PRESET_IDS = ['performance', 'balanced', 'economy']
+  const raw = String(req.body.preset || '').trim()
+  let preset = null
+  if (raw === '' || raw === 'default') {
+    preset = null  // NULL = 跟随系统默认
+  } else if (PRESET_IDS.includes(raw)) {
+    preset = raw
+  } else {
+    flash(req, 'error', '无效的 plan 值')
+    return res.redirect(`/admin/users/${encodeURIComponent(id)}`)
+  }
+
+  db.prepare(`UPDATE users SET step_model_preset = ? WHERE id = ?`).run(preset, id)
+
+  audit(db, req, {
+    eventType: 'admin_user_plan_changed',
+    userId: req.user.id,
+    actorUserId: req.user.id,
+    targetUserId: id,
+    payload: { user_id: id, email: u.email, new_preset: preset },
+  })
+
+  flash(req, 'success', preset
+    ? `已把 ${u.email} 的 plan 设为 "${preset}"`
+    : `已清除 ${u.email} 的自选 plan(改为跟随系统默认)`)
+  // 来路:用户列表来的就回列表,从详情页来的就回详情
+  const ref = (req.get('Referer') || '').endsWith('/admin/users') ? '/admin/users' : `/admin/users/${encodeURIComponent(id)}`
+  res.redirect(ref)
 })
 
 // ============== 该用户的项目(只读列表)==============

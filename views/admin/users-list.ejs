@@ -33,6 +33,7 @@ try {
           <th class="px-4 py-3 text-left font-medium">显示名</th>
           <th class="px-4 py-3 text-left font-medium">角色</th>
           <th class="px-4 py-3 text-left font-medium">状态</th>
+          <th class="px-4 py-3 text-left font-medium">Plan(模型方案)</th>
           <th class="px-4 py-3 text-left font-medium">创建</th>
           <th class="px-4 py-3 text-left font-medium">最后登录</th>
           <th class="px-4 py-3 text-right font-medium">项目</th>
@@ -61,6 +62,38 @@ try {
               <% } else { %>
                 <span class="inline-flex items-center gap-1 text-xs text-slate-500">
                   <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span> inactive
+                </span>
+              <% } %>
+            </td>
+            <td class="px-4 py-3">
+              <%
+                const effective = u.step_model_preset || defaultPresetId
+                const presetColors = {
+                  performance: 'bg-rose-100 text-rose-700',
+                  balanced:    'bg-blue-100 text-blue-700',
+                  economy:     'bg-emerald-100 text-emerald-700',
+                }
+                const presetLabels = {
+                  performance: '高性能', balanced: '平衡', economy: '经济',
+                }
+                const isExplicit = !!u.step_model_preset
+              %>
+              <% if (user && user.is_super_admin) { %>
+                <!-- 超管:下拉 + 自动提交 -->
+                <form method="post" action="/admin/users/<%= encodeURIComponent(u.id) %>/preset" class="inline-flex items-center gap-1">
+                  <select name="preset"
+                          onchange="this.form.submit()"
+                          class="rounded border <%= isExplicit ? 'border-slate-400' : 'border-slate-200' %> bg-white px-2 py-0.5 text-xs">
+                    <option value="" <%= !isExplicit ? 'selected' : '' %>>跟随默认(<%= presetLabels[defaultPresetId] || defaultPresetId %>)</option>
+                    <% presetIds.forEach(function(p) { %>
+                      <option value="<%= p %>" <%= u.step_model_preset === p ? 'selected' : '' %>><%= presetLabels[p] || p %></option>
+                    <% }) %>
+                  </select>
+                </form>
+              <% } else { %>
+                <!-- 普通管理员:只读 -->
+                <span class="rounded px-1.5 py-0.5 text-xs font-medium <%= presetColors[effective] || 'bg-slate-100 text-slate-600' %>">
+                  <%= presetLabels[effective] || effective %><% if (!isExplicit) { %> <span class="text-[10px] opacity-60">(默认)</span><% } %>
                 </span>
               <% } %>
             </td>

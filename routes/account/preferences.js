@@ -43,12 +43,19 @@ router.get('/', (req, res) => {
   })
 })
 
+// POST /account/preferences — **超管才能改自己**;普通用户禁止
+// 设计:plan 是平台层的成本控制,由超管按用户类别分配,不开放用户自选
 router.post('/', (req, res) => {
+  if (!req.user || !req.user.is_super_admin) {
+    flash(req, 'error', '当前 plan 由管理员分配,无法自行修改。如需调整,请联系管理员。')
+    return res.redirect('/account/preferences')
+  }
+  // 超管走 admin 同款逻辑(超管可以自己改自己,毕竟测试用)
   const db = req.app.locals.db
   const raw = String(req.body.preset || '').trim()
   let presetId = null
   if (raw === '' || raw === 'default' || raw === 'inherit') {
-    presetId = null  // 清除 — 跟随系统默认
+    presetId = null
   } else if (PRESET_IDS.includes(raw)) {
     presetId = raw
   } else {
