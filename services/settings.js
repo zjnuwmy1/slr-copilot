@@ -17,6 +17,8 @@
  * llm.js 在 runLlm 入口先调 resolveStepModel(),按用户已绑凭证 provider 选合适模型。
  */
 
+import { getEffectiveConfigForUser as stepPresetsGetEffectiveConfigForUser } from './step-presets.js'
+
 // ============================================================
 // 可选模型清单 — Admin UI 用,LLM router 也用作"用户没绑该 provider 时降级"
 // ============================================================
@@ -140,17 +142,35 @@ export function listAllSettings(db) {
 // ============================================================
 
 /**
- * 给定 actionType + provider,返回应该用的具体模型名。
+ * 给定 actionType + provider + userId,返回应该用的具体模型名。
  *
- *   1) 先查 settings.step_model.<actionType>
- *   2) 如果值是 alias 'heavy'/'standard'/'light',按 provider 解析成具体型号
- *   3) 如果值是具体模型名,直接返回(警告:可能跟 provider 不匹配,调用方负责)
- *   4) settings 没值 → 按 STEP_SPECS[actionType].defaultTier + provider 解析
- *   5) actionType 不在 STEP_SPECS → 用 standard
+ * 解析优先级(2026-05 改:加入 step_model_presets 后):
+ *   1) userId → step_model_presets 找用户 effective preset 的 config.step_model[actionType]
+ *   2) 兼容旧:settings.step_model.<actionType>(老 admin UI 写的全局值)
+ *   3) STEP_SPECS[actionType].defaultTier + provider 解析
+ *   4) anthropic standard 兜底
+ *
+ * 值的类型(任一层取到都按这套规则解析):
+ *   - alias 'heavy'/'flagship'/'standard'/'light' → 按 provider 取对应 tier 默认
+ *   - 具体型号属于当前 provider → 直接用
+ *   - 具体型号属于另一 provider(跨 provider 漂移)→ 按 tier 翻译到本 provider 默认
+ *   - 完全未知字符串 → 透传(让 provider 报错可见)
  */
-export function resolveStepModel(db, { actionType, provider }) {
-  const settingKey = `step_model.${actionType}`
-  const configured = getSetting(db, settingKey)
+export function resolveStepModel(db, { actionType, provider, userId = null }) {
+  // 1) 优先从 preset 取
+  let configured = null
+  if (userId) {
+    try {
+      const cfg = stepPresetsGetEffectiveConfigForUser(db, userId)
+      if (cfg && cfg.step_model && cfg.step_model[actionType]) {
+        configured = cfg.step_model[actionType]
+      }
+    } catch (e) { /* preset 表可能还没建,fall through */ }
+  }
+  // 2) 兼容旧 system_settings
+  if (!configured) {
+    configured = getSetting(db, `step_model.${actionType}`)
+  }
 
   if (configured) {
     const v = String(configured).trim()
@@ -175,11 +195,12 @@ export function resolveStepModel(db, { actionType, provider }) {
     return v
   }
 
-  // 没配 → 用 step 的默认 tier
+  // 3) 没配 → 用 step 的默认 tier
   const tier = STEP_SPECS[actionType]?.defaultTier || 'standard'
   return DEFAULT_BY_PROVIDER_AND_TIER[provider]?.[tier]
       || DEFAULT_BY_PROVIDER_AND_TIER.anthropic.standard
 }
+
 
 /**
  * 一次性返回所有 step 的当前配置(给 admin UI 渲染)。
@@ -285,14 +306,26 @@ export function mapReasoningToProvider(level, provider) {
 
 /**
  * 解析某 step 应该用的 reasoning(已翻译到指定 provider)。
- *   1) settings.step_reasoning.<actionType> → 跨 provider 翻译
- *   2) 否则用 STEP_SPECS[actionType].defaultReasoning → 翻译
- *   3) 找不到 → 该 provider 的 "medium" 等价
- *   4) actionType 不在 STEP_SPECS → 返回 null(让 provider 用自家默认)
+ *
+ *   1) userId → preset.config.step_reasoning[actionType] → 跨 provider 翻译
+ *   2) 兼容旧:settings.step_reasoning.<actionType> → 跨 provider 翻译
+ *   3) 否则用 STEP_SPECS[actionType].defaultReasoning → 翻译
+ *   4) 找不到 → 该 provider 的 "medium" 等价
+ *   5) actionType 不在 STEP_SPECS → 返回 null(让 provider 用自家默认)
  */
-export function resolveStepReasoning(db, { actionType, provider }) {
-  const settingKey = `step_reasoning.${actionType}`
-  const configured = getSetting(db, settingKey)
+export function resolveStepReasoning(db, { actionType, provider, userId = null }) {
+  let configured = null
+  if (userId) {
+    try {
+      const cfg = stepPresetsGetEffectiveConfigForUser(db, userId)
+      if (cfg && cfg.step_reasoning && cfg.step_reasoning[actionType]) {
+        configured = cfg.step_reasoning[actionType]
+      }
+    } catch (e) { /* fall through */ }
+  }
+  if (!configured) {
+    configured = getSetting(db, `step_reasoning.${actionType}`)
+  }
   if (configured) {
     const m = mapReasoningToProvider(configured, provider)
     if (m) return m

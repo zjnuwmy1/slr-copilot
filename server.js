@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { initDb } from './db/index.js'
 import { bootstrapAdmin } from './services/bootstrap.js'
+import { seedDefaultPresets } from './services/step-presets.js'
 import { loadUser, requireUser, requireAdmin, requireSuperAdmin } from './middleware/auth.js'
 
 // Phase 1 routers
@@ -16,6 +17,8 @@ import adminProjectsRouter from './routes/admin/projects.js'
 import adminSettingsRouter from './routes/admin/settings.js'
 import adminStorageRouter from './routes/admin/storage.js'
 import adminPlatformCredsRouter from './routes/admin/platform-credentials.js'
+import adminStepPresetsRouter from './routes/admin/step-presets.js'
+import accountPreferencesRouter from './routes/account/preferences.js'
 import credentialsRouter from './routes/account/credentials.js'
 import oauthRouter from './routes/account/oauth.js'
 import llmRouter from './routes/account/llm.js'
@@ -40,6 +43,7 @@ const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true'
 
 const db = initDb()
 await bootstrapAdmin(db)
+seedDefaultPresets(db)
 
 const app = express()
 
@@ -138,6 +142,8 @@ app.get('/account', requireUser, (req, res) => {
 
 // 管理员后台(/admin/*)— 更具体的子路径先挂,Express 按注册顺序匹配
 app.use('/admin/platform-credentials', requireSuperAdmin, adminPlatformCredsRouter)
+app.use('/admin/step-presets',         requireSuperAdmin, adminStepPresetsRouter)
+app.use('/account/preferences',        requireUser,       accountPreferencesRouter)
 app.use('/admin/usage', requireAdmin, adminUsageRouter)
 app.use('/admin/audit', requireAdmin, adminAuditRouter)
 app.use('/admin/projects', requireAdmin, adminProjectsRouter)

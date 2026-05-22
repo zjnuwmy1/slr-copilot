@@ -107,6 +107,30 @@ function runMigrations(db) {
     db.exec(`ALTER TABLE projects ADD COLUMN screening_target_include_pct INTEGER`)
   }
 
+  // M8: step_model_presets —— 超管配置 3 套模型方案(高性能 / 平衡 / 经济)
+  //   id 固定枚举 ('performance' | 'balanced' | 'economy')
+  //   config_json 存:{ step_model: {...}, step_reasoning: {...} } 全部 7 个 step
+  //   is_default = 1 的那条作为新用户默认 + 兼容旧用户(step_model_preset NULL 时用此)
+  //   seed 由 services/step-presets.js seedDefaultPresets() 在 bootstrap 时跑。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS step_model_presets (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      description TEXT,
+      config_json TEXT NOT NULL,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      updated_by_user_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `)
+
+  // M8.5: users.step_model_preset —— 用户选了哪个预设
+  //   NULL = 用默认 preset(is_default = 1 那条),向后兼容老用户。
+  if (!columnExists(db, 'users', 'step_model_preset')) {
+    db.exec(`ALTER TABLE users ADD COLUMN step_model_preset TEXT`)
+  }
+
   // M7:pending_iterations —— 跑完 diagnose 但用户还没决定 adopt/discard 的
   //    LLM 输出。之前放在 cookie-session 里,几 KB 的 JSON 把 Set-Cookie
   //    header 撑爆,Nginx proxy_buffer_size 8K 直接 502 Bad Gateway。

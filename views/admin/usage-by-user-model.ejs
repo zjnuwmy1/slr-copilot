@@ -1,0 +1,171 @@
+<%- include('../partials/header', { title }) %>
+
+<div class="mx-auto max-w-7xl px-4 py-6">
+  <header class="mb-4 flex flex-wrap items-end justify-between gap-3">
+    <div>
+      <p class="text-xs font-medium uppercase tracking-wider text-slate-400">管理</p>
+      <h1 class="mt-1 text-2xl font-bold text-slate-900">用量:用户 × 模型 矩阵</h1>
+      <p class="mt-1 text-sm text-slate-600">
+        从 usage_logs 聚合,每行 = 一个 (用户, 模型) 组合。
+        <a href="/admin/usage" class="ml-2 text-blue-700 underline">← 返回普通用量列表</a>
+      </p>
+    </div>
+    <!-- 时间段切换 -->
+    <div class="flex gap-1 text-sm">
+      <% ['7','30','90','all'].forEach(function(d) {
+           const active = d === days
+           const label = d === 'all' ? '全部' : ('最近 ' + d + ' 天')
+      %>
+        <a href="?days=<%= d %>"
+           class="rounded-lg <%= active ? 'bg-slate-900 text-white' : 'border border-slate-300 text-slate-700 hover:bg-slate-50' %> px-3 py-1.5">
+          <%= label %>
+        </a>
+      <% }) %>
+    </div>
+  </header>
+
+  <% if (cells.length === 0) { %>
+    <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">
+      所选时段无用量数据。换个时间段试试。
+    </div>
+  <% } else { %>
+
+    <!-- 全局摘要 -->
+    <div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <%
+        const totalCalls = cells.reduce((s, c) => s + c.calls, 0)
+        const totalErrors = cells.reduce((s, c) => s + c.errors, 0)
+        const totalInTokens = cells.reduce((s, c) => s + c.in_tokens, 0)
+        const totalOutTokens = cells.reduce((s, c) => s + c.out_tokens, 0)
+      %>
+      <div class="rounded-xl border border-slate-200 bg-white p-3">
+        <p class="text-[11px] uppercase tracking-wider text-slate-400">总调用</p>
+        <p class="mt-1 text-2xl font-semibold text-slate-900"><%= totalCalls %></p>
+      </div>
+      <div class="rounded-xl border border-rose-100 bg-rose-50/40 p-3">
+        <p class="text-[11px] uppercase tracking-wider text-rose-600">错误</p>
+        <p class="mt-1 text-2xl font-semibold text-rose-700"><%= totalErrors %>
+          <span class="ml-1 text-xs text-rose-600">(<%= totalCalls > 0 ? ((totalErrors/totalCalls)*100).toFixed(1) : 0 %>%)</span>
+        </p>
+      </div>
+      <div class="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+        <p class="text-[11px] uppercase tracking-wider text-blue-600">输入 token</p>
+        <p class="mt-1 text-2xl font-semibold text-blue-700"><%= totalInTokens.toLocaleString() %></p>
+      </div>
+      <div class="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+        <p class="text-[11px] uppercase tracking-wider text-emerald-600">输出 token</p>
+        <p class="mt-1 text-2xl font-semibold text-emerald-700"><%= totalOutTokens.toLocaleString() %></p>
+      </div>
+    </div>
+
+    <!-- 主矩阵 -->
+    <section class="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+      <table class="w-full text-sm" style="min-width: 1100px;">
+        <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+          <tr>
+            <th class="px-3 py-3 text-left">用户</th>
+            <th class="px-3 py-3 text-left">预设</th>
+            <th class="px-3 py-3 text-left">Provider</th>
+            <th class="px-3 py-3 text-left">模型</th>
+            <th class="px-3 py-3 text-right">调用</th>
+            <th class="px-3 py-3 text-right">成功 / 错</th>
+            <th class="px-3 py-3 text-right">in / out tokens</th>
+            <th class="px-3 py-3 text-right">总耗时</th>
+            <th class="px-3 py-3 text-left">最近调用</th>
+            <th class="px-3 py-3 text-left">action 分布</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          <% cells.forEach(function(c) {
+               const providerCls = c.provider === 'anthropic' ? 'bg-blue-100 text-blue-700' :
+                                   c.provider === 'openai' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
+          %>
+            <tr class="hover:bg-slate-50/50">
+              <td class="px-3 py-3 align-top">
+                <a href="/admin/usage?user=<%= encodeURIComponent(c.user_email) %>"
+                   class="text-sm font-medium text-slate-900 hover:text-blue-700 hover:underline">
+                  <%= c.user_email %>
+                </a>
+                <% if (c.user_name && c.user_name !== c.user_email) { %>
+                  <p class="text-[11px] text-slate-500"><%= c.user_name %></p>
+                <% } %>
+              </td>
+              <td class="px-3 py-3 align-top">
+                <% if (c.user_preset) { %>
+                  <span class="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-700"><%= c.user_preset %></span>
+                <% } else { %>
+                  <span class="text-[11px] text-slate-400">(默认)</span>
+                <% } %>
+              </td>
+              <td class="px-3 py-3 align-top">
+                <span class="rounded px-1.5 py-0.5 text-[10px] font-medium <%= providerCls %>"><%= c.provider %></span>
+              </td>
+              <td class="px-3 py-3 align-top">
+                <code class="font-mono text-[11px] text-slate-700"><%= c.model %></code>
+              </td>
+              <td class="px-3 py-3 align-top text-right font-mono"><%= c.calls %></td>
+              <td class="px-3 py-3 align-top text-right text-xs">
+                <span class="text-emerald-600"><%= c.success %></span> /
+                <span class="<%= c.errors > 0 ? 'text-rose-600 font-medium' : 'text-slate-400' %>"><%= c.errors %></span>
+              </td>
+              <td class="px-3 py-3 align-top text-right font-mono text-xs">
+                <%= c.in_tokens.toLocaleString() %> / <%= c.out_tokens.toLocaleString() %>
+              </td>
+              <td class="px-3 py-3 align-top text-right font-mono text-xs text-slate-500">
+                <%= (c.total_ms / 1000).toFixed(0) %>s
+              </td>
+              <td class="px-3 py-3 align-top text-[11px] text-slate-500">
+                <%= c.last_call_at ? c.last_call_at.replace('T', ' ').slice(0, 16) : '—' %>
+              </td>
+              <td class="px-3 py-3 align-top">
+                <% const actions = Object.entries(c.by_action || {}).sort((a, b) => b[1] - a[1]) %>
+                <% actions.forEach(function(pair, i) { %>
+                  <span class="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 mr-1 mb-1"><%= pair[0] %>:<%= pair[1] %></span>
+                <% }) %>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 模型分布小计 -->
+    <section class="mt-6 grid gap-4 lg:grid-cols-2">
+      <div class="rounded-2xl border border-slate-200 bg-white p-4">
+        <h3 class="text-sm font-semibold text-slate-800">按用户合计</h3>
+        <table class="mt-2 w-full text-sm">
+          <thead class="text-xs text-slate-500">
+            <tr><th class="text-left">用户</th><th class="text-right">调用</th><th class="text-right">in</th><th class="text-right">out</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <% userTotals.forEach(function(u) { %>
+              <tr><td class="py-1"><%= u.user_email %></td>
+                  <td class="text-right font-mono"><%= u.calls %></td>
+                  <td class="text-right font-mono text-xs"><%= u.in_tokens.toLocaleString() %></td>
+                  <td class="text-right font-mono text-xs"><%= u.out_tokens.toLocaleString() %></td></tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-4">
+        <h3 class="text-sm font-semibold text-slate-800">按模型合计</h3>
+        <table class="mt-2 w-full text-sm">
+          <thead class="text-xs text-slate-500">
+            <tr><th class="text-left">模型</th><th class="text-right">调用</th><th class="text-right">in</th><th class="text-right">out</th></tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <% modelTotals.forEach(function(m) { %>
+              <tr><td class="py-1 font-mono text-xs"><%= m.provider %> / <%= m.model %></td>
+                  <td class="text-right font-mono"><%= m.calls %></td>
+                  <td class="text-right font-mono text-xs"><%= m.in_tokens.toLocaleString() %></td>
+                  <td class="text-right font-mono text-xs"><%= m.out_tokens.toLocaleString() %></td></tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  <% } %>
+</div>
+
+<%- include('../partials/footer') %>

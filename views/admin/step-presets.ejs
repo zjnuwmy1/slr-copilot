@@ -1,0 +1,150 @@
+<%- include('../partials/header', { title }) %>
+
+<div class="mx-auto max-w-6xl px-4 py-6">
+  <header class="mb-6">
+    <p class="text-xs font-medium uppercase tracking-wider text-slate-400">超级管理员</p>
+    <h1 class="mt-1 text-2xl font-bold text-slate-900">步骤模型预设</h1>
+    <p class="mt-1 text-sm text-slate-600">
+      配置 3 套 step×模型×reasoning 方案。用户在 <a href="/account/preferences" class="text-blue-700 underline">/account/preferences</a> 选用,默认那套用于未自选的用户。
+    </p>
+  </header>
+
+  <!-- 三套并排对比表 -->
+  <section class="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+    <table class="w-full text-sm" style="min-width: 920px;">
+      <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+        <tr>
+          <th class="px-4 py-3 text-left">Step</th>
+          <% presets.forEach(function(p) { %>
+            <th class="px-4 py-3 text-left">
+              <%= p.label %>
+              <% if (p.is_default) { %><span class="ml-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">默认</span><% } %>
+            </th>
+          <% }) %>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <% stepKeys.forEach(function(step) { %>
+          <tr>
+            <td class="px-4 py-3 align-top">
+              <p class="font-medium text-slate-800"><%= stepSpecs[step].label %></p>
+              <p class="mt-0.5 text-xs text-slate-500"><%= stepSpecs[step].description %></p>
+            </td>
+            <% presets.forEach(function(p) {
+                 const m = p.config?.step_model?.[step] || '(未配)'
+                 const r = p.config?.step_reasoning?.[step] || '(未配)'
+            %>
+              <td class="px-4 py-3 align-top">
+                <p class="font-mono text-xs text-slate-700"><%= m %></p>
+                <p class="mt-0.5 text-xs text-slate-500">推理:<%= r %></p>
+              </td>
+            <% }) %>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 每个预设的编辑表单 -->
+  <% presets.forEach(function(p) { %>
+    <section class="mt-8 rounded-2xl border border-slate-200 bg-white p-6">
+      <header class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 class="text-lg font-semibold text-slate-900"><%= p.label %>
+            <% if (p.is_default) { %><span class="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">当前默认</span><% } %>
+          </h2>
+          <p class="mt-0.5 text-xs text-slate-500">ID: <code class="font-mono text-slate-700"><%= p.id %></code></p>
+        </div>
+        <% if (!p.is_default) { %>
+          <form method="post" action="/admin/step-presets/<%= p.id %>/set-default">
+            <button type="submit" class="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-100">
+              设为默认
+            </button>
+          </form>
+        <% } %>
+      </header>
+
+      <form method="post" action="/admin/step-presets/<%= p.id %>/update" class="mt-4 space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-600">标签</label>
+          <input type="text" name="label" value="<%= p.label %>" maxlength="80"
+                 class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600">说明</label>
+          <textarea name="description" rows="2" maxlength="400"
+                    class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><%= p.description || '' %></textarea>
+        </div>
+
+        <!-- 各 step 的模型 + reasoning -->
+        <div class="overflow-x-auto rounded-lg border border-slate-200">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
+              <tr>
+                <th class="px-3 py-2 text-left">Step</th>
+                <th class="px-3 py-2 text-left">模型</th>
+                <th class="px-3 py-2 text-left">推理强度</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <% stepKeys.forEach(function(step) {
+                   const curModel = p.config?.step_model?.[step] || ''
+                   const curReason = p.config?.step_reasoning?.[step] || ''
+              %>
+                <tr>
+                  <td class="px-3 py-2 align-middle">
+                    <span class="text-sm text-slate-700"><%= stepSpecs[step].label %></span>
+                    <p class="text-[11px] text-slate-400"><%= step %></p>
+                  </td>
+                  <td class="px-3 py-2">
+                    <select name="model_<%= step %>" class="block w-full rounded border border-slate-300 px-2 py-1 text-xs">
+                      <option value="">(用默认 tier)</option>
+                      <optgroup label="别名">
+                        <option value="flagship" <%= curModel === 'flagship' ? 'selected' : '' %>>flagship(旗舰)</option>
+                        <option value="standard" <%= curModel === 'standard' ? 'selected' : '' %>>standard(平衡)</option>
+                        <option value="light" <%= curModel === 'light' ? 'selected' : '' %>>light(轻便)</option>
+                      </optgroup>
+                      <% Object.keys(availableModels).forEach(function(provider) { %>
+                        <optgroup label="<%= provider.toUpperCase() %>">
+                          <% availableModels[provider].forEach(function(m) { %>
+                            <option value="<%= m.id %>" <%= curModel === m.id ? 'selected' : '' %>><%= m.label %></option>
+                          <% }) %>
+                        </optgroup>
+                      <% }) %>
+                    </select>
+                  </td>
+                  <td class="px-3 py-2">
+                    <select name="reasoning_<%= step %>" class="block w-full rounded border border-slate-300 px-2 py-1 text-xs">
+                      <option value="">(用 step 默认)</option>
+                      <optgroup label="Anthropic 思考档(也会翻译到 OpenAI)">
+                        <% reasoningLevels.anthropic.forEach(function(r) { %>
+                          <option value="<%= r.id %>" <%= curReason === r.id ? 'selected' : '' %>><%= r.label %></option>
+                        <% }) %>
+                      </optgroup>
+                      <optgroup label="OpenAI 推理 effort(也会翻译到 Anthropic)">
+                        <% reasoningLevels.openai.forEach(function(r) { %>
+                          <option value="<%= r.id %>" <%= curReason === r.id ? 'selected' : '' %>><%= r.label %></option>
+                        <% }) %>
+                      </optgroup>
+                    </select>
+                  </td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flex items-center justify-between pt-2 border-t border-slate-100">
+          <p class="text-xs text-slate-500">
+            <% if (p.updated_at) { %>上次更新:<%= p.updated_at %><% } %>
+          </p>
+          <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+            保存 <%= p.label %>
+          </button>
+        </div>
+      </form>
+    </section>
+  <% }) %>
+</div>
+
+<%- include('../partials/footer') %>

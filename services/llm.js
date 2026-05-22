@@ -48,6 +48,7 @@ const LIGHT_MODEL = {
 }
 
 import { resolveStepModel, resolveStepReasoning, getSetting, inferProviderFromModelName } from './settings.js'
+import { getEffectiveConfigForUser as stepPresetsGetEffectiveConfigForUser } from './step-presets.js'
 
 /**
  * 从模型字符串里提取语义。优先级:
@@ -58,7 +59,7 @@ import { resolveStepModel, resolveStepReasoning, getSetting, inferProviderFromMo
  *
  * 这样 admin 在 UI 改"协议生成用什么模型",立刻生效;同时保留旧的 'heavy'/'light' 调用方代码兼容。
  */
-function resolveModel(db, { model, provider, actionType }) {
+function resolveModel(db, { model, provider, actionType, userId }) {
   const alias = (model || 'heavy').toString().toLowerCase()
   const isAlias = ['heavy', 'light', 'flagship', 'standard', ''].includes(alias)
 
@@ -66,12 +67,12 @@ function resolveModel(db, { model, provider, actionType }) {
     // 调用方明确指定了具体型号,尊重它
     return model
   }
-  // alias → 走 settings resolver
+  // alias → 走 settings resolver(带 userId,先走 preset)
   try {
-    const resolved = resolveStepModel(db, { actionType, provider })
+    const resolved = resolveStepModel(db, { actionType, provider, userId })
     if (resolved) return resolved
   } catch (e) {
-    // settings 表不存在或异常 → fallback 到 env 默认
+    // settings / preset 表不存在或异常 → fallback 到 env 默认
   }
   // 最后兜底 env 默认
   if (alias === 'light') return LIGHT_MODEL[provider]
@@ -357,12 +358,24 @@ export async function runLlm(db, opts) {
   //    否则 pickCredential 会默认拿 anthropic,后续 resolveStepModel 看到
   //    gpt-5.5 不在 anthropic 列表 → 跨 provider 翻译成 claude-opus 系列,
   //    用户的 OpenAI 选择被静默改成 Claude。
+  // 决定 effective preferredProvider — 用于 pickCredential 优先抓哪家凭证。
+  // 优先级:调用方显式 preferredProvider > 用户 preset 配置的模型推断 > 旧 system_settings 推断
   let effectivePreferredProvider = preferredProvider
   if (!effectivePreferredProvider && actionType) {
     try {
-      const configured = getSetting(db, `step_model.${actionType}`)
-      const p = inferProviderFromModelName(configured)
-      if (p) effectivePreferredProvider = p
+      // 1) 用户 preset 里这个 step 配的什么型号?反查 provider
+      if (userId) {
+        const cfg = stepPresetsGetEffectiveConfigForUser(db, userId)
+        const m = cfg?.step_model?.[actionType]
+        const p = inferProviderFromModelName(m)
+        if (p) effectivePreferredProvider = p
+      }
+      // 2) 兜底:旧 system_settings.step_model.* 推断
+      if (!effectivePreferredProvider) {
+        const configured = getSetting(db, `step_model.${actionType}`)
+        const p = inferProviderFromModelName(configured)
+        if (p) effectivePreferredProvider = p
+      }
     } catch { /* settings 表异常 — 走默认 */ }
   }
   const pick = pickCredential(db, {
@@ -415,9 +428,10 @@ export async function runLlm(db, opts) {
   }
 
   // 4. 解析模型 + 思考强度(后者会自动按 provider 翻译)
-  const model = resolveModel(db, { model: modelHint, provider: cred.provider, actionType })
+  //    传 userId — 解析时会优先看用户的 step_model preset(高性能/平衡/经济)
+  const model = resolveModel(db, { model: modelHint, provider: cred.provider, actionType, userId })
   const reasoning = (() => {
-    try { return resolveStepReasoning(db, { actionType, provider: cred.provider }) }
+    try { return resolveStepReasoning(db, { actionType, provider: cred.provider, userId }) }
     catch { return null }
   })()
 
