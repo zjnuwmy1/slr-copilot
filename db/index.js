@@ -36,4 +36,28 @@ function runMigrations(db) {
     db.exec(`ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0`)
     db.exec(`CREATE INDEX IF NOT EXISTS idx_users_super_admin ON users(is_super_admin)`)
   }
+
+  // M2:projects.search_locked_at —— 用户落盘最终检索方案的时间戳
+  if (!columnExists(db, 'projects', 'search_locked_at')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN search_locked_at TEXT`)
+  }
+
+  // M3:final_search_records —— 每个项目 × 每个目标库的"最终用了什么检索式"快照
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS final_search_records (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      database_name TEXT NOT NULL,
+      used INTEGER NOT NULL DEFAULT 0,
+      strategy_id TEXT,
+      query_text TEXT,
+      result_count INTEGER,
+      search_date TEXT,
+      notes TEXT,
+      locked_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      UNIQUE (project_id, database_name)
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_final_search_project ON final_search_records(project_id)`)
 }

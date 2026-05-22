@@ -69,6 +69,14 @@ router.post(
     if (!project) {
       return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
     }
+    // 上传 CSV 必须先锁定检索方案(PRISMA 报告需要 source-of-truth 的查询快照)
+    if (!project.search_locked_at) {
+      req.session.flash = {
+        type: 'error',
+        message: '请先在「检索式」页锁定最终方案(标明每个库实际用了什么检索式 + 命中数 + 日期)再上传 CSV。',
+      }
+      return res.redirect(`/projects/${project.id}/search`)
+    }
     req._project = project
     next()
   },

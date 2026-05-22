@@ -36,6 +36,7 @@ import {
   normalizeRecommendOutput,
 } from '../../services/prompts/search-recommend.js'
 import { getProjectProgress } from '../../services/prisma.js'
+import { getLockState, lockSearch, unlockSearch } from '../../services/search-lock.js'
 
 const router = express.Router({ mergeParams: true })
 
@@ -210,6 +211,9 @@ router.get('/:id/search', (req, res) => {
     delete req.session.searchRecommendation
   }
 
+  // 锁定状态(用户即将上传 CSV 前的最终方案落盘)
+  const lockState = getLockState(db, project)
+
   res.render('projects/search', {
     title: `检索式 · ${project.title}`,
     project,
@@ -222,6 +226,7 @@ router.get('/:id/search', (req, res) => {
     loggedCount: explorationLogged,
     latestMainBatch,
     latestMainVersion,
+    lockState,
     dbLabel: DB_LABEL,
     qtLabel: QT_LABEL,
     dbOrder: dbOrderForView,
@@ -828,6 +833,98 @@ router.get('/:id/search/export.md', (req, res) => {
   res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
   res.send(body)
+})
+
+// ============================================================
+// POST /projects/:id/search/lock
+//   表单字段:database_X__used / __query_text / __strategy_id / __result_count
+//             / __search_date / __notes(X = 'wos' / 'scopus' / 'pubmed')
+//   把"每个目标库实际用了什么检索式"快照写到 final_search_records,
+//   并标记 projects.search_locked_at。
+// ============================================================
+router.post('/:id/search/lock', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  const targetDatabases = resolveTargetDatabases(project.databases)
+
+  // 从 form body 抽取每个库的字段(input name = "<db>__<field>")
+  const entries = []
+  for (const d of targetDatabases) {
+    const usedRaw = req.body[`${d}__used`]
+    const used = usedRaw === '1' || usedRaw === 'on' || usedRaw === 'true'
+    entries.push({
+      database: d,
+      used,
+      strategy_id: req.body[`${d}__strategy_id`] || null,
+      query_text: req.body[`${d}__query_text`] || '',
+      result_count: req.body[`${d}__result_count`],
+      search_date: req.body[`${d}__search_date`] || '',
+      notes: req.body[`${d}__notes`] || '',
+    })
+  }
+
+  const result = lockSearch(db, project.id, entries, targetDatabases)
+  if (!result.ok) {
+    audit(db, req, {
+      eventType: 'search_lock_failed',
+      userId: req.user.id,
+      projectId: project.id,
+      payload: { error: result.error, target_databases: targetDatabases },
+    })
+    req.session.flash = { type: 'error', message: `锁定失败:${result.error}` }
+    return res.redirect(`/projects/${project.id}/search`)
+  }
+
+  audit(db, req, {
+    eventType: 'search_locked',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: {
+      written: result.written,
+      target_databases: targetDatabases,
+      used_databases: entries.filter((e) => e.used).map((e) => e.database),
+    },
+  })
+
+  const usedSummary = entries
+    .filter((e) => e.used)
+    .map((e) => `${e.database.toUpperCase()}${
+      e.result_count ? ` (${e.result_count})` : ''
+    }`)
+    .join(' · ')
+  req.session.flash = {
+    type: 'success',
+    message: `检索方案已锁定 · 使用的库:${usedSummary || '无'} · 现在可以上传 CSV。`,
+  }
+  res.redirect(`/projects/${project.id}/search`)
+})
+
+// ============================================================
+// POST /projects/:id/search/unlock
+//   解锁(允许用户继续修改后重锁)。final_search_records 保留作为历史。
+// ============================================================
+router.post('/:id/search/unlock', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  if (!project.search_locked_at) {
+    req.session.flash = { type: 'error', message: '当前未锁定,无需解锁。' }
+    return res.redirect(`/projects/${project.id}/search`)
+  }
+  unlockSearch(db, project.id)
+  audit(db, req, {
+    eventType: 'search_unlocked',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: { previously_locked_at: project.search_locked_at },
+  })
+  req.session.flash = { type: 'success', message: '检索方案已解锁,可重新调整。' }
+  res.redirect(`/projects/${project.id}/search`)
 })
 
 export default router
