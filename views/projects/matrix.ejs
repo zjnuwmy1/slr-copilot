@@ -1,0 +1,315 @@
+<%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
+<%- include('partials/project-header', { project }) %>
+
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('partials/stepper', { project, progress: progress || { stepStatus: {}, prismaProgress: { donePct: 0, done: 0, total: 42 } }, currentStep: 'extraction' }) %>
+
+  <section class="space-y-6 min-w-0">
+    <%- include('partials/step-banner', {
+      stepNum: 4,
+      stepTitle: '文献矩阵 — 用户主导填写',
+      stepIntro: '每行一篇纳入文献,每列一个维度。可下载 XLSX 模板线下整理后上传,也可直接在表格里编辑。每列旁边的小图标里有可复制的 AI prompt,粘贴到你自己的 AI(任何一个)再喂入论文 PDF/摘要,就能让它帮你整理对应字段。',
+      prismaItems: '#10a Data collection · #10b Data items · #12 Effect measures',
+    }) %>
+
+    <!-- 切回 AI 抽取的链接 -->
+    <div class="rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-2 text-xs text-slate-600 flex items-center justify-between">
+      <span>想让 AI 自动抽 JSON?</span>
+      <a href="/projects/<%= project.id %>/extraction" class="text-slate-700 underline hover:text-slate-900">改用 AI 抽取(Agent N)→</a>
+    </div>
+
+    <!-- 操作条 -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-4">
+      <div class="flex flex-wrap items-center gap-3">
+        <a href="/projects/<%= project.id %>/matrix/template.xlsx"
+           class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+          ↓ 下载 XLSX 模板
+        </a>
+
+        <form method="post" action="/projects/<%= project.id %>/matrix/upload-xlsx"
+              enctype="multipart/form-data" class="flex items-center gap-2">
+          <input type="file" name="xlsx_file" accept=".xlsx,.xls" required
+                 class="text-xs file:mr-2 file:rounded file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-slate-700 hover:file:bg-slate-200" />
+          <button type="submit"
+                  class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">
+            ↑ 上传 XLSX
+          </button>
+          <span class="text-[11px] text-slate-400">≤ <%= maxUploadMb %>MB</span>
+        </form>
+
+        <button type="button" id="btn-add-col"
+                class="ml-auto rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+          + 加列
+        </button>
+      </div>
+
+      <!-- 加列表单(默认隐藏) -->
+      <form id="add-col-form" method="post" action="/projects/<%= project.id %>/matrix/columns/add"
+            class="hidden mt-3 grid grid-cols-1 gap-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3 sm:grid-cols-2">
+        <div>
+          <label class="text-[11px] text-slate-500">列 key(英文,snake_case)</label>
+          <input type="text" name="key" required maxlength="60"
+                 pattern="[a-z][a-z0-9_]*" placeholder="follow_up_duration"
+                 class="mt-0.5 block w-full rounded-md border-slate-300 text-sm" />
+        </div>
+        <div>
+          <label class="text-[11px] text-slate-500">显示名(中文)</label>
+          <input type="text" name="label" required maxlength="80" placeholder="随访时长"
+                 class="mt-0.5 block w-full rounded-md border-slate-300 text-sm" />
+        </div>
+        <div class="sm:col-span-2">
+          <label class="text-[11px] text-slate-500">列说明(可选)</label>
+          <input type="text" name="description" maxlength="200" placeholder="例如:周或月,单位写清"
+                 class="mt-0.5 block w-full rounded-md border-slate-300 text-sm" />
+        </div>
+        <div class="sm:col-span-2">
+          <label class="text-[11px] text-slate-500">AI prompt 模板(可选,用户复制后粘到自己的 AI)</label>
+          <textarea name="ai_prompt_template" rows="3" maxlength="2000"
+                    placeholder="从这篇论文里提取&#10;{{title}}&#10;{{abstract}}"
+                    class="mt-0.5 block w-full rounded-md border-slate-300 text-xs font-mono"></textarea>
+        </div>
+        <div class="sm:col-span-2 flex items-center gap-3">
+          <label class="text-xs text-slate-600">
+            <input type="checkbox" name="is_quantitative" value="1" /> 这是数字列
+          </label>
+          <div class="ml-auto flex gap-2">
+            <button type="button" id="btn-cancel-add-col"
+                    class="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-white">取消</button>
+            <button type="submit"
+                    class="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700">保存列</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <!-- 网格 -->
+    <% if (rows.length === 0) { %>
+      <div class="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+        还没有纳入的文献。请先到「筛选」步把要分析的论文标为 include。
+      </div>
+    <% } else { %>
+      <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+        <table class="min-w-full text-sm" id="matrix-table">
+          <thead class="border-b border-slate-200 bg-slate-50/80 text-xs font-medium uppercase tracking-wide text-slate-500">
+            <tr>
+              <th class="sticky left-0 z-10 bg-slate-50/80 px-3 py-2 text-left" style="min-width: 240px;">文献</th>
+              <% columns.forEach((col, ci) => { %>
+                <th class="px-2 py-2 text-left" style="min-width: 180px;">
+                  <div class="flex items-center gap-1.5">
+                    <span class="font-medium text-slate-700"><%= col.label %></span>
+                    <% if (col.is_quantitative) { %>
+                      <span class="rounded bg-blue-50 px-1 text-[10px] text-blue-600">#</span>
+                    <% } %>
+                    <button type="button"
+                            class="ml-auto text-slate-400 hover:text-slate-700 prompt-btn"
+                            data-col-key="<%= col.key %>"
+                            data-col-label="<%= col.label %>"
+                            title="复制 AI prompt"
+                            <%= col.ai_prompt_template ? '' : 'disabled' %>>
+                      <span aria-hidden="true">📋</span>
+                    </button>
+                    <% if (!col.is_default) { %>
+                      <form method="post" action="/projects/<%= project.id %>/matrix/columns/<%= col.id %>/delete"
+                            class="inline" onsubmit="return confirm('删掉列「<%= col.label %>」?(填好的该列数据会保留但不再显示)');">
+                        <button type="submit"
+                                class="text-slate-400 hover:text-rose-600"
+                                title="删除自定义列">×</button>
+                      </form>
+                    <% } %>
+                  </div>
+                  <% if (col.description) { %>
+                    <p class="mt-0.5 text-[10px] font-normal normal-case text-slate-400"><%= col.description %></p>
+                  <% } %>
+                  <!-- prompt 数据藏在隐藏元素里(避免 attribute 太长) -->
+                  <% if (col.ai_prompt_template) { %>
+                    <template data-prompt-for="<%= col.key %>"><%= col.ai_prompt_template %></template>
+                  <% } %>
+                </th>
+              <% }) %>
+              <th class="px-2 py-2 text-left" style="min-width: 90px;">完成度</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <% rows.forEach((row, ri) => { %>
+              <tr class="hover:bg-slate-50/30" data-record-id="<%= row.record.id %>">
+                <td class="sticky left-0 z-10 bg-white px-3 py-3 align-top">
+                  <p class="font-medium text-slate-800 line-clamp-2"><%= row.record.title || '(无标题)' %></p>
+                  <p class="mt-0.5 text-[11px] text-slate-500">
+                    <%= (row.record.authors_text || '').slice(0, 50) %><%= (row.record.authors_text || '').length > 50 ? '…' : '' %>
+                    <% if (row.record.year) { %> · <%= row.record.year %><% } %>
+                  </p>
+                  <% if (row.record.doi) { %>
+                    <a href="https://doi.org/<%= row.record.doi %>" target="_blank" rel="noopener"
+                       class="mt-0.5 inline-block text-[10px] text-slate-400 hover:text-slate-700">
+                      <%= row.record.doi %>
+                    </a>
+                  <% } %>
+                </td>
+                <% columns.forEach((col) => {
+                     const val = row.fields[col.key] || ''
+                %>
+                  <td class="px-2 py-2 align-top">
+                    <% if (col.is_quantitative) { %>
+                      <input type="text" inputmode="decimal"
+                             class="matrix-cell w-full rounded-md border-slate-200 px-2 py-1 text-sm focus:border-slate-400 focus:ring-0"
+                             data-col-key="<%= col.key %>"
+                             value="<%= val %>"
+                             placeholder="—" />
+                    <% } else { %>
+                      <textarea rows="2"
+                                class="matrix-cell w-full rounded-md border-slate-200 px-2 py-1 text-sm focus:border-slate-400 focus:ring-0"
+                                data-col-key="<%= col.key %>"
+                                placeholder="—"><%= val %></textarea>
+                    <% } %>
+                  </td>
+                <% }) %>
+                <td class="px-2 py-3 align-top">
+                  <%
+                    const pct = Math.round((row.completeness || 0) * 100)
+                    const pctCls = pct >= 80 ? 'bg-emerald-500' : pct >= 40 ? 'bg-amber-500' : 'bg-slate-300'
+                  %>
+                  <div class="text-[11px] text-slate-600 font-mono completeness-pct"><%= pct %>%</div>
+                  <div class="mt-1 h-1 w-16 overflow-hidden rounded-full bg-slate-100">
+                    <div class="h-full <%= pctCls %> completeness-bar" style="width: <%= pct %>%"></div>
+                  </div>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    <% } %>
+
+    <p class="text-[11px] text-slate-400">
+      提示:每个单元格离开焦点(失焦或 Tab)自动保存。数字列不限制只输入数字 —— 也可以填"全文需查"这种文本。
+    </p>
+  </section>
+</div>
+
+<!-- Prompt 弹层 -->
+<div id="prompt-modal" class="fixed inset-0 z-50 hidden bg-slate-900/40 backdrop-blur-sm" role="dialog" aria-modal="true">
+  <div class="absolute left-1/2 top-1/2 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-6 shadow-2xl">
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <p class="text-[11px] uppercase tracking-wider text-slate-400">AI Prompt(可复制)</p>
+        <h3 class="mt-1 text-base font-semibold text-slate-800" id="prompt-modal-label">—</h3>
+      </div>
+      <button type="button" id="prompt-modal-close"
+              class="text-slate-400 hover:text-slate-700">✕</button>
+    </div>
+    <p class="mt-2 text-xs text-slate-500">
+      复制下面这段,粘到你常用的 AI(Claude / ChatGPT / Gemini / DeepSeek 等),把 <code class="rounded bg-slate-100 px-1">{{title}}</code> / <code class="rounded bg-slate-100 px-1">{{abstract}}</code> / <code class="rounded bg-slate-100 px-1">{{doi}}</code> 替换成目标论文的内容(或者直接告诉 AI 你要查的论文,它会问你要)。
+    </p>
+    <textarea id="prompt-modal-text" rows="10" readonly
+              class="mt-3 w-full rounded-lg border-slate-200 bg-slate-50 p-3 font-mono text-xs"></textarea>
+    <div class="mt-3 flex justify-end gap-2">
+      <button type="button" id="prompt-modal-copy"
+              class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
+        复制到剪贴板
+      </button>
+    </div>
+    <p id="prompt-modal-msg" class="mt-2 text-right text-xs text-emerald-600 opacity-0 transition-opacity"></p>
+  </div>
+</div>
+
+<script>
+(function() {
+  // ---------- 加列表单显隐 ----------
+  const addBtn = document.getElementById('btn-add-col')
+  const cancelBtn = document.getElementById('btn-cancel-add-col')
+  const addForm = document.getElementById('add-col-form')
+  if (addBtn && addForm) {
+    addBtn.addEventListener('click', () => { addForm.classList.remove('hidden'); addBtn.classList.add('hidden') })
+    cancelBtn?.addEventListener('click', () => { addForm.classList.add('hidden'); addBtn.classList.remove('hidden') })
+  }
+
+  // ---------- Prompt 弹层 ----------
+  const modal = document.getElementById('prompt-modal')
+  const modalLabel = document.getElementById('prompt-modal-label')
+  const modalText = document.getElementById('prompt-modal-text')
+  const modalMsg = document.getElementById('prompt-modal-msg')
+  document.getElementById('prompt-modal-close')?.addEventListener('click', () => modal.classList.add('hidden'))
+  modal?.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden') })
+
+  document.querySelectorAll('.prompt-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const key = btn.dataset.colKey
+      const label = btn.dataset.colLabel
+      const tpl = document.querySelector('template[data-prompt-for="' + key + '"]')
+      if (!tpl) return
+      modalLabel.textContent = label
+      modalText.value = tpl.innerHTML.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+      modalMsg.style.opacity = 0
+      modal.classList.remove('hidden')
+    })
+  })
+
+  document.getElementById('prompt-modal-copy')?.addEventListener('click', async () => {
+    const text = modalText.value
+    try {
+      await navigator.clipboard.writeText(text)
+      modalMsg.textContent = '已复制 ✓'
+      modalMsg.style.opacity = 1
+    } catch {
+      // fallback:选中文本让用户手动复制
+      modalText.select()
+      modalMsg.textContent = '请按 Cmd/Ctrl+C 复制'
+      modalMsg.style.opacity = 1
+    }
+    setTimeout(() => { modalMsg.style.opacity = 0 }, 2500)
+  })
+
+  // ---------- Inline 编辑:blur 自动保存 ----------
+  const projectId = <%- JSON.stringify(project.id) %>
+
+  function saveCell(cell) {
+    const row = cell.closest('tr')
+    if (!row) return
+    const recordId = row.dataset.recordId
+    const key = cell.dataset.colKey
+    if (!recordId || !key) return
+    const value = cell.value
+    if (cell._lastSaved === value) return  // 没变就不存
+
+    cell.classList.add('ring-1', 'ring-blue-300')
+
+    fetch('/projects/' + projectId + '/matrix/' + recordId + '/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: { [key]: value } }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        cell.classList.remove('ring-1', 'ring-blue-300')
+        if (data && data.ok) {
+          cell._lastSaved = value
+          cell.classList.add('ring-1', 'ring-emerald-300')
+          setTimeout(() => cell.classList.remove('ring-1', 'ring-emerald-300'), 700)
+          // 更新行完成度
+          const pctEl = row.querySelector('.completeness-pct')
+          const bar = row.querySelector('.completeness-bar')
+          if (pctEl && typeof data.completeness === 'number') {
+            const pct = Math.round(data.completeness * 100)
+            pctEl.textContent = pct + '%'
+            if (bar) bar.style.width = pct + '%'
+          }
+        } else {
+          cell.classList.add('ring-1', 'ring-rose-400')
+          setTimeout(() => cell.classList.remove('ring-1', 'ring-rose-400'), 1500)
+        }
+      })
+      .catch(() => {
+        cell.classList.remove('ring-1', 'ring-blue-300')
+        cell.classList.add('ring-1', 'ring-rose-400')
+        setTimeout(() => cell.classList.remove('ring-1', 'ring-rose-400'), 1500)
+      })
+  }
+
+  document.querySelectorAll('.matrix-cell').forEach((cell) => {
+    cell._lastSaved = cell.value
+    cell.addEventListener('blur', () => saveCell(cell))
+  })
+})()
+</script>
+
+<%- include('../partials/footer') %>

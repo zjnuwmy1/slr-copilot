@@ -33,6 +33,12 @@
       prismaItems: '#10a Data collection · #10b Data items · #12 Effect measures · #18 Risk of bias data',
     }) %>
 
+    <!-- Agent V 替代视图入口:让用户主导填扁平矩阵 -->
+    <a href="/projects/<%= project.id %>/matrix"
+       class="block rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3 text-sm text-slate-700 hover:border-slate-400 hover:bg-white">
+      → 改用<strong class="text-slate-900">文献矩阵</strong>(用户主导填写,每列附可复制 prompt;适合自己拿 AI 整理后填扁平表)
+    </a>
+
     <!-- 统计卡 -->
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
       <div class="rounded-xl border border-slate-200 bg-white p-4">

@@ -164,6 +164,22 @@ export function getSectionSystem(section) {
 }
 
 /**
+ * Phase 9 Agent W:把"目标期刊模板"约束拼到 system message 末尾。
+ *
+ * 调用方:`routes/projects/report.js` 在 runLlm 之前用这个函数包装 system。
+ * 若 styleHint 为空字符串/null,直接返回原 system(零回归)。
+ *
+ * @param {string} system    原 SECTION_SYSTEMS[section] 内容
+ * @param {string|null} styleHint  来自 journal-template 的 buildSectionStyleHint() 输出
+ * @returns {string} 拼接后的 system
+ */
+export function augmentSystemWithTemplate(system, styleHint) {
+  if (!system) return system
+  if (!styleHint || typeof styleHint !== 'string' || !styleHint.trim()) return system
+  return system + '\n\n' + styleHint.trim() + '\n'
+}
+
+/**
  * 标准 9 章节顺序(References 不在这里,导出时单独拼)。
  */
 export const SECTION_ORDER = [

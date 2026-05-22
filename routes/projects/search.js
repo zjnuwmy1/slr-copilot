@@ -27,6 +27,11 @@ import {
   SEARCH_DATABASES,
   SEARCH_QUERY_TYPES,
 } from '../../services/prompts/search.js'
+import {
+  RECOMMEND_SYSTEM,
+  buildRecommendPrompt,
+  normalizeRecommendOutput,
+} from '../../services/prompts/search-recommend.js'
 import { getProjectProgress } from '../../services/prisma.js'
 
 const router = express.Router({ mergeParams: true })
@@ -159,6 +164,48 @@ router.get('/:id/search', (req, res) => {
     console.error('[search] getProjectProgress failed:', e.message)
   }
 
+  // 已回填命中数的条数(用于 UI 上"还差几条才能跑推荐"的提示)
+  const loggedCount = latestBatch.filter((s) => s.result_count != null).length
+
+  // ephemeral 推荐结果 — 仅当本次 redirect 来自 recommend-best 时存在
+  let recommendation = null
+  if (req.session && req.session.searchRecommendation
+      && req.session.searchRecommendation.projectId === project.id) {
+    const rec = req.session.searchRecommendation
+    // 把 strategy_id 拼成 view 用的完整对象
+    const byId = new Map(latestBatch.map((s) => [s.id, s]))
+    const decorate = (id) => {
+      const s = byId.get(id)
+      if (!s) return null
+      return {
+        id: s.id,
+        database_name: s.database_name,
+        query_type: s.query_type,
+        result_count: s.result_count,
+        rationale: s.rationale,
+        dbLabel: DB_LABEL[s.database_name] || s.database_name,
+        qtLabel: QT_LABEL[s.query_type] || s.query_type,
+      }
+    }
+    recommendation = {
+      primary: {
+        ...decorate(rec.data.primary_choice.strategy_id),
+        reason: rec.data.primary_choice.reason,
+      },
+      secondary: rec.data.secondary_choices
+        .map((sc) => {
+          const d = decorate(sc.strategy_id)
+          return d ? { ...d, role: sc.role, reason: sc.reason } : null
+        })
+        .filter(Boolean),
+      warnings: rec.data.warnings,
+      estimated_workload: rec.data.estimated_screening_workload,
+      durationMs: rec.durationMs,
+      model: rec.model,
+    }
+    delete req.session.searchRecommendation
+  }
+
   res.render('projects/search', {
     title: `检索式 · ${project.title}`,
     project,
@@ -168,6 +215,8 @@ router.get('/:id/search', (req, res) => {
     latestVersion,
     byDatabase,            // 仅最新一批分组
     progress,
+    loggedCount,
+    recommendation,
     dbLabel: DB_LABEL,
     qtLabel: QT_LABEL,
     dbOrder: SEARCH_DATABASES,
@@ -405,6 +454,141 @@ router.post('/:id/search/:strategyId/notes', (req, res) => {
   })
 
   req.session.flash = { type: 'success', message: '备注已保存。' }
+  res.redirect(`/projects/${project.id}/search`)
+})
+
+// ============================================================
+// POST /projects/:id/search/recommend-best
+//   基于已回填的命中数,让 LLM 推荐"主检索"。
+//   推荐结果纯 ephemeral,放在 session.searchRecommendation,
+//   下次刷新 GET /search 时被 pop 并展示。
+// ============================================================
+router.post('/:id/search/recommend-best', async (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+
+  const strategies = listStrategies(db, project.id)
+  const latestVersion = strategies.length ? strategies[0].version : null
+  const latestBatch = latestVersion == null
+    ? []
+    : strategies.filter((s) => s.version === latestVersion)
+  const logged = latestBatch.filter((s) => s.result_count != null)
+
+  if (logged.length < 3) {
+    req.session.flash = {
+      type: 'error',
+      message: `至少需要 3 条检索式回填命中数,才能让 AI 推荐(当前 ${logged.length} 条)。`,
+    }
+    return res.redirect(`/projects/${project.id}/search`)
+  }
+
+  audit(db, req, {
+    eventType: 'search_recommend_requested',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: { logged_count: logged.length, version: latestVersion },
+  })
+
+  const userPrompt = buildRecommendPrompt({
+    topic: project.topic,
+    strategies: logged.map((s) => ({
+      id: s.id,
+      database_name: s.database_name,
+      query_type: s.query_type,
+      result_count: s.result_count,
+      rationale: s.rationale,
+      query_text: s.query_text,
+    })),
+  })
+
+  let result
+  try {
+    result = await runLlm(db, {
+      userId: req.user.id,
+      actionType: 'search_recommend',
+      projectId: project.id,
+      system: RECOMMEND_SYSTEM,
+      prompt: userPrompt,
+      expectJson: true,
+      model: 'standard',
+      maxTokens: 1024,
+      timeoutMs: 60_000,
+    })
+  } catch (e) {
+    console.error('[search/recommend-best] runLlm threw:', e)
+    req.session.flash = {
+      type: 'error',
+      message: `AI 推荐失败:${(e?.message || String(e)).slice(0, 200)}`,
+    }
+    return res.redirect(`/projects/${project.id}/search`)
+  }
+
+  if (!result.ok) {
+    audit(db, req, {
+      eventType: 'search_recommend_failed',
+      userId: req.user.id,
+      projectId: project.id,
+      payload: { status: result.status, error: (result.error || '').slice(0, 300) },
+    })
+    req.session.flash = {
+      type: 'error',
+      message: `AI 推荐失败:${result.status} — ${(result.error || '').slice(0, 200)}`,
+    }
+    return res.redirect(`/projects/${project.id}/search`)
+  }
+
+  const validIds = new Set(logged.map((s) => s.id))
+  const normalized = normalizeRecommendOutput(result.data || null, validIds)
+
+  if (!normalized.ok) {
+    audit(db, req, {
+      eventType: 'search_recommend_failed',
+      userId: req.user.id,
+      projectId: project.id,
+      payload: {
+        status: 'normalize_failed',
+        error: normalized.error,
+        had_json: !!result.data,
+        model: result.model,
+      },
+    })
+    req.session.flash = {
+      type: 'error',
+      message: `AI 推荐结果无效:${normalized.error}`,
+    }
+    return res.redirect(`/projects/${project.id}/search`)
+  }
+
+  // 存入 session,供 GET /search 渲染时 pop
+  req.session.searchRecommendation = {
+    projectId: project.id,
+    version: latestVersion,
+    data: normalized.data,
+    durationMs: result.durationMs,
+    model: result.model,
+    createdAt: Date.now(),
+  }
+
+  audit(db, req, {
+    eventType: 'search_recommended',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: {
+      version: latestVersion,
+      model: result.model,
+      provider: result.provider,
+      duration_ms: result.durationMs,
+      logged_count: logged.length,
+      primary_strategy_id: normalized.data.primary_choice.strategy_id,
+      secondary_count: normalized.data.secondary_choices.length,
+      warnings_count: normalized.data.warnings.length,
+      estimated_workload: normalized.data.estimated_screening_workload,
+    },
+  })
+
   res.redirect(`/projects/${project.id}/search`)
 })
 

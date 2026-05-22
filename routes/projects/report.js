@@ -25,6 +25,7 @@ import {
   SECTION_LABELS,
   buildSectionUserPrompt,
   normalizeSectionOutput,
+  augmentSystemWithTemplate,
 } from '../../services/prompts/drafting.js'
 import {
   computePrismaFlow,
@@ -32,6 +33,17 @@ import {
   renderPrismaTextSummary,
 } from '../../services/prisma-flow.js'
 import { getProjectProgress, getChecklistItems } from '../../services/prisma.js'
+import {
+  getJournalTemplate,
+  buildSectionStyleHint,
+} from '../../services/journal-template.js'
+import {
+  generateYearTrendData,
+  generateEvidenceMapData,
+  generateFigurePrompts,
+  renderYearTrendSvg,
+  renderEvidenceMapSvg,
+} from '../../services/figures.js'
 
 const router = express.Router({ mergeParams: true })
 
@@ -207,6 +219,24 @@ router.get('/:id/report', (req, res) => {
   const progress = (() => { try { return getProjectProgress(db, project.id) } catch { return null } })()
   const stepItems = getChecklistItems().filter((it) => it.workflow_step === 'report')
 
+  // Phase 9 Agent W:期刊模板状态 + 插图数据
+  const journalTemplate = getJournalTemplate(db, project.id)
+  const yearTrendData = generateYearTrendData(db, project.id)
+  const evidenceMapData = generateEvidenceMapData(db, project.id)
+  const yearTrendSvg = renderYearTrendSvg(yearTrendData)
+  const evidenceMapSvg = renderEvidenceMapSvg(evidenceMapData)
+  const figurePrompts = generateFigurePrompts(db, project.id)
+
+  // 审计:浏览图提示词的事件
+  try {
+    audit(db, req, {
+      eventType: 'figure_prompts_viewed',
+      userId: req.user.id,
+      projectId: project.id,
+      payload: { prompt_count: figurePrompts.length, has_template: !!journalTemplate },
+    })
+  } catch {}
+
   // 9 个 section 卡片(包含 references)
   const sectionList = [...SECTION_ORDER, 'references'].map((s) => {
     const row = sections[s] || null
@@ -237,6 +267,13 @@ router.get('/:id/report', (req, res) => {
     sections,
     sectionList,
     job,
+    // Phase 9 Agent W
+    journalTemplate,
+    yearTrendData,
+    evidenceMapData,
+    yearTrendSvg,
+    evidenceMapSvg,
+    figurePrompts,
   })
 })
 
@@ -283,6 +320,7 @@ router.post('/:id/report/generate-section', async (req, res) => {
         duration_ms: result.durationMs,
         citation_count: result.citationMapCount,
         citation_issues: result.citationIssues.slice(0, 5),
+        with_journal_template: result.withJournalTemplate || false,
       },
     })
     req.session.flash = {
@@ -625,10 +663,15 @@ router.get('/:id/report/export.md', (req, res) => {
 // 共用:跑一个章节的 LLM 调用 + 入库
 // ============================================================
 async function generateSectionLlm(db, { project, userId, section }) {
-  const system = getSectionSystem(section)
-  if (!system) {
+  const baseSystem = getSectionSystem(section)
+  if (!baseSystem) {
     return { ok: false, status: 'config_error', error: `unknown section: ${section}` }
   }
+
+  // Phase 9 Agent W:如果项目有期刊模板,把该 section 的风格基准拼到 system 末尾
+  const journalTemplate = getJournalTemplate(db, project.id)
+  const styleHint = buildSectionStyleHint(journalTemplate, section)
+  const system = augmentSystemWithTemplate(baseSystem, styleHint)
 
   // 准备上下文
   const protocol = getApprovedProtocol(db, project.id)
@@ -711,6 +754,7 @@ async function generateSectionLlm(db, { project, userId, section }) {
     durationMs: result.durationMs,
     citationMapCount: normalized.citation_map.length,
     citationIssues: normalized.citation_issues,
+    withJournalTemplate: !!journalTemplate,
   }
 }
 

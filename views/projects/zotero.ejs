@@ -69,6 +69,56 @@
       </div>
     <% } %>
 
+    <!-- CSV 导入卡(WoS / Scopus / PubMed) -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <div class="flex items-baseline justify-between gap-3">
+        <h2 class="text-base font-semibold text-slate-900">或:上传 WoS / Scopus / PubMed 的 CSV 导出</h2>
+        <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">通用</span>
+      </div>
+      <p class="mt-1 text-sm text-slate-500">
+        没用 Zotero 也可以——直接把检索数据库导出的 CSV 上传到这里,系统自动识别格式、入库、去重(按 DOI / 标题)。
+        无 PDF / 笔记,适合做"先把检索结果拿进来再决定"。最大 50 MB。
+      </p>
+
+      <form method="post"
+            action="/projects/<%= project.id %>/import/csv"
+            enctype="multipart/form-data"
+            class="mt-4 flex flex-wrap items-center gap-3">
+        <input type="file"
+               name="csv_file"
+               accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
+               required
+               class="block text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-xs file:text-white hover:file:bg-slate-700" />
+        <button type="submit"
+                class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-800 hover:bg-slate-50">
+          导入 CSV
+        </button>
+      </form>
+
+      <details class="mt-3 text-xs text-slate-600">
+        <summary class="cursor-pointer text-slate-500 hover:text-slate-700">三个常见库怎么导出 CSV?</summary>
+        <ul class="mt-2 space-y-2 text-xs text-slate-600">
+          <li>
+            <strong>Web of Science:</strong> 检索结果页右上角
+            <span class="font-mono">Export → Excel</span>(或 <span class="font-mono">Tab delimited file</span>)→
+            选择 <em>Full Record</em> → 下载得到 <span class="font-mono">.xls</span> / <span class="font-mono">.txt</span>;
+            若是 .xls 用 Excel "另存为 CSV" 即可。
+          </li>
+          <li>
+            <strong>Scopus:</strong> 勾选记录后点
+            <span class="font-mono">Export → CSV</span>,在 "Citation information" / "Bibliographical information" / "Abstract & keywords" 都勾上,导出即可。
+          </li>
+          <li>
+            <strong>PubMed:</strong>
+            <span class="font-mono">Send To → File → Format: CSV</span> 即可。注意 PubMed CSV 不含 abstract。
+          </li>
+        </ul>
+        <p class="mt-2 text-[11px] text-slate-500">
+          字段会被自动识别;识别失败会回到本页提示"未知格式",不会污染数据。
+        </p>
+      </details>
+    </div>
+
     <!-- 上传卡 -->
     <div class="rounded-2xl border border-slate-200 bg-white p-6">
       <h2 class="text-base font-semibold text-slate-900">上传 Zotero RDF 包</h2>

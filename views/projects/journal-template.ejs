@@ -1,0 +1,182 @@
+<%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
+<%- include('partials/project-header', { project }) %>
+
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('partials/stepper', { project, progress, currentStep: 'report' }) %>
+
+  <section class="space-y-6 min-w-0">
+    <div class="rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3">
+      <p class="text-xs font-medium uppercase tracking-wider text-indigo-700">第 8 步 / 期刊模板</p>
+      <h1 class="mt-1 text-lg font-semibold text-slate-900">目标期刊结构模板</h1>
+      <p class="mt-1 text-sm text-slate-600">
+        上传一篇"我想投这本期刊"的代表性论文 PDF,系统会抽出它的章节结构、字数分布、写作 moves、引用密度,
+        作为后续 AI 起草 9 章节时的风格基准。可选 — 不上传也能生成,但带模板的草稿会更贴近目标刊风格。
+      </p>
+    </div>
+
+    <!-- 当前模板状态 -->
+    <% if (template) {
+         const ex = template.extracted_structure || {}
+         const sections = Array.isArray(ex.sections) ? ex.sections : []
+         const totalWords = sections.reduce((sum, s) => sum + (Number(s.word_count_estimate) || 0), 0)
+    %>
+      <div class="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-5">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">已上传</span>
+              <h2 class="text-base font-semibold text-slate-900 truncate">
+                <%= ex.journal_name || '(期刊名未识别)' %>
+              </h2>
+            </div>
+            <% if (ex.article_title) { %>
+              <p class="mt-1 text-sm text-slate-700"><%= ex.article_title %></p>
+            <% } %>
+            <p class="mt-1 text-xs text-slate-500">
+              源文件:<span class="font-mono"><%= template.source_pdf_filename || '(未知)' %></span> ·
+              提取于 <%= template.extracted_at || '?' %>
+            </p>
+          </div>
+          <form method="post" action="/projects/<%= project.id %>/journal-template/clear"
+                onsubmit="return confirm('确认清除当前模板?PDF 文件也会被删除。')">
+            <button type="submit"
+                    class="rounded-lg border border-rose-300 px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50">
+              清除模板
+            </button>
+          </form>
+        </div>
+
+        <!-- 高层指标 -->
+        <dl class="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <div class="rounded-lg bg-white px-3 py-2">
+            <dt class="text-[10px] uppercase text-slate-500">章节数</dt>
+            <dd class="mt-0.5 font-mono text-slate-900"><%= sections.length %></dd>
+          </div>
+          <div class="rounded-lg bg-white px-3 py-2">
+            <dt class="text-[10px] uppercase text-slate-500">估算总字数</dt>
+            <dd class="mt-0.5 font-mono text-slate-900"><%= totalWords %></dd>
+          </div>
+          <div class="rounded-lg bg-white px-3 py-2">
+            <dt class="text-[10px] uppercase text-slate-500">图数量</dt>
+            <dd class="mt-0.5 font-mono text-slate-900"><%= ex.figure_count || 0 %></dd>
+          </div>
+          <div class="rounded-lg bg-white px-3 py-2">
+            <dt class="text-[10px] uppercase text-slate-500">表数量</dt>
+            <dd class="mt-0.5 font-mono text-slate-900"><%= ex.table_count || 0 %></dd>
+          </div>
+        </dl>
+
+        <% if (ex.voice_register) { %>
+          <p class="mt-3 text-xs text-slate-600"><strong>写作语气:</strong> <%= ex.voice_register %></p>
+        <% } %>
+        <% if (ex.citation_density) { %>
+          <p class="mt-1 text-xs text-slate-600"><strong>引用密度:</strong> <%= ex.citation_density %></p>
+        <% } %>
+        <% if (Array.isArray(ex.figure_types) && ex.figure_types.length) { %>
+          <p class="mt-1 text-xs text-slate-600"><strong>常见配图类型:</strong> <%= ex.figure_types.join(' / ') %></p>
+        <% } %>
+        <% if (ex.structure_notes) { %>
+          <p class="mt-2 text-xs text-slate-600"><strong>整体结构注:</strong> <%= ex.structure_notes %></p>
+        <% } %>
+
+        <!-- Sections 详细表 -->
+        <% if (sections.length > 0) { %>
+          <div class="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+            <table class="w-full text-xs">
+              <thead class="bg-slate-50 text-slate-500">
+                <tr>
+                  <th class="px-3 py-2 text-left font-medium">#</th>
+                  <th class="px-3 py-2 text-left font-medium">章节名</th>
+                  <th class="px-3 py-2 text-right font-medium">字数</th>
+                  <th class="px-3 py-2 text-right font-medium">子节</th>
+                  <th class="px-3 py-2 text-center font-medium">图</th>
+                  <th class="px-3 py-2 text-center font-medium">表</th>
+                  <th class="px-3 py-2 text-left font-medium">关键 moves / 笔记</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <% sections.forEach((s, i) => { %>
+                  <tr>
+                    <td class="px-3 py-2 font-mono text-slate-400"><%= i + 1 %></td>
+                    <td class="px-3 py-2 font-medium text-slate-800"><%= s.name %></td>
+                    <td class="px-3 py-2 text-right font-mono text-slate-600"><%= s.word_count_estimate || '-' %></td>
+                    <td class="px-3 py-2 text-right font-mono text-slate-600"><%= s.subsection_count || 0 %></td>
+                    <td class="px-3 py-2 text-center text-slate-600"><%= s.has_figure ? '✓' : '·' %></td>
+                    <td class="px-3 py-2 text-center text-slate-600"><%= s.has_table ? '✓' : '·' %></td>
+                    <td class="px-3 py-2 text-slate-600">
+                      <% if (Array.isArray(s.key_moves) && s.key_moves.length) { %>
+                        <p><%= s.key_moves.join(' · ') %></p>
+                      <% } %>
+                      <% if (s.notes) { %>
+                        <p class="mt-0.5 text-slate-400"><%= s.notes %></p>
+                      <% } %>
+                    </td>
+                  </tr>
+                <% }) %>
+              </tbody>
+            </table>
+          </div>
+        <% } %>
+      </div>
+
+      <!-- 替换 -->
+      <details class="rounded-2xl border border-slate-200 bg-white p-5">
+        <summary class="cursor-pointer text-sm font-medium text-slate-700">替换模板(上传新的 PDF)</summary>
+        <form method="post" action="/projects/<%= project.id %>/journal-template/upload" enctype="multipart/form-data"
+              class="mt-3 space-y-3">
+          <input type="file" name="template_pdf" accept="application/pdf,.pdf" required
+                 class="block w-full text-sm text-slate-600 file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:text-slate-700 hover:file:bg-slate-200">
+          <p class="text-xs text-slate-500">上传后会立即跑一次 LLM 抽结构,约 5-15 秒。新模板会覆盖现有模板,旧 PDF 会自动删除。</p>
+          <button type="submit" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">上传并提取</button>
+        </form>
+      </details>
+
+    <% } else { %>
+
+      <!-- 未上传:显示上传表单 -->
+      <div class="rounded-2xl border border-slate-200 bg-white p-6">
+        <h2 class="text-base font-semibold text-slate-900">上传目标期刊代表性论文</h2>
+        <p class="mt-1 text-sm text-slate-500">
+          建议挑一篇你想投的期刊里、和你研究主题相近的近 1-2 年论文。
+          PDF ≤ <%= maxUploadMb %> MB。系统不存储原文,只抽出结构 metadata + 引用密度等指标。
+        </p>
+
+        <form method="post" action="/projects/<%= project.id %>/journal-template/upload"
+              enctype="multipart/form-data" class="mt-4 space-y-3">
+          <div>
+            <label class="block text-sm font-medium text-slate-700">PDF 文件</label>
+            <input type="file" name="template_pdf" accept="application/pdf,.pdf" required
+                   class="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:text-slate-700 hover:file:bg-slate-200">
+          </div>
+          <p class="text-xs text-amber-700 bg-amber-50 rounded px-3 py-2">
+            ⚠ 上传后立刻跑一次 LLM 提取(heavy 模型,约 5-15 秒)。失败会保留 PDF 文件但不写 DB,
+            你可以稍后清除重传。
+          </p>
+          <button type="submit"
+                  class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
+            上传并提取
+          </button>
+        </form>
+      </div>
+
+      <div class="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600">
+        <p class="font-medium text-slate-800">为什么要上传?</p>
+        <ul class="mt-2 list-disc space-y-1 pl-5">
+          <li>不同期刊的"系统综述"长度差异极大(从 4000 到 12000 字)。模板把字数基准注入到每章 prompt 里。</li>
+          <li>不同期刊的 voice register 也不同(医学期刊偏过去时 / 第三人称;教育心理偏一般陈述)。</li>
+          <li>有模板时:每章生成会贴近该期刊的字数 / moves / 风格。<strong>没模板时</strong>:用通用 SLR 默认值。</li>
+        </ul>
+      </div>
+
+    <% } %>
+
+    <div class="flex justify-between text-sm">
+      <a href="/projects/<%= project.id %>/report"
+         class="rounded-lg border border-slate-300 px-3 py-2 text-slate-700 hover:bg-slate-50">← 返回综述编辑器</a>
+      <a href="/projects/<%= project.id %>"
+         class="rounded-lg bg-slate-900 px-3 py-2 text-white hover:bg-slate-700">返回项目主页</a>
+    </div>
+  </section>
+</div>
+
+<%- include('../partials/footer') %>
