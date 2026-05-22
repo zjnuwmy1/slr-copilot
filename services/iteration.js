@@ -120,6 +120,17 @@ export function gatherProjectSnapshot(db, projectId) {
      WHERE project_id = ? AND ai_suggestion = 'exclude' AND ai_reason IS NOT NULL AND trim(ai_reason) != ''
      GROUP BY ai_reason ORDER BY n DESC LIMIT 8`
   ).all(projectId)
+  // AI 给 include 建议时引用的"理由 / 匹配到的纳入标准"也是关键信号
+  // (协议哪几条 inclusion 频繁命中 → 哪几条不命中 → 协议是否过窄)
+  const topAiIncludeReasons = db.prepare(
+    `SELECT ai_reason AS reason, COUNT(*) AS n
+     FROM screening_decisions
+     WHERE project_id = ? AND ai_suggestion = 'include' AND ai_reason IS NOT NULL AND trim(ai_reason) != ''
+     GROUP BY ai_reason ORDER BY n DESC LIMIT 6`
+  ).all(projectId)
+
+  // —— AI 筛选意见的整体分布 + AI vs human 一致性矩阵 ——
+  const aiScreeningDetails = gatherAiScreeningDetails(db, projectId)
 
   // —— Themes(若有) ——
   const themes = (() => {
@@ -159,13 +170,122 @@ export function gatherProjectSnapshot(db, projectId) {
     final_search_records,
     record_counts: { total: totalRecords, by_source: recordsBySource },
     screening_stats,
+    ai_screening: aiScreeningDetails,
     top_exclusion_reasons: {
       human: topHumanReasons,
       ai: topAiReasons,
     },
+    top_ai_include_reasons: topAiIncludeReasons,
     themes,
     grade_assessments_summary,
     snapshot_taken_at: new Date().toISOString(),
+  }
+}
+
+/**
+ * AI 筛选意见的整体细节:
+ *   - 分布:include / exclude / uncertain / not_run 各多少
+ *   - AI vs human 一致性矩阵(2x2):
+ *       AI include  ↔  human include: agree_in / disagree_in_h_excluded
+ *       AI exclude  ↔  human include: AI 错过的潜在纳入(disagreement_ai_missed)
+ *       AI include  ↔  human exclude: AI 过纳(disagreement_ai_over_inclusive)
+ *   - 平均 ai_confidence
+ *   - 频繁被 AI 引用的"matched inclusion / exclusion criterion"(协议哪条经常被命中)
+ */
+function gatherAiScreeningDetails(db, projectId) {
+  // 整体分布
+  const distRows = db.prepare(
+    `SELECT ai_suggestion, COUNT(*) AS n
+     FROM screening_decisions
+     WHERE project_id = ? AND stage = 'title_abstract'
+     GROUP BY ai_suggestion`
+  ).all(projectId)
+  const ai_distribution = {
+    include: 0, exclude: 0, uncertain: 0, not_run: 0,
+  }
+  for (const r of distRows) {
+    if (ai_distribution[r.ai_suggestion] != null) {
+      ai_distribution[r.ai_suggestion] = r.n
+    }
+  }
+
+  // 一致性矩阵(只在 AI 和人工都决定了的 records 上算)
+  const agreementRows = db.prepare(
+    `SELECT ai_suggestion, human_decision, COUNT(*) AS n
+     FROM screening_decisions
+     WHERE project_id = ? AND stage = 'title_abstract'
+       AND ai_suggestion IN ('include','exclude','uncertain')
+       AND human_decision IN ('include','exclude','uncertain')
+     GROUP BY ai_suggestion, human_decision`
+  ).all(projectId)
+  const matrix = {
+    // 行 = AI, 列 = human
+    ai_include_human_include: 0,
+    ai_include_human_exclude: 0,    // AI 过纳
+    ai_include_human_uncertain: 0,
+    ai_exclude_human_include: 0,    // AI 错过(关键信号:协议太严或概念组缺词)
+    ai_exclude_human_exclude: 0,
+    ai_exclude_human_uncertain: 0,
+    ai_uncertain_human_include: 0,
+    ai_uncertain_human_exclude: 0,
+    ai_uncertain_human_uncertain: 0,
+  }
+  for (const r of agreementRows) {
+    const k = `ai_${r.ai_suggestion}_human_${r.human_decision}`
+    if (matrix[k] != null) matrix[k] = r.n
+  }
+  // 总体一致度 = 对角线 / 全部已决
+  const totalDecided = Object.values(matrix).reduce((s, n) => s + n, 0)
+  const agreed = matrix.ai_include_human_include + matrix.ai_exclude_human_exclude + matrix.ai_uncertain_human_uncertain
+  const agreement_rate = totalDecided > 0 ? +(agreed / totalDecided).toFixed(3) : null
+
+  // 平均 ai_confidence
+  const confRow = db.prepare(
+    `SELECT AVG(ai_confidence) AS avg_conf, COUNT(*) AS n_conf
+     FROM screening_decisions
+     WHERE project_id = ? AND ai_confidence IS NOT NULL`
+  ).get(projectId)
+  const avg_ai_confidence = confRow.n_conf > 0 ? +(confRow.avg_conf).toFixed(3) : null
+
+  // 频繁命中的 matched inclusion / exclusion criterion
+  // ai_matched_inclusion 是 JSON array;application-level aggregate
+  const matchedRows = db.prepare(
+    `SELECT ai_matched_inclusion, ai_matched_exclusion
+     FROM screening_decisions
+     WHERE project_id = ? AND (ai_matched_inclusion IS NOT NULL OR ai_matched_exclusion IS NOT NULL)`
+  ).all(projectId)
+  const incCounts = new Map()
+  const excCounts = new Map()
+  for (const r of matchedRows) {
+    for (const it of parseJsonArray(r.ai_matched_inclusion)) {
+      if (typeof it === 'string' && it.trim()) {
+        const k = it.trim().slice(0, 200)
+        incCounts.set(k, (incCounts.get(k) || 0) + 1)
+      }
+    }
+    for (const it of parseJsonArray(r.ai_matched_exclusion)) {
+      if (typeof it === 'string' && it.trim()) {
+        const k = it.trim().slice(0, 200)
+        excCounts.set(k, (excCounts.get(k) || 0) + 1)
+      }
+    }
+  }
+  const top_matched_inclusion = [...incCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([criterion, n]) => ({ criterion, n }))
+  const top_matched_exclusion = [...excCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([criterion, n]) => ({ criterion, n }))
+
+  return {
+    ai_distribution,
+    agreement_matrix: matrix,
+    agreement_rate,
+    avg_ai_confidence,
+    top_matched_inclusion,
+    top_matched_exclusion,
   }
 }
 
@@ -241,9 +361,26 @@ export const ITERATION_SYSTEM = `你是顶级 SLR 方法学专家(博士级,有 
 
 ⚠ **关键规矩**:
 1. 你不知道用户的真实研究意图比他们自己更多。你的输出永远是"建议",最终由用户审批后才生效。
-2. 必须**老老实实承认不确定**:如果信号不足以判断哪一步出错,就在 diagnosis 里写"信号不足,建议做 X 实验性的小改动看效果"。
+2. 必须老老实实承认不确定:如果信号不足以判断哪一步出错,就在 diagnosis 里写"信号不足,建议做 X 实验性的小改动看效果"。
 3. 不要凭空发明新概念组 — 优化必须能从前序数据(常被排除的关键词、user 写的 exclusion reasons 等)里读出来。
 4. 输出的 \`new_protocol\` 必须可以直接当成新版 protocol 入库(字段对齐当前 protocol schema)。
+
+🔍 **重点利用以下信号**(按优先级):
+1. **用户自述反馈**(如果提供了)— 最高优先级,优先采信。
+2. **AI ↔ 人工一致性矩阵** — "AI exclude & human INCLUDE" 是 AI 错过的潜在纳入:
+   说明协议描述对 AI 来说不够精确,概念组可能缺关键词;
+   "AI include & human EXCLUDE" 是 AI 过纳:协议判断标准不够严,
+   exclusion criteria 可能漏写。
+3. **Top 人工排除原因** — 用户自己写的话最直接说明协议哪里没对上他的意图。
+4. **Top AI 建议 include / exclude 原因** — AI 解释自己的判断逻辑,
+   能反推协议哪几条 criteria 频繁触发、哪几条几乎不被命中(可能是死条款)。
+5. **AI 频繁引用的 matched_inclusion / matched_exclusion criterion** —
+   纳入侧:某条 criterion 命中率高 = 协议在这条上工作正常;
+         命中率低 = 这条 criterion 措辞过窄,可能漏召。
+   排除侧:某条 criterion 大量触发 = 协议在这里把太多潜在相关文献剔出去,
+         需要检查是否过严。
+6. **检索式命中数 vs 真实纳入率** — 命中多但纳入率低 = 检索式过宽或
+   概念组漂移;命中少 + 纳入率仍低 = 概念组核心词错了。
 
 输出 **严格 JSON**,字段:
 {
@@ -392,18 +529,74 @@ export function buildIterationUserPrompt({ snapshot, userFeedback }) {
     lines.push(`  Full-text 已决定: include=${ft.include}, exclude=${ft.exclude}`)
   }
 
+  // —— AI 筛选意见整体分布 + AI vs human 一致性矩阵(关键!) ——
+  if (sp.ai_screening) {
+    const ai = sp.ai_screening
+    const dist = ai.ai_distribution || {}
+    const matrix = ai.agreement_matrix || {}
+    lines.push('')
+    lines.push('===== AI 筛选意见整体分布(title/abstract) =====')
+    lines.push(`  AI 建议 include: ${dist.include || 0}`)
+    lines.push(`  AI 建议 exclude: ${dist.exclude || 0}`)
+    lines.push(`  AI 建议 uncertain: ${dist.uncertain || 0}`)
+    lines.push(`  AI 还没跑: ${dist.not_run || 0}`)
+    if (ai.avg_ai_confidence != null) {
+      lines.push(`  AI 平均 confidence: ${ai.avg_ai_confidence}(0-1)`)
+    }
+
+    // 一致性矩阵(只有 AI 和人工都决定的 records)
+    const decided = Object.values(matrix).reduce((s, n) => s + n, 0)
+    if (decided > 0) {
+      lines.push('')
+      lines.push('===== AI ↔ 人工 一致性矩阵(总 ' + decided + ' 条都决定的)=====')
+      lines.push(`  AI include & human include:  ${matrix.ai_include_human_include}   ← AI 命中`)
+      lines.push(`  AI exclude & human exclude:  ${matrix.ai_exclude_human_exclude}   ← AI 命中`)
+      lines.push(`  AI uncertain & human uncert: ${matrix.ai_uncertain_human_uncertain}`)
+      lines.push(`  AI exclude & human INCLUDE:  ${matrix.ai_exclude_human_include}   ← AI 错过(信号:协议太严 / 概念组缺词)`)
+      lines.push(`  AI include & human EXCLUDE:  ${matrix.ai_include_human_exclude}   ← AI 过纳(信号:协议判断标准不严)`)
+      if (ai.agreement_rate != null) {
+        lines.push(`  整体一致率: ${(ai.agreement_rate * 100).toFixed(1)}%`)
+        if (ai.agreement_rate < 0.7) {
+          lines.push(`    (< 70% 说明 AI 和人工系统性不一致,通常是协议描述不够精确)`)
+        }
+      }
+    }
+
+    if (ai.top_matched_inclusion?.length) {
+      lines.push('')
+      lines.push('===== AI 在 include 建议里频繁引用的纳入标准(协议哪几条在被命中) =====')
+      for (const m of ai.top_matched_inclusion) {
+        lines.push(`  ${m.n}× "${m.criterion}"`)
+      }
+    }
+    if (ai.top_matched_exclusion?.length) {
+      lines.push('')
+      lines.push('===== AI 在 exclude 建议里频繁引用的排除标准(协议哪几条在剔除文献) =====')
+      for (const m of ai.top_matched_exclusion) {
+        lines.push(`  ${m.n}× "${m.criterion}"`)
+      }
+    }
+  }
+
   // —— Top exclusion reasons(关键诊断线索) ——
   if (sp.top_exclusion_reasons?.human?.length) {
     lines.push('')
-    lines.push('===== Top 人工排除原因(诊断关键!) =====')
+    lines.push('===== Top 人工排除原因(诊断关键 — 用户自己写的话最直接说明问题) =====')
     for (const r of sp.top_exclusion_reasons.human) {
       lines.push(`  ${r.n}× "${String(r.reason).slice(0, 160)}"`)
     }
   }
   if (sp.top_exclusion_reasons?.ai?.length) {
     lines.push('')
-    lines.push('===== Top AI 建议排除原因 =====')
+    lines.push('===== Top AI 建议排除原因(AI 自己解释的拒绝逻辑) =====')
     for (const r of sp.top_exclusion_reasons.ai) {
+      lines.push(`  ${r.n}× "${String(r.reason).slice(0, 160)}"`)
+    }
+  }
+  if (sp.top_ai_include_reasons?.length) {
+    lines.push('')
+    lines.push('===== Top AI 建议 include 原因(AI 自己解释的纳入逻辑)=====')
+    for (const r of sp.top_ai_include_reasons) {
       lines.push(`  ${r.n}× "${String(r.reason).slice(0, 160)}"`)
     }
   }
