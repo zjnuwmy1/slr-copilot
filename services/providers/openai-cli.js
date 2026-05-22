@@ -172,9 +172,12 @@ export async function sendMessage({
       clearTimeout(timer)
       const latencyMs = Date.now() - started
       if (code !== 0) {
-        const tail = (stderr || stdout).slice(-512).trim()
+        // 智能错误提取:codex 0.132.0 stderr 会有 "Reading additional input from stdin..."
+        // 这种**正常状态消息**;真正的失败信息在 stdout JSONL 的 turn.failed / type:error 事件里,
+        // 或 stderr 较前面的 ERROR 行里。简单的 slice(-512) 只会拿到尾巴的噪音。
+        const errMsg = extractFailureMessage(stdout, stderr) || `exit_${code}: ${(stderr || stdout).slice(-300).trim()}`
         cleanupOutFile(outFile)
-        return reject(new Error(`exit_${code}: ${tail}`))
+        return reject(new Error(errMsg))
       }
       // 取 final message 优先从 outFile 读
       let text = ''
@@ -202,6 +205,83 @@ function cleanupOutFile(p) {
   } catch {
     // ignore
   }
+}
+
+/**
+ * 智能提取失败原因。codex 0.132.0 错误码分散在多个地方:
+ *   1. stdout JSONL:`type=turn.failed`(权威,有 error.message),`type=error`(reconnect 重试)
+ *   2. stderr 前段:ERROR codex_api::endpoint::... HTTP 401/403/429 等
+ *   3. "Reading additional input from stdin..." 是状态消息,不是错误
+ *
+ * 优先返回最 actionable 的消息,加上常见错误的中文翻译。
+ * 找不到具体错误 → 返回 null 让调用方走默认 tail 兜底。
+ */
+function extractFailureMessage(stdout, stderr) {
+  // 1) 先在 stdout JSONL 找 turn.failed(权威错误)
+  const lines = (stdout || '').split(/\r?\n/)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim()
+    if (!t || !t.startsWith('{')) continue
+    let ev
+    try { ev = JSON.parse(t) } catch { continue }
+    if (ev?.type === 'turn.failed' && ev.error?.message) {
+      return translateCodexError(ev.error.message)
+    }
+  }
+  // 2) 再在 stdout 找最后一个 type:error 消息
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim()
+    if (!t || !t.startsWith('{')) continue
+    let ev
+    try { ev = JSON.parse(t) } catch { continue }
+    if (ev?.type === 'error' && typeof ev.message === 'string' && ev.message.trim()) {
+      // 跳过 "Reconnecting..." 这种中间重试消息,挑最后那个真错
+      if (!/^Reconnecting/i.test(ev.message)) {
+        return translateCodexError(ev.message)
+      }
+    }
+  }
+  // 3) stderr 里找 ERROR <module>: 行(codex_api / codex_core)
+  const stderrLines = (stderr || '').split(/\r?\n/)
+  for (const ln of stderrLines) {
+    const m = ln.match(/\bERROR\s+codex_\w+(?:::\w+)*:\s*(.+)$/)
+    if (m && m[1]) {
+      const msg = m[1].trim()
+      // 跳过明显的 noise(如 agents_md permission denied,无关本次失败)
+      if (/agents_md|Permission denied \(os error 13\)/.test(msg)) continue
+      return translateCodexError(msg)
+    }
+  }
+  return null
+}
+
+/**
+ * 把 codex 原始错误翻译成 actionable 中文消息。
+ */
+function translateCodexError(raw) {
+  if (!raw) return 'codex_unknown_error'
+  const s = String(raw)
+  // 401 / 403:Token 失效或没登录
+  if (/401\s*Unauthorized|Missing bearer|basic authentication/i.test(s)) {
+    return 'codex_unauthorized: OAuth Token 失效或未登录 — 超管需要在管理后台重新绑定 Codex(OpenAI)凭证 [' + s.slice(0, 200) + ']'
+  }
+  // 429:限流
+  if (/429|rate.?limit|too many requests/i.test(s)) {
+    return 'codex_rate_limited: 触发限流,稍后重试 [' + s.slice(0, 200) + ']'
+  }
+  // 配额耗尽
+  if (/quota|usage limit|insufficient_quota|monthly limit/i.test(s)) {
+    return 'codex_quota_exceeded: 订阅配额耗尽 [' + s.slice(0, 200) + ']'
+  }
+  // 网络
+  if (/network|connection|ECONN|timeout|timed out/i.test(s)) {
+    return 'codex_network_error: ' + s.slice(0, 300)
+  }
+  // 模型不存在
+  if (/model.*not.*found|unknown.?model|invalid.?model/i.test(s)) {
+    return 'codex_invalid_model: ' + s.slice(0, 300)
+  }
+  return 'codex_error: ' + s.slice(0, 400)
 }
 
 /**
