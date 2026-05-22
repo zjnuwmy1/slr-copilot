@@ -1,0 +1,136 @@
+<%- include('../partials/header', { title }) %>
+<%- include('partials/project-header', { project }) %>
+
+<section class="space-y-6">
+  <div>
+    <p class="text-xs font-medium uppercase tracking-wider text-purple-600">复盘 & 迭代 (v_next)</p>
+    <h1 class="mt-1 text-2xl font-semibold tracking-tight">让 AI 复盘整个项目,产出优化后的协议</h1>
+    <p class="mt-2 text-sm text-slate-600 max-w-3xl">
+      当 screening / extraction 显示真正相关的文献被大规模剔除,说明前面的
+      <strong>协议 / 概念组 / 检索式 / 纳排标准</strong> 可能与你的研究意图错位。
+      系统会把项目所有前序数据(协议 → 检索 → 命中 → 筛选 → 排除原因 → 主题)交给
+      <strong>旗舰模型 + 高思考</strong>(GPT-5.5 high 或 Claude Opus 4.7 ultrathink)综合分析,
+      给一份 <strong>诊断 + 优化后的新协议</strong>。你审批后会变成 v_next,旧版数据全部保留作审计。
+    </p>
+  </div>
+
+  <% if (snapshotError) { %>
+    <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+      收集项目快照失败:<%= snapshotError %>
+    </div>
+  <% } %>
+
+  <% if (pendingDiagnosis) { %>
+    <div class="rounded-2xl border border-amber-300 bg-amber-50/60 p-5 space-y-3">
+      <p class="text-sm font-medium text-amber-900">
+        ⚠ 已有一份待审阅的 AI 诊断结果(<%= pendingDiagnosis.createdAt %>)
+      </p>
+      <div class="flex gap-2">
+        <a href="/projects/<%= project.id %>/iterate/review"
+           class="rounded-lg bg-amber-600 px-4 py-2 text-sm text-white hover:bg-amber-500">
+          继续审阅 →
+        </a>
+        <form method="post" action="/projects/<%= project.id %>/iterate/discard" class="inline"
+              onsubmit="return confirm('丢弃当前诊断结果?')">
+          <button type="submit" class="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-amber-700 hover:bg-amber-50">
+            丢弃,重新跑
+          </button>
+        </form>
+      </div>
+    </div>
+  <% } %>
+
+  <!-- 项目快照摘要(让用户看到 AI 会看到什么) -->
+  <% if (summary) { %>
+    <div class="rounded-2xl border border-slate-200 bg-white p-5">
+      <h2 class="text-sm font-medium uppercase tracking-wider text-slate-500">系统将给 AI 的关键数据</h2>
+      <div class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+        <div class="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+          <p class="text-[11px] text-slate-500">当前协议</p>
+          <p class="mt-1 font-medium text-slate-800">
+            v<%= summary.from_version ?? '?' %>
+            <% if (summary.from_version != null) { %><span class="ml-1 text-xs text-slate-500">(已审批)</span><% } %>
+          </p>
+        </div>
+        <div class="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+          <p class="text-[11px] text-slate-500">导入 records</p>
+          <p class="mt-1 font-medium text-slate-800"><%= summary.total_records %> 条</p>
+          <% if (summary.cross_db_dedup_count) { %>
+            <p class="mt-0.5 text-[10px] text-slate-500">跨库合并 <%= summary.cross_db_dedup_count %></p>
+          <% } %>
+        </div>
+        <div class="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+          <p class="text-[11px] text-slate-500">Title/Abstract 已决定</p>
+          <p class="mt-1 font-medium text-slate-800">
+            <%= summary.screening_ta_decided %> / <%= summary.total_records %>
+          </p>
+        </div>
+        <div class="rounded-lg border <%= (summary.screening_ta_include_rate != null && summary.screening_ta_include_rate < 0.1) ? 'border-rose-200 bg-rose-50' : 'border-slate-100 bg-slate-50/60' %> p-3">
+          <p class="text-[11px] <%= (summary.screening_ta_include_rate != null && summary.screening_ta_include_rate < 0.1) ? 'text-rose-700' : 'text-slate-500' %>">真实纳入率</p>
+          <p class="mt-1 font-medium <%= (summary.screening_ta_include_rate != null && summary.screening_ta_include_rate < 0.1) ? 'text-rose-800' : 'text-slate-800' %>">
+            <% if (summary.screening_ta_include_rate != null) { %>
+              <%= (summary.screening_ta_include_rate * 100).toFixed(1) %>%
+              <% if (summary.screening_ta_include_rate < 0.1) { %>
+                <span class="ml-1 text-xs">⚠ 偏低</span>
+              <% } %>
+            <% } else { %>
+              <span class="text-xs text-slate-400">未筛选</span>
+            <% } %>
+          </p>
+        </div>
+      </div>
+      <% if (snapshot && snapshot.top_exclusion_reasons.human.length) { %>
+        <details class="mt-3 text-xs text-slate-600">
+          <summary class="cursor-pointer text-slate-500 hover:text-slate-700">
+            Top <%= snapshot.top_exclusion_reasons.human.length %> 人工排除原因(诊断关键线索)
+          </summary>
+          <ul class="mt-2 space-y-1 pl-4 list-disc">
+            <% snapshot.top_exclusion_reasons.human.forEach(r => { %>
+              <li><span class="font-mono text-slate-500"><%= r.n %>×</span> <%= r.reason %></li>
+            <% }) %>
+          </ul>
+        </details>
+      <% } %>
+      <p class="mt-3 text-[11px] text-slate-400">
+        AI 还会收到:协议全文、N 版 exploration 检索式 + 命中数、最终锁定方案、
+        records 按源库分布、AI 排除原因、已有主题 / GRADE 评级(若有)。
+      </p>
+    </div>
+  <% } %>
+
+  <!-- 跑诊断表单 -->
+  <% if (!pendingDiagnosis) { %>
+    <form method="post" action="/projects/<%= project.id %>/iterate/diagnose" class="rounded-2xl border border-slate-200 bg-white p-5 space-y-4"
+          onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='AI 分析中…(高思考模式约 3-8 分钟)';">
+      <div>
+        <label class="block text-sm font-medium text-slate-700">
+          你的反馈(可选,但**强烈建议填**)
+        </label>
+        <p class="mt-0.5 text-xs text-slate-500">
+          告诉 AI 你怀疑哪里出了问题。例如:"我看了 50 条 records 大部分是动物实验,但我只想要人体研究"
+          或 "概念组里少了 LLM 这个词" — AI 会优先采信你的判断。
+        </p>
+        <textarea name="user_feedback" rows="4" maxlength="1500"
+                  placeholder="可空 — AI 也会自己分析数据;但你的真实判断比数据更准。"
+                  class="mt-2 block w-full rounded-md border-slate-300 px-3 py-2 text-sm"></textarea>
+      </div>
+
+      <div class="rounded-lg border border-purple-200 bg-purple-50/40 p-3 text-xs text-purple-900">
+        <p class="font-medium">⚙ 模型设置(在 <a href="/admin/settings" class="underline">管理 → 步骤模型</a> 可调)</p>
+        <p class="mt-1">默认:flagship + high reasoning(Anthropic 平台 = Claude Opus 4.7 ultrathink;OpenAI 平台 = GPT-5.5 high)。
+          单次调用约 3-8 分钟,会从你的平台凭证扣额度。</p>
+      </div>
+
+      <div class="flex items-center justify-between border-t border-slate-200 pt-3">
+        <a href="/projects/<%= project.id %>" class="text-sm text-slate-500 hover:text-slate-900">← 返回项目</a>
+        <button type="submit"
+                class="rounded-lg bg-purple-600 px-5 py-2 text-sm font-medium text-white hover:bg-purple-500">
+          🔍 开始 AI 复盘
+        </button>
+      </div>
+    </form>
+  <% } %>
+
+</section>
+
+<%- include('../partials/footer') %>

@@ -21,6 +21,13 @@
         archived:           ['bg-slate-100 text-slate-500',     '归档'],
       })[project.status] || ['bg-slate-100 text-slate-600', project.status]
     %>
-    <span class="flex-none rounded-full px-3 py-1 text-xs <%= statusCfg[0] %>"><%= statusCfg[1] %></span>
+    <div class="flex flex-none items-center gap-2">
+      <a href="/projects/<%= project.id %>/iterate"
+         class="rounded-md border border-purple-200 bg-purple-50 px-2.5 py-1 text-[11px] font-medium text-purple-700 hover:bg-purple-100 transition"
+         title="如果发现前面的工作有问题(纳入率低 / 检索式漏召等),用 AI 复盘并迭代成 v_next 协议">
+        🔄 复盘 & 迭代
+      </a>
+      <span class="rounded-full px-3 py-1 text-xs <%= statusCfg[0] %>"><%= statusCfg[1] %></span>
+    </div>
   </div>
 </div>

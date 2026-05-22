@@ -84,6 +84,12 @@ export const STEP_SPECS = {
     defaultTier: 'standard',
     defaultReasoning: 'medium',
   },
+  iteration: {
+    label: '复盘 & 协议迭代 (Iteration)',
+    description: '综合所有前序步骤数据,反推协议问题并产出优化版 —— 高 stake,默认旗舰 + 高思考',
+    defaultTier: 'flagship',
+    defaultReasoning: 'high',
+  },
 }
 
 export const STEP_KEYS = Object.keys(STEP_SPECS)

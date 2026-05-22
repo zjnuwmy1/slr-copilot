@@ -30,6 +30,7 @@ import projectCertaintyRouter from './routes/projects/certainty.js'
 import projectImportCsvRouter from './routes/projects/import-csv.js'
 import projectMatrixRouter from './routes/projects/matrix.js'
 import projectJournalTemplateRouter from './routes/projects/journal-template.js'
+import projectIterateRouter from './routes/projects/iterate.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -118,6 +119,7 @@ app.use('/projects', requireUser, projectCertaintyRouter)
 app.use('/projects/:id/import/csv', requireUser, projectImportCsvRouter)
 app.use('/projects', requireUser, projectMatrixRouter)
 app.use('/projects', requireUser, projectJournalTemplateRouter)
+app.use('/projects', requireUser, projectIterateRouter)
 app.use('/projects', requireUser, projectsRouter)  // 主路由(含 synthesis + report 自挂)放最后
 
 // /account 仪表盘:登录用户的快速总览

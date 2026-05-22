@@ -75,4 +75,19 @@ function runMigrations(db) {
   if (!columnExists(db, 'records', 'source_databases')) {
     db.exec(`ALTER TABLE records ADD COLUMN source_databases TEXT`)
   }
+
+  // M6:protocols.iteration_metadata —— 当该 protocol 是由"复盘 & 迭代"
+  //    机制生成时,保存 AI 的 diagnosis + 看过哪些前序数据,以便审计追踪。
+  //    JSON 形如:
+  //      {
+  //        iterated_from_version: 1,
+  //        diagnosis: "...",
+  //        proposed_changes: [...],
+  //        snapshot_used: { record_count: N, include_rate: 0.12, ... },
+  //        model: "gpt-5.5", reasoning: "high",
+  //        generated_at: "YYYY-MM-DD HH:MM:SS"
+  //      }
+  if (!columnExists(db, 'protocols', 'iteration_metadata')) {
+    db.exec(`ALTER TABLE protocols ADD COLUMN iteration_metadata TEXT`)
+  }
 }
