@@ -234,14 +234,164 @@
           <% } %>
         </div>
 
+        <!-- 人工筛选决定区(AJAX 提交,不跳页)-->
+        <% if (typeof screening !== 'undefined' && screening) {
+             const aiSug = screening.ai_suggestion
+             const huDec = screening.human_decision
+             const aiBadgeMap = {
+               include:   ['bg-emerald-100 text-emerald-700', '建议纳入'],
+               exclude:   ['bg-rose-100 text-rose-700',       '建议排除'],
+               uncertain: ['bg-amber-100 text-amber-800',     '不确定'],
+               not_run:   ['bg-slate-100 text-slate-500',     '未跑'],
+             }
+             const huColors = {
+               include:     ['#059669', '纳入',  'bg-emerald-600 text-white'],
+               exclude:     ['#e11d48', '排除',  'bg-rose-600 text-white'],
+               uncertain:   ['#d97706', '不确定','bg-amber-500 text-white'],
+               not_decided: ['#64748b', '未决定','bg-slate-200 text-slate-700'],
+             }
+             const aiB = aiBadgeMap[aiSug] || aiBadgeMap.not_run
+             const huB = huColors[huDec] || huColors.not_decided
+        %>
+          <section class="rounded-2xl border-2 <%= huDec === 'not_decided' ? 'border-amber-300 bg-amber-50/30' : 'border-emerald-300 bg-emerald-50/30' %> p-5">
+            <header class="flex items-center justify-between gap-2 flex-wrap">
+              <p class="text-sm font-semibold text-slate-900">📋 人工筛选决定</p>
+              <span class="rounded-full <%= huB[2] %> px-2 py-0.5 text-[11px] font-medium">
+                当前:<%= huB[1] %>
+              </span>
+            </header>
+
+            <!-- AI 建议 -->
+            <div class="mt-3 text-xs">
+              <p class="text-slate-500">
+                AI 建议:<span class="ml-1 rounded-full px-2 py-0.5 <%= aiB[0] %>"><%= aiB[1] %></span>
+                <% if (screening.ai_confidence != null) { %>
+                  <span class="ml-1 text-slate-500">置信 <%= Number(screening.ai_confidence).toFixed(2) %></span>
+                <% } %>
+              </p>
+              <% if (screening.ai_reason) { %>
+                <details class="mt-2 text-slate-600">
+                  <summary class="cursor-pointer hover:text-slate-900">AI 理由(展开)</summary>
+                  <p class="mt-1 rounded bg-white/70 px-2 py-1.5 leading-relaxed"><%= screening.ai_reason %></p>
+                  <% if ((screening.ai_matched_inclusion || []).length) { %>
+                    <p class="mt-1 text-emerald-700">命中纳入:<%= screening.ai_matched_inclusion.join(' · ') %></p>
+                  <% } %>
+                  <% if ((screening.ai_matched_exclusion || []).length) { %>
+                    <p class="mt-1 text-rose-700">命中排除:<%= screening.ai_matched_exclusion.join(' · ') %></p>
+                  <% } %>
+                </details>
+              <% } %>
+            </div>
+
+            <!-- 人工决定表单(AJAX) -->
+            <form method="post" action="/projects/<%= project.id %>/screening/decide/<%= record.id %>"
+                  data-ajax-decide-detail
+                  class="mt-3 space-y-2">
+              <input type="text" name="reason" maxlength="2000"
+                     value="<%= screening.human_reason ? screening.human_reason.replace(/"/g, '&quot;') : '' %>"
+                     placeholder="备注(可选,先填再点按钮)"
+                     class="block w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none" />
+              <div class="flex flex-wrap items-center gap-2">
+                <% ['include', 'exclude', 'uncertain'].forEach(function(v) {
+                     const col = huColors[v]
+                     const isCur = huDec === v
+                %>
+                  <button type="submit" name="decision" value="<%= v %>"
+                          class="rounded-md px-3 py-1.5 text-sm font-medium <%= isCur ? col[2] + ' ring-2 ring-blue-300' : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50' %>">
+                    <%= col[1] %>
+                  </button>
+                <% }) %>
+                <span class="ajax-feedback ml-2 text-xs text-slate-500" aria-live="polite"></span>
+              </div>
+            </form>
+
+            <!-- 上 / 下一条 导航(按 /screening 排序) -->
+            <% if (typeof neighbors !== 'undefined' && neighbors) { %>
+              <div class="mt-4 flex items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs">
+                <% if (neighbors.prev) { %>
+                  <a href="/projects/<%= project.id %>/records/<%= neighbors.prev %>"
+                     class="rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-700 hover:bg-slate-50">← 上一条</a>
+                <% } else { %>
+                  <span class="rounded-md border border-slate-200 px-2 py-1 text-slate-300">← 已到第一条</span>
+                <% } %>
+                <span class="text-slate-500">第 <%= neighbors.pos %> / <%= neighbors.total %> 条(按"未决定优先"排序)</span>
+                <% if (neighbors.next) { %>
+                  <a href="/projects/<%= project.id %>/records/<%= neighbors.next %>"
+                     class="rounded-md bg-slate-900 px-2 py-1 text-white hover:bg-slate-700">下一条 →</a>
+                <% } else { %>
+                  <span class="rounded-md border border-slate-200 px-2 py-1 text-slate-300">已到最后一条 →</span>
+                <% } %>
+              </div>
+            <% } %>
+          </section>
+        <% } %>
+
         <div class="rounded-2xl border border-slate-200 bg-white p-5 text-xs text-slate-500">
-          <p class="font-medium text-slate-700">下一步</p>
-          <p class="mt-1">完成所有条目检视后,进入双盲筛选:决定纳入 / 排除。</p>
+          <p class="font-medium text-slate-700">列表视图</p>
+          <p class="mt-1">查看所有条目的筛选状态、批量操作、过滤等。</p>
           <a href="/projects/<%= project.id %>/screening"
-             class="mt-2 inline-block text-blue-700 hover:underline">前往筛选 →</a>
+             class="mt-2 inline-block text-blue-700 hover:underline">回筛选列表 →</a>
         </div>
       </aside>
     </div>
+
+    <!-- AJAX 决定 — 直接在详情页提交不跳页 -->
+    <script>
+      (function() {
+        var form = document.querySelector('form[data-ajax-decide-detail]')
+        if (!form) return
+        form.addEventListener('submit', function(e) {
+          e.preventDefault()
+          var fb = form.querySelector('.ajax-feedback')
+          var submitter = e.submitter
+          if (!submitter || !submitter.value) {
+            if (fb) { fb.textContent = '请点击决定按钮'; fb.style.color = '#e11d48' }
+            return
+          }
+          var decisionValue = submitter.value
+          var prevText = submitter.textContent
+          submitter.disabled = true
+          submitter.textContent = '保存中…'
+          if (fb) { fb.textContent = ''; fb.style.color = '' }
+
+          var fd = new FormData(form)
+          fd.set('decision', decisionValue)
+          // ⚠ 用 URLSearchParams 避免 multipart(server 只装 urlencoded + json)
+          var body = new URLSearchParams(fd)
+          fetch(form.action, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            body: body,
+          })
+            .then(function(r) { return r.json().catch(function() { return { ok: false, error: 'HTTP ' + r.status } }) })
+            .then(function(d) {
+              submitter.disabled = false
+              submitter.textContent = prevText
+              if (!d || !d.ok) {
+                if (fb) { fb.style.color = '#e11d48'; fb.textContent = '✗ ' + ((d && d.error) || '保存失败') }
+                return
+              }
+              if (fb) {
+                var labels = { include: '纳入', exclude: '排除', uncertain: '不确定' }
+                fb.style.color = '#059669'
+                fb.textContent = '✓ 已保存:' + (labels[d.decision] || d.decision)
+              }
+              // 1.2s 后跳到下一条(neighbors.next),让用户连续筛选
+              <% if (neighbors && neighbors.next) { %>
+                setTimeout(function() { window.location.href = '/projects/<%= project.id %>/records/<%= neighbors.next %>' }, 1200)
+              <% } else { %>
+                setTimeout(function() { window.location.reload() }, 1200)
+              <% } %>
+            })
+            .catch(function() {
+              submitter.disabled = false
+              submitter.textContent = prevText
+              if (fb) { fb.style.color = '#e11d48'; fb.textContent = '✗ 网络错误' }
+            })
+        })
+      })()
+    </script>
 
     <!-- 危险区:删除 -->
     <div class="rounded-2xl border border-rose-200 bg-rose-50/40 p-5">

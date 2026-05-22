@@ -1031,6 +1031,62 @@ router.get('/:id/records/:recordId', (req, res) => {
     console.error('[records:detail] formatAllStyles failed:', e.message)
   }
 
+  // 当前 screening 状态(给详情页的"人工决定"区用)
+  let screening = null
+  try {
+    const sd = db.prepare(
+      `SELECT id, ai_suggestion, ai_reason, ai_confidence, ai_model,
+              ai_matched_inclusion, ai_matched_exclusion, ai_need_full_text, ai_ran_at,
+              human_decision, human_reason, decided_at
+       FROM screening_decisions
+       WHERE record_id = ? AND stage = 'title_abstract'`
+    ).get(record.id)
+    if (sd) {
+      const parseJ = (s) => {
+        if (!s) return []
+        try { const x = JSON.parse(s); return Array.isArray(x) ? x : [] } catch { return [] }
+      }
+      screening = {
+        ...sd,
+        ai_matched_inclusion: parseJ(sd.ai_matched_inclusion),
+        ai_matched_exclusion: parseJ(sd.ai_matched_exclusion),
+        ai_need_full_text:    parseJ(sd.ai_need_full_text),
+        ai_suggestion:  sd.ai_suggestion  || 'not_run',
+        human_decision: sd.human_decision || 'not_decided',
+      }
+    } else {
+      screening = { ai_suggestion: 'not_run', human_decision: 'not_decided', ai_reason: null, human_reason: null, ai_matched_inclusion: [], ai_matched_exclusion: [], ai_need_full_text: [] }
+    }
+  } catch (e) {
+    console.error('[records:detail] load screening failed:', e.message)
+  }
+
+  // 上 / 下一条(在同项目内的同 ORDER 中,方便详情页跳)
+  // 用跟 /screening 一样的排序:未决定优先 → uncertain 优先 → 年份 → 标题
+  let neighbors = null
+  try {
+    const allOrdered = db.prepare(
+      `SELECT r.id
+       FROM records r
+       LEFT JOIN screening_decisions sd ON sd.record_id = r.id AND sd.stage = 'title_abstract'
+       WHERE r.project_id = ? AND r.duplicate_of_record_id IS NULL
+       ORDER BY
+         CASE WHEN COALESCE(sd.human_decision, 'not_decided') = 'not_decided' THEN 0 ELSE 1 END,
+         CASE WHEN sd.ai_suggestion = 'uncertain' THEN 0
+              WHEN sd.ai_suggestion = 'include'   THEN 1
+              WHEN sd.ai_suggestion = 'exclude'   THEN 2
+              ELSE 3 END,
+         (r.year IS NULL), r.year DESC, r.title`
+    ).all(project.id)
+    const idx = allOrdered.findIndex((x) => x.id === record.id)
+    neighbors = {
+      prev: idx > 0 ? allOrdered[idx - 1].id : null,
+      next: idx >= 0 && idx < allOrdered.length - 1 ? allOrdered[idx + 1].id : null,
+      pos: idx + 1,
+      total: allOrdered.length,
+    }
+  } catch (e) { /* ignore */ }
+
   res.render('projects/records/detail', {
     title: `${record.title} · ${project.title}`,
     project,
@@ -1042,6 +1098,8 @@ router.get('/:id/records/:recordId', (req, res) => {
     duplicateGroup,
     mergedInto,
     citations,
+    screening,
+    neighbors,
   })
 })
 

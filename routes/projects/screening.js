@@ -402,7 +402,16 @@ router.get('/:id/screening', (req, res) => {
        LEFT JOIN screening_decisions sd
          ON sd.record_id = r.id AND sd.stage = 'title_abstract'
        WHERE ${whereSql}
-       ORDER BY (r.year IS NULL), r.year DESC, r.title
+       ORDER BY
+         -- 未人工决定的排最前(用户一打开就看到剩余待办)
+         CASE WHEN COALESCE(sd.human_decision, 'not_decided') = 'not_decided' THEN 0 ELSE 1 END,
+         -- 同 bucket 内:AI uncertain 排前面(更需要人工细看)
+         CASE WHEN sd.ai_suggestion = 'uncertain' THEN 0
+              WHEN sd.ai_suggestion = 'include'   THEN 1
+              WHEN sd.ai_suggestion = 'exclude'   THEN 2
+              ELSE 3 END,
+         -- 然后按年份倒序、标题
+         (r.year IS NULL), r.year DESC, r.title
        LIMIT ? OFFSET ?`
     )
     .all(...params, PAGE_SIZE, offset)
