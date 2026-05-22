@@ -549,3 +549,63 @@ CREATE TABLE IF NOT EXISTS grade_assessments (
 );
 CREATE INDEX IF NOT EXISTS idx_grade_project ON grade_assessments(project_id);
 CREATE INDEX IF NOT EXISTS idx_grade_theme ON grade_assessments(theme_id);
+
+-- ========================================
+-- Phase 9: 文献矩阵 + 期刊模板
+-- ========================================
+
+-- 文献矩阵 — 替代/补充 extractions 的 JSON 抽取,用结构化扁平 fields(JSON)
+-- 用户主导填写(可下载 XLSX 模板或在线 inline 编辑),每列配复制 prompt
+-- 一条 record 一行 matrix(UNIQUE 防重)
+CREATE TABLE IF NOT EXISTS literature_matrix (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  record_id TEXT NOT NULL,
+  fields TEXT NOT NULL DEFAULT '{}',          -- JSON: { study_design, sample_size, ... + 自定义列 }
+  filled_by TEXT NOT NULL DEFAULT 'user'      -- user | ai | ai_edited
+    CHECK (filled_by IN ('user', 'ai', 'ai_edited')),
+  completeness REAL NOT NULL DEFAULT 0,       -- 0..1
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
+  UNIQUE(project_id, record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_matrix_project ON literature_matrix(project_id);
+
+-- 项目自定义的矩阵列(默认 13 列由 Agent V 内置;用户可加)
+CREATE TABLE IF NOT EXISTS matrix_columns (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  key TEXT NOT NULL,                          -- snake_case 字段名,如 sample_size_total
+  label TEXT NOT NULL,                        -- 显示名,如"样本量(总数)"
+  description TEXT,                           -- 给用户提示
+  ai_prompt_template TEXT,                    -- 复制 prompt,占位符 {{title}} {{abstract}}
+  is_quantitative INTEGER NOT NULL DEFAULT 0, -- 1 = 要数字,UI 渲染 number input
+  is_default INTEGER NOT NULL DEFAULT 0,      -- 1 = 系统默认列,用户也能改
+  display_order INTEGER NOT NULL DEFAULT 100,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  UNIQUE(project_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_matrixcols_project ON matrix_columns(project_id);
+
+-- 期刊模板:上传一篇目标期刊文章 PDF,提取结构作为生成基准
+CREATE TABLE IF NOT EXISTS target_journal_templates (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  source_pdf_path TEXT NOT NULL,              -- 绝对路径
+  source_pdf_filename TEXT,
+  journal_name TEXT,                          -- 期刊名(用户填或 AI 抽)
+  article_title TEXT,                         -- 文章标题
+  extracted_structure TEXT NOT NULL DEFAULT '{}',
+                                              -- JSON: { sections: [{name, word_count, has_table, has_figure}],
+                                              --         style_notes, citation_density, figure_types }
+  extracted_at TEXT,
+  uploaded_by_user_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  UNIQUE(project_id)  -- 每个项目最多 1 个模板(若想换就替换)
+);
+CREATE INDEX IF NOT EXISTS idx_journal_template_project ON target_journal_templates(project_id);
