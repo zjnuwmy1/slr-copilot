@@ -140,8 +140,9 @@
                   </div>
                 <% } %>
 
-                <!-- 命中数 + 检索日期表单 -->
+                <!-- 命中数 + 检索日期表单(AJAX 保存,不刷新页面) -->
                 <form method="post" action="/projects/<%= project.id %>/search/<%= s.id %>/log"
+                      data-ajax-save="log"
                       class="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end pt-2 border-t border-slate-200">
                   <div>
                     <label class="text-xs text-slate-600" for="rc-<%= s.id %>">命中数</label>
@@ -157,7 +158,7 @@
                            class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm">
                   </div>
                   <button type="submit"
-                          class="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700">
+                          class="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700 disabled:opacity-60">
                     保存记录
                   </button>
                 </form>
@@ -165,12 +166,13 @@
                 <!-- 备注 -->
                 <details class="text-xs text-slate-600">
                   <summary class="cursor-pointer text-slate-500 hover:text-slate-700">备注 / 修订记录<% if (s.notes) { %> <span class="text-emerald-600">·已填</span><% } %></summary>
-                  <form method="post" action="/projects/<%= project.id %>/search/<%= s.id %>/notes" class="mt-2 space-y-2">
+                  <form method="post" action="/projects/<%= project.id %>/search/<%= s.id %>/notes"
+                        data-ajax-save="notes" class="mt-2 space-y-2">
                     <textarea name="notes" rows="3"
                               placeholder="例如:WoS 实际跑出 1543 条,比预期少;尝试去掉 NEAR/5 后增加到 2010 条"
                               class="block w-full rounded-md border-slate-300 px-2 py-1.5 text-xs"><%= s.notes || '' %></textarea>
                     <div class="flex justify-end">
-                      <button type="submit" class="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100">保存备注</button>
+                      <button type="submit" class="rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-60">保存备注</button>
                     </div>
                   </form>
                 </details>
@@ -611,6 +613,88 @@
         }, 1500)
       } catch (e) {
         alert('复制失败,请手动选中文本复制')
+      }
+    })
+  })
+
+  // ============================================================
+  // AJAX 保存 — 命中数 / 检索日期 / 备注
+  // 不刷新页面 → 不重置当前 tab、滚动位置、其他正在编辑的输入
+  // ============================================================
+  document.querySelectorAll('form[data-ajax-save]').forEach((form) => {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const kind = form.dataset.ajaxSave  // 'log' or 'notes'
+      const btn = form.querySelector('button[type=submit]')
+      const originalBtnText = btn ? btn.textContent : ''
+
+      if (btn) {
+        btn.disabled = true
+        btn.textContent = '保存中…'
+      }
+
+      const fd = new FormData(form)
+      try {
+        const r = await fetch(form.action, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+          body: new URLSearchParams(fd),
+          credentials: 'same-origin',
+        })
+        const data = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }))
+
+        if (!r.ok || !data.ok) {
+          if (btn) {
+            btn.textContent = '保存失败'
+            btn.classList.add('bg-rose-600', 'text-white', 'border-rose-300')
+            setTimeout(() => {
+              btn.textContent = originalBtnText
+              btn.classList.remove('bg-rose-600', 'text-white', 'border-rose-300')
+              btn.disabled = false
+            }, 1800)
+          }
+          console.error('[ajax-save]', data.error || ('HTTP ' + r.status))
+          return
+        }
+
+        // 成功反馈:按钮短暂变绿 ✓ 已保存
+        if (btn) {
+          btn.textContent = '✓ 已保存'
+          btn.classList.add('bg-emerald-600', 'text-white', 'border-emerald-600')
+          setTimeout(() => {
+            btn.textContent = originalBtnText
+            btn.classList.remove('bg-emerald-600', 'text-white', 'border-emerald-600')
+            btn.disabled = false
+          }, 1100)
+        }
+
+        // notes 表单顺便更新 summary 里的「·已填」标志
+        if (kind === 'notes') {
+          const summary = form.closest('details')?.querySelector('summary')
+          const hasNotes = (fd.get('notes') || '').trim().length > 0
+          if (summary) {
+            const existingMark = summary.querySelector('.notes-filled-mark')
+            if (hasNotes && !existingMark) {
+              const span = document.createElement('span')
+              span.className = 'notes-filled-mark text-emerald-600'
+              span.textContent = ' ·已填'
+              summary.appendChild(span)
+            } else if (!hasNotes && existingMark) {
+              existingMark.remove()
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[ajax-save] network error:', err)
+        if (btn) {
+          btn.textContent = '网络错误'
+          btn.classList.add('bg-rose-600', 'text-white', 'border-rose-300')
+          setTimeout(() => {
+            btn.textContent = originalBtnText
+            btn.classList.remove('bg-rose-600', 'text-white', 'border-rose-300')
+            btn.disabled = false
+          }, 1800)
+        }
       }
     })
   })

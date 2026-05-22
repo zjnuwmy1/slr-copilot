@@ -426,16 +426,23 @@ router.post('/:id/search/generate', async (req, res) => {
 // ============================================================
 router.post('/:id/search/:strategyId/log', (req, res) => {
   const db = req.app.locals.db
-  const project = ownProjectOr404(db, req.params.id, req.user.id)
-  if (!project) {
-    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+  // 判断是否 AJAX 请求(避免页面刷新)
+  const wantsJson =
+    (req.get('Accept') || '').includes('application/json') ||
+    req.get('X-Requested-With') === 'XMLHttpRequest'
+
+  const fail = (status, message) => {
+    if (wantsJson) return res.status(status).json({ ok: false, error: message })
+    return res.status(status).render('error', { title: 'Error', message })
   }
+
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) return fail(404, '项目不存在')
+
   const row = db
     .prepare('SELECT id FROM search_strategies WHERE id = ? AND project_id = ?')
     .get(req.params.strategyId, project.id)
-  if (!row) {
-    return res.status(404).render('error', { title: 'Not Found', message: '检索式不存在' })
-  }
+  if (!row) return fail(404, '检索式不存在')
 
   const rcRaw = String(req.body.result_count ?? '').trim()
   let resultCount = null
@@ -444,7 +451,6 @@ router.post('/:id/search/:strategyId/log', (req, res) => {
     if (Number.isFinite(n) && n >= 0) resultCount = n
   }
   let searchDate = String(req.body.search_date ?? '').trim() || null
-  // 简单校验 YYYY-MM-DD
   if (searchDate && !/^\d{4}-\d{2}-\d{2}$/.test(searchDate)) {
     searchDate = null
   }
@@ -460,6 +466,14 @@ router.post('/:id/search/:strategyId/log', (req, res) => {
     payload: { strategy_id: row.id, result_count: resultCount, search_date: searchDate },
   })
 
+  if (wantsJson) {
+    return res.json({
+      ok: true,
+      strategy_id: row.id,
+      result_count: resultCount,
+      search_date: searchDate,
+    })
+  }
   req.session.flash = { type: 'success', message: '检索记录已保存。' }
   res.redirect(`/projects/${project.id}/search`)
 })
@@ -469,16 +483,21 @@ router.post('/:id/search/:strategyId/log', (req, res) => {
 // ============================================================
 router.post('/:id/search/:strategyId/notes', (req, res) => {
   const db = req.app.locals.db
-  const project = ownProjectOr404(db, req.params.id, req.user.id)
-  if (!project) {
-    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+  const wantsJson =
+    (req.get('Accept') || '').includes('application/json') ||
+    req.get('X-Requested-With') === 'XMLHttpRequest'
+  const fail = (status, message) => {
+    if (wantsJson) return res.status(status).json({ ok: false, error: message })
+    return res.status(status).render('error', { title: 'Error', message })
   }
+
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) return fail(404, '项目不存在')
+
   const row = db
     .prepare('SELECT id FROM search_strategies WHERE id = ? AND project_id = ?')
     .get(req.params.strategyId, project.id)
-  if (!row) {
-    return res.status(404).render('error', { title: 'Not Found', message: '检索式不存在' })
-  }
+  if (!row) return fail(404, '检索式不存在')
 
   const notes = String(req.body.notes ?? '').slice(0, 4000).trim() || null
   db.prepare(`UPDATE search_strategies SET notes = ? WHERE id = ?`).run(notes, row.id)
@@ -490,6 +509,7 @@ router.post('/:id/search/:strategyId/notes', (req, res) => {
     payload: { strategy_id: row.id, has_notes: !!notes },
   })
 
+  if (wantsJson) return res.json({ ok: true, strategy_id: row.id, notes })
   req.session.flash = { type: 'success', message: '备注已保存。' }
   res.redirect(`/projects/${project.id}/search`)
 })
