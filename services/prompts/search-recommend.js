@@ -82,6 +82,38 @@ export function buildRecommendSystem({ targetDatabases }) {
    - **不要**:动 year_range / 动 document_types / 动 language。
      如果命中数太多 / 太少,在 rationale 里说明并 warning 给用户,**不要私自压缩或扩大协议范围**。
 
+🚫 **典型反模式 — 这些会让 query 零命中 / 报错,绝对不要做**:
+
+1. **不要把多个概念组塞进一个 TITLE/TI 字段还组合 AND**:
+   - WoS 错例:\`TI=(("design thinking" OR ...) AND ("metacognit*" OR ...))\`
+   - Scopus 错例:\`TITLE(("A" OR ...) AND ("C" OR ...))\`
+   论文标题**极少同时包含**两个不同概念组的关键词,会直接零命中。
+   Scopus 的 \`TITLE(...)\` 字段还**根本不支持内嵌 AND**,会报 "spelled incorrectly"。
+   正确做法:
+   - WoS: 所有概念组放进**同一个 \`TS=(...)\` 块**,组间 AND;**不要换字段**。
+   - Scopus: 所有概念组放进**同一个 \`TITLE-ABS-KEY(...)\` 块**,组间 AND。
+
+2. **收紧命中数时不要切到 title-only 字段**(TI / TITLE)。
+   收紧的合法路径:
+   - 删 concept_set 里过宽的同义词(例如砍掉 "AI agent*" "foundation model*")
+   - 把某个概念组缩到核心 1-2 个词
+   - 加更具体的概念组(如 "outcome measure" 类)
+   **唯一例外**:当协议明确说"只搜标题"时,才能整体切到 TI / TITLE。
+
+3. **WoS 合法 document type**(常用)— 只用这些,不要发明:
+   Article, Review, Proceedings Paper, Meeting Abstract, Editorial Material,
+   Book Chapter, Letter, Correction, News Item, Book, Data Paper,
+   Software Review, Hardware Review, Database Review。
+   \`"Note"\` 不是 WoS 合法类型,**不要写 NOT DT=("Note")**。
+
+4. **Scopus 合法 document type 代码**(全部 lowercase):
+   ar (Article), re (Review), cp (Conference Paper), cr (Conference Review),
+   ed (Editorial), le (Letter), no (Note), sh (Short Survey),
+   ch (Book Chapter), bk (Book), er (Erratum)。
+   多个 NOT 用一个 \`AND NOT (DOCTYPE("cp") OR DOCTYPE("cr") OR ...)\` 合并,
+   **不要**写一长串 \`AND NOT DOCTYPE("X") AND NOT DOCTYPE("Y") AND ...\`
+   (Scopus parser 偶尔会因此误判)。
+
 ⚠ **方法学硬性要求(SLR 跨库一致性)**:
    主检索是 **一套共享的概念规格**(\`concept_set\`),在 ${N} 个库里用各自的语法分别**渲染**一遍。
    - 概念组(包括同义词扩展)、年份范围、允许的文献类型、排除的文献类型、语言 ——

@@ -134,6 +134,27 @@ export function buildSearchSystem({ targetDatabases }) {
      如果协议说 "deep learning for medical imaging",不要扩到 "machine learning for genomics"。
    - 命中数太多 / 太少 → 在 rationale / warnings 里向用户说明,**不要私自压缩或扩大年份范围 / 文献类型 / 语言**。
 
+🚫 **典型反模式 — 这些会让 query 零命中 / 报错,绝对不要做**:
+
+1. **不要把多个概念组塞进一个 TITLE/TI 字段还组合 AND**:
+   - WoS 错例:\`TI=(("design thinking" OR ...) AND ("metacognit*" OR ...))\`
+   - Scopus 错例:\`TITLE(("A" OR ...) AND ("C" OR ...))\`
+   论文标题**极少同时包含**两个不同概念组的关键词,会直接零命中。
+   Scopus 的 \`TITLE(...)\` 字段还**根本不支持内嵌 AND**(会报 spelled incorrectly)。
+   正确:WoS 用同一个 \`TS=(...)\` 块,Scopus 用同一个 \`TITLE-ABS-KEY(...)\`,组间 AND。
+   high_precision 收紧时也不要换字段 — 砍同义词 / 加更窄的概念组才对。
+
+2. **WoS 合法 document type**(只用这些):
+   Article, Review, Proceedings Paper, Meeting Abstract, Editorial Material,
+   Book Chapter, Letter, Correction, News Item, Book, Data Paper,
+   Software Review, Hardware Review, Database Review。
+   \`"Note"\` 不是 WoS 合法类型,不要写 NOT DT=("Note")。
+
+3. **Scopus 合法 document type 代码**(全 lowercase):
+   ar / re / cp / cr / ed / le / no / sh / ch / bk / er。
+   多个 NOT 合并成一个:\`AND NOT (DOCTYPE("cp") OR DOCTYPE("cr") OR ...)\`,
+   不要写一长串 \`AND NOT DOCTYPE(X) AND NOT DOCTYPE(Y) ...\`。
+
 ⚠ **方法学硬性要求(SLR 跨库一致性)**:
    同一个 query_type 版本(high_recall / balanced / high_precision)的**全部库 query_text 必须共享同一套**:
      - 同样的概念组 + 同样的同义词扩展
