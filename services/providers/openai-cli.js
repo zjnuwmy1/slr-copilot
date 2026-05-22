@@ -143,13 +143,27 @@ export async function sendMessage({
   )
 
   // 3) args(可选注入 reasoning_effort + 工具白名单)
-  // 防御:gpt-5.x + reasoning.effort='minimal' + 任何工具 = 400 invalid_request_error。
-  // 只在调用方启用了至少一个工具时才 bump minimal→low。否则保持原意(minimal 最快最便宜)。
+  //
+  // ⚠ 重要约束:codex 0.132.0 + gpt-5.x 的限制
+  //    实测 codex 0.132.0 用 gpt-5.5 时,**即使我们 --disable 了 tool_search /
+  //    image_generation 等所有可知 feature flag,codex 仍会根据模型的内置
+  //    supports_search_tool=true(在 model_catalog_json 里)把 web_search 工具
+  //    放进 OpenAI Responses API 请求**。这是模型层的 capability,不是 codex feature。
+  //
+  //    然后 OpenAI API 规则:gpt-5.x + reasoning.effort='minimal' + 任何工具 = 400 错误。
+  //
+  //    既然我们没法在 codex 0.132 层面真正剥离 web_search,**对 codex CLI 走 OpenAI**
+  //    必须把 minimal 抬到 'low'(实测 gpt-5.5 low 仍然很快,screening 单条 ~3-5s)。
+  //
+  //    这只影响 codex CLI 路径;走 openai-api.js(API Key)的调用不受此限制。
+  //    用户在 admin/settings 配置 reasoning='minimal' 时,我们在这里安静地翻译,
+  //    audit log 里会记录实际跑的 effective reasoning。
   const enabledToolsList = Array.isArray(enabledTools)
     ? enabledTools.filter((s) => typeof s === 'string' && s.trim())
     : []
   let reasoningEffort = String(reasoning || '').toLowerCase()
-  if (reasoningEffort === 'minimal' && enabledToolsList.length > 0) {
+  if (reasoningEffort === 'minimal') {
+    // codex CLI 限制:minimal 用不了任何工具(见上面注释),自动 bump 到 low
     reasoningEffort = 'low'
   }
   const args = buildExecArgs({
