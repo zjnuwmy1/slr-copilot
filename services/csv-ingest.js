@@ -322,6 +322,7 @@ function mapWosRow(m) {
   const doi = pick(m, 'di', 'doi')
   const abstract = pick(m, 'ab', 'abstract')
   const keywords = pick(m, 'de', 'author keywords', 'id', 'keywords plus', 'keywords')
+  const language = pick(m, 'la', 'language', 'languages')
   return {
     title: title || '',
     authors_text: normalizeWosAuthors(authorsRaw),
@@ -330,6 +331,7 @@ function mapWosRow(m) {
     doi: doi || '',
     abstract: abstract || '',
     keywords: splitKeywords(keywords),
+    language: language || '',
   }
 }
 
@@ -341,6 +343,8 @@ function mapScopusRow(m) {
   const doi = pick(m, 'doi')
   const abstract = pick(m, 'abstract')
   const keywords = pick(m, 'author keywords', 'index keywords', 'keywords')
+  // Scopus 字段是 "Language of Original Document"
+  const language = pick(m, 'language of original document', 'language', 'languages')
   return {
     title: title || '',
     authors_text: normalizeScopusAuthors(authorsRaw),
@@ -349,6 +353,7 @@ function mapScopusRow(m) {
     doi: doi || '',
     abstract: abstract || '',
     keywords: splitKeywords(keywords),
+    language: language || '',
   }
 }
 
@@ -358,7 +363,8 @@ function mapPubmedRow(m) {
   const journal = pick(m, 'journal/book', 'journal', 'journal/book ')
   const yearRaw = pick(m, 'publication year', 'year')
   const doi = pick(m, 'doi')
-  // PubMed CSV 一般不带 abstract / keywords;留空。
+  // PubMed CSV 一般不带 abstract / keywords / language;language 一般要去 PubMed [Language] 字段
+  const language = pick(m, 'language', 'languages')
   return {
     title: title || '',
     authors_text: normalizePubmedAuthors(authorsRaw),
@@ -367,6 +373,7 @@ function mapPubmedRow(m) {
     doi: doi || '',
     abstract: '',
     keywords: [],
+    language: language || '',
   }
 }
 
@@ -464,14 +471,14 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
       title, normalized_title, authors_json, authors_text,
       year, date_text, journal, publisher,
       doi, url, abstract, keywords_json, notes, has_pdf,
-      source_databases
+      source_databases, language
     ) VALUES (
       ?, ?, NULL,
       NULL, NULL, ?,
       ?, ?, ?, ?,
       ?, NULL, ?, NULL,
       ?, NULL, ?, ?, NULL, 0,
-      ?
+      ?, ?
     )
   `)
 
@@ -532,6 +539,7 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
         r.abstract || null,
         JSON.stringify(r.keywords || []),
         JSON.stringify(dbsArr),
+        r.language || null,
       )
 
       // 缓存到 map 里,避免本批后续行重复同 DOI/title 再插入

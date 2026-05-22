@@ -118,12 +118,31 @@ function shapeRecord(row) {
       }
     } catch { /* ignore */ }
   }
+  // 解析语言字段:WoS/Scopus 用分号 / 逗号 / 斜杠分隔多语言
+  const langRaw = (row.language || '').trim()
+  let langList = []
+  if (langRaw) {
+    langList = langRaw
+      .split(/[;,\/、]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  const lower = langList.map((l) => l.toLowerCase())
+  const hasEnglish = lower.some((l) => l === 'english' || l === 'eng' || l === 'en')
+  const hasOther = lower.some((l) => l && l !== 'english' && l !== 'eng' && l !== 'en' && l !== 'unspecified' && l !== 'unknown')
+  // 多语言:列表里既有英文也有别的语言(或仅有非英文)
+  const isMultiLanguage = hasOther
+  const isNonEnglishOnly = langList.length > 0 && !hasEnglish
+
   return {
     ...row,
     authors_list: parseAuthors(row.authors_json),
     authors_short: shortAuthorList(row.authors_json, row.authors_text, 3),
     keywords_list: parseJsonArrayField(row.keywords_json),
     source_databases_list: sourceDbs,
+    language_list: langList,
+    is_multi_language: isMultiLanguage,
+    is_non_english_only: isNonEnglishOnly,
     has_doi: !!(row.doi && String(row.doi).trim()),
     has_notes: !!(row.notes && String(row.notes).trim()),
     is_duplicate: !!row.duplicate_of_record_id,
@@ -137,6 +156,9 @@ function parseFilters(query) {
     has_doi: query.has_doi === '1' || query.has_doi === 'on' || query.has_doi === 'true',
     // 默认隐藏重复(query 未传 = 选中;显式 ='0' 才显示)
     hide_duplicates: query.hide_duplicates !== '0',
+    // 仅显示多语言 / 非英文(WoS LA= "包含英文" 漏出来的多语种论文)
+    only_multi_language: query.only_multi_language === '1',
+    only_non_english: query.only_non_english === '1',
     year_from: null,
     year_to: null,
     q: '',
@@ -168,6 +190,19 @@ function buildListQuery(projectId, filters, page) {
   }
   if (filters.has_doi) {
     where.push("r.doi IS NOT NULL AND r.doi != ''")
+  }
+  // 多语言:Language 字段非空 + 包含分隔符(';' / ',' / '/' / '、')即多语言
+  if (filters.only_multi_language) {
+    where.push(`(r.language IS NOT NULL AND r.language != '' AND
+      (r.language LIKE '%;%' OR r.language LIKE '%,%' OR r.language LIKE '%/%' OR r.language LIKE '%、%'))`)
+  }
+  // 非英文:Language 字段非空 + 不含 english/eng/en token
+  if (filters.only_non_english) {
+    where.push(`(r.language IS NOT NULL AND r.language != ''
+      AND LOWER(r.language) NOT LIKE '%english%'
+      AND LOWER(r.language) NOT LIKE '%eng%'
+      AND LOWER(r.language) NOT LIKE 'en;%'
+      AND LOWER(r.language) != 'en')`)
   }
   if (filters.year_from != null) {
     where.push('r.year >= ?')
@@ -243,6 +278,8 @@ function buildPageHref(basePath, query, page) {
   if (query.hide_duplicates === '0') params.set('hide_duplicates', '0')
   if (query.year_from) params.set('year_from', String(query.year_from))
   if (query.year_to) params.set('year_to', String(query.year_to))
+  if (query.only_multi_language === '1') params.set('only_multi_language', '1')
+  if (query.only_non_english === '1') params.set('only_non_english', '1')
   params.set('page', String(page))
   return `${basePath}?${params.toString()}`
 }

@@ -140,6 +140,16 @@
           </label>
           <!-- 真正提交的字段:checkbox 不选时显式提交 0 -->
           <input type="hidden" id="hide_dup_val" name="hide_duplicates" value="<%= hideDup ? '' : '0' %>" />
+          <label class="inline-flex items-center gap-1.5" title="WoS LA= 实际上是『语言列表包含英文』,韩文/中文期刊带英文摘要的论文会漏进来。勾上只看这些可疑条目。">
+            <input type="checkbox" name="only_multi_language" value="1" <%= filters.only_multi_language ? 'checked' : '' %>
+                   class="rounded border-slate-300" />
+            <span class="text-amber-700">仅多语言</span>
+          </label>
+          <label class="inline-flex items-center gap-1.5" title="Language 字段不含英文(纯非英文论文)">
+            <input type="checkbox" name="only_non_english" value="1" <%= filters.only_non_english ? 'checked' : '' %>
+                   class="rounded border-slate-300" />
+            <span class="text-rose-700">仅非英文</span>
+          </label>
         </div>
         <div class="ml-auto flex gap-2">
           <button type="submit"
@@ -249,6 +259,13 @@
                       <span class="rounded px-1.5 py-0.5 text-[10px] font-medium <%= dbBadgeCls %>"
                             title="来源:<%= dbLabel %>"><%= dbLabel %></span>
                     <% }) %>
+                    <% if (r.is_non_english_only) { %>
+                      <span class="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-medium text-rose-700"
+                            title="语言字段:<%= (r.language_list || []).join(' / ') %> — 不含英文,可能需要排除">非英文</span>
+                    <% } else if (r.is_multi_language) { %>
+                      <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800"
+                            title="语言字段:<%= (r.language_list || []).join(' / ') %> — 多语言论文(英文 + 其他),WoS LA=英文 会包含这种,人工复核">多语言</span>
+                    <% } %>
                     <% if (r.has_pdf) { %>
                       <span class="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-emerald-200"
                             title="<%= r.pdf_count %> 个 PDF">PDF</span>

@@ -82,6 +82,14 @@ function runMigrations(db) {
     db.exec(`ALTER TABLE protocols ADD COLUMN iteration_metadata TEXT`)
   }
 
+  // M8:records.language —— WoS / Scopus / PubMed CSV 里的 Language 字段原文。
+  //    例:"English" / "English; Korean" / "Chinese". 用于:
+  //    ① UI 显示语言徽章;② 多语言论文亮黄(WoS LA= 查"包含英文",
+  //    韩国期刊英文摘要 + 韩文全文会漏进结果,UI 标记便于人工排查)。
+  if (!columnExists(db, 'records', 'language')) {
+    db.exec(`ALTER TABLE records ADD COLUMN language TEXT`)
+  }
+
   // M7:pending_iterations —— 跑完 diagnose 但用户还没决定 adopt/discard 的
   //    LLM 输出。之前放在 cookie-session 里,几 KB 的 JSON 把 Set-Cookie
   //    header 撑爆,Nginx proxy_buffer_size 8K 直接 502 Bad Gateway。
