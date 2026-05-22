@@ -132,6 +132,10 @@ export function gatherProjectSnapshot(db, projectId) {
   // —— AI 筛选意见的整体分布 + AI vs human 一致性矩阵 ——
   const aiScreeningDetails = gatherAiScreeningDetails(db, projectId)
 
+  // —— 每条 record 的 AI 判断细节(按信号价值排序,cap 默认 300) ——
+  // LLM 拿这个能直接看到 "哪几条 AI 错过了" / "哪几条 AI 过纳了" 的原文
+  const perRecordDecisions = gatherPerRecordDecisions(db, projectId, 300)
+
   // —— Themes(若有) ——
   const themes = (() => {
     try {
@@ -171,6 +175,7 @@ export function gatherProjectSnapshot(db, projectId) {
     record_counts: { total: totalRecords, by_source: recordsBySource },
     screening_stats,
     ai_screening: aiScreeningDetails,
+    per_record_decisions: perRecordDecisions,
     top_exclusion_reasons: {
       human: topHumanReasons,
       ai: topAiReasons,
@@ -289,6 +294,115 @@ function gatherAiScreeningDetails(db, projectId) {
   }
 }
 
+/**
+ * 每条 record 的 AI ↔ human 决策细节(按信号价值排序,cap 至 maxRows)。
+ *
+ * 信号优先级(决定排序 + 取舍):
+ *   tier 1: AI 与 human 分歧的 records(AI exclude & human include,或 AI include & human exclude)
+ *   tier 2: AI uncertain 但 human 已决的(AI 不确定时人工怎么判 — 揭示协议边界)
+ *   tier 3: AI 与 human 一致(取最多 80 条采样,带 ai_reason 的优先)
+ *   tier 4: 仅 AI 已跑但 human 还没决(代表性 30 条,只在 tier 1-3 不够时填充)
+ *
+ * 每条压缩成 1 行紧凑表示,方便 LLM 处理大量 records。
+ */
+function gatherPerRecordDecisions(db, projectId, maxRows = 300) {
+  const rows = db.prepare(
+    `SELECT
+       r.id, r.title, r.year, r.journal, r.doi, r.abstract, r.source_databases,
+       sd.ai_suggestion, sd.ai_reason, sd.ai_confidence,
+       sd.ai_matched_inclusion, sd.ai_matched_exclusion,
+       sd.human_decision, sd.human_reason
+     FROM records r
+     LEFT JOIN screening_decisions sd
+       ON sd.record_id = r.id AND sd.project_id = r.project_id AND sd.stage = 'title_abstract'
+     WHERE r.project_id = ?
+     ORDER BY r.created_at ASC`
+  ).all(projectId)
+
+  // 给每条打分,分桶
+  const tier1 = [] // 分歧
+  const tier2 = [] // AI uncertain + human decided
+  const tier3 = [] // 一致
+  const tier4 = [] // 只有 AI 跑了 / 都没跑
+
+  for (const r of rows) {
+    const ai = r.ai_suggestion || 'not_run'
+    const hu = r.human_decision || 'not_decided'
+
+    const aiDecided = ['include', 'exclude', 'uncertain'].includes(ai)
+    const huDecided = ['include', 'exclude', 'uncertain'].includes(hu)
+
+    if (aiDecided && huDecided) {
+      const isDisagree =
+        (ai === 'include' && hu === 'exclude') ||
+        (ai === 'exclude' && hu === 'include')
+      const isUncertain = (ai === 'uncertain' || hu === 'uncertain') && ai !== hu
+      if (isDisagree) tier1.push(r)
+      else if (isUncertain || ai === 'uncertain') tier2.push(r)
+      else tier3.push(r)
+    } else if (ai === 'uncertain' && huDecided) {
+      tier2.push(r)
+    } else if (aiDecided || huDecided) {
+      tier4.push(r)
+    }
+    // 都没跑的 records 直接跳过(对复盘没信号)
+  }
+
+  // 在每个 tier 内部进一步排序:带 ai_reason 的优先,ai_confidence 极端的优先
+  function sortInTier(arr) {
+    return arr.sort((a, b) => {
+      const aHasReason = (a.ai_reason || '').trim() ? 1 : 0
+      const bHasReason = (b.ai_reason || '').trim() ? 1 : 0
+      if (aHasReason !== bHasReason) return bHasReason - aHasReason
+      // confidence 离 0.5 越远越有"代表性"(很自信但错了 / 很不自信)
+      const ac = typeof a.ai_confidence === 'number' ? Math.abs(a.ai_confidence - 0.5) : -1
+      const bc = typeof b.ai_confidence === 'number' ? Math.abs(b.ai_confidence - 0.5) : -1
+      return bc - ac
+    })
+  }
+
+  // tier 配额(在总 cap 内)
+  const t1 = sortInTier(tier1)  // 不限,但一般也不会太多
+  const t2 = sortInTier(tier2)
+  const t3 = sortInTier(tier3)
+  const t4 = sortInTier(tier4)
+
+  // 全部 tier1 + tier2 都进,然后 tier3 限 80,tier4 限 30(超 cap 截尾)
+  const picked = [
+    ...t1,
+    ...t2,
+    ...t3.slice(0, 80),
+    ...t4.slice(0, 30),
+  ].slice(0, maxRows)
+
+  // 压缩输出形状(每条只留 LLM 需要的字段,title 截断 160,reason 240)
+  return picked.map((r, idx) => ({
+    idx: idx + 1,
+    record_id: r.id,
+    title: truncate(r.title, 160),
+    year: r.year,
+    journal: truncate(r.journal, 60),
+    doi: r.doi || null,
+    source_databases: parseJsonArray(r.source_databases),
+    abstract_snippet: truncate(r.abstract, 240),
+    ai_suggestion: r.ai_suggestion || 'not_run',
+    ai_confidence: typeof r.ai_confidence === 'number' ? +r.ai_confidence.toFixed(2) : null,
+    ai_reason: truncate(r.ai_reason, 240),
+    ai_matched_inclusion: parseJsonArray(r.ai_matched_inclusion).slice(0, 5),
+    ai_matched_exclusion: parseJsonArray(r.ai_matched_exclusion).slice(0, 5),
+    human_decision: r.human_decision || 'not_decided',
+    human_reason: truncate(r.human_reason, 240),
+    tier: tier1.includes(r) ? 'disagree' : tier2.includes(r) ? 'uncertain' : tier3.includes(r) ? 'agree' : 'ai_only',
+  }))
+}
+
+function truncate(s, n) {
+  if (!s) return null
+  const t = String(s).trim()
+  if (t.length <= n) return t
+  return t.slice(0, n) + '…'
+}
+
 function parseJsonArray(s) {
   if (!s) return []
   try {
@@ -367,20 +481,17 @@ export const ITERATION_SYSTEM = `你是顶级 SLR 方法学专家(博士级,有 
 
 🔍 **重点利用以下信号**(按优先级):
 1. **用户自述反馈**(如果提供了)— 最高优先级,优先采信。
-2. **AI ↔ 人工一致性矩阵** — "AI exclude & human INCLUDE" 是 AI 错过的潜在纳入:
-   说明协议描述对 AI 来说不够精确,概念组可能缺关键词;
-   "AI include & human EXCLUDE" 是 AI 过纳:协议判断标准不够严,
-   exclusion criteria 可能漏写。
-3. **Top 人工排除原因** — 用户自己写的话最直接说明协议哪里没对上他的意图。
-4. **Top AI 建议 include / exclude 原因** — AI 解释自己的判断逻辑,
-   能反推协议哪几条 criteria 频繁触发、哪几条几乎不被命中(可能是死条款)。
-5. **AI 频繁引用的 matched_inclusion / matched_exclusion criterion** —
-   纳入侧:某条 criterion 命中率高 = 协议在这条上工作正常;
-         命中率低 = 这条 criterion 措辞过窄,可能漏召。
-   排除侧:某条 criterion 大量触发 = 协议在这里把太多潜在相关文献剔出去,
-         需要检查是否过严。
-6. **检索式命中数 vs 真实纳入率** — 命中多但纳入率低 = 检索式过宽或
-   概念组漂移;命中少 + 纳入率仍低 = 概念组核心词错了。
+2. **逐条 records 的 AI ↔ 人工判断**(prompt 里 "🔴 分歧" 段)— 这是最细粒度的诊断信号。
+   特别看 disagree 这一组:逐条扫 title + abstract + ai_reason + human_reason,
+   找出**系统性模式**(如:"10 条 AI exclude 但 human include 的论文标题里都有
+   'large language model',说明概念组缺这个同义词")。
+3. **AI ↔ 人工一致性矩阵** — 全局总览,验证 (2) 推断的模式范围。
+4. **Top 人工排除原因** — 用户自己写的话最直接说明协议哪里没对上他的意图。
+5. **Top AI 建议 include / exclude 原因 + matched criterion 命中频次** —
+   AI 解释自己的判断逻辑,反推协议哪几条 criteria 频繁触发、哪几条几乎不被
+   命中(可能是死条款)。
+6. **检索式命中数 vs 真实纳入率** — 命中多但纳入率低 = 检索式过宽或概念组
+   漂移;命中少 + 纳入率仍低 = 概念组核心词错了。
 
 输出 **严格 JSON**,字段:
 {
@@ -598,6 +709,40 @@ export function buildIterationUserPrompt({ snapshot, userFeedback }) {
     lines.push('===== Top AI 建议 include 原因(AI 自己解释的纳入逻辑)=====')
     for (const r of sp.top_ai_include_reasons) {
       lines.push(`  ${r.n}× "${String(r.reason).slice(0, 160)}"`)
+    }
+  }
+
+  // —— 每条 record 的 AI 判断细节(超关键 — LLM 能从这里看到具体哪些判错了) ——
+  if (Array.isArray(sp.per_record_decisions) && sp.per_record_decisions.length) {
+    // 按 tier 分组,先列分歧的(信号最强),再 uncertain,再 agree,再 ai_only
+    const byTier = { disagree: [], uncertain: [], agree: [], ai_only: [] }
+    for (const r of sp.per_record_decisions) {
+      if (byTier[r.tier]) byTier[r.tier].push(r)
+    }
+    lines.push('')
+    lines.push(`===== 逐条 records 的 AI ↔ 人工判断(共 ${sp.per_record_decisions.length} 条,按信号强度分组)=====`)
+    lines.push('  格式: [tier] AI=X(conf) Human=Y · "title" · doi · AI reason · matched_inc/exc · Human reason')
+
+    const sections = [
+      ['🔴 分歧(disagree) — 这些最关键,直接揭示协议描述对 AI 不够精确', byTier.disagree],
+      ['🟡 不确定(uncertain) — 协议边界模糊的案例,看人工怎么判', byTier.uncertain],
+      ['🟢 一致(agree) — 代表性样本,确认 AI 在协议核心上判得对',     byTier.agree],
+      ['⚪ 仅 AI 跑了(ai_only) — 人工还没复核,供参考',              byTier.ai_only],
+    ]
+    for (const [label, items] of sections) {
+      if (!items.length) continue
+      lines.push('')
+      lines.push(`  --- ${label}(${items.length} 条)---`)
+      for (const r of items) {
+        const conf = r.ai_confidence != null ? ` conf=${r.ai_confidence}` : ''
+        const mi = r.ai_matched_inclusion?.length ? ` matched_inc=[${r.ai_matched_inclusion.join('; ').slice(0, 100)}]` : ''
+        const me = r.ai_matched_exclusion?.length ? ` matched_exc=[${r.ai_matched_exclusion.join('; ').slice(0, 100)}]` : ''
+        const aiR = r.ai_reason ? ` · AI: "${r.ai_reason}"` : ''
+        const huR = r.human_reason ? ` · Human: "${r.human_reason}"` : ''
+        const doi = r.doi ? ` doi=${r.doi}` : ''
+        const yr = r.year ? ` (${r.year})` : ''
+        lines.push(`  #${r.idx} AI=${r.ai_suggestion}${conf} Human=${r.human_decision} · "${r.title}"${yr}${doi}${aiR}${mi}${me}${huR}`)
+      }
     }
   }
 
