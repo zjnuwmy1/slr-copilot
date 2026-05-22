@@ -107,11 +107,23 @@ function shortAuthorList(authorsJson, authorsText, maxCount = 3) {
 // 把单个 record row 整理成 view-ready 对象
 function shapeRecord(row) {
   if (!row) return null
+  let sourceDbs = []
+  if (row.source_databases) {
+    try {
+      const parsed = JSON.parse(row.source_databases)
+      if (Array.isArray(parsed)) {
+        sourceDbs = parsed
+          .filter((x) => typeof x === 'string' && x.trim())
+          .map((x) => x.trim().toLowerCase())
+      }
+    } catch { /* ignore */ }
+  }
   return {
     ...row,
     authors_list: parseAuthors(row.authors_json),
     authors_short: shortAuthorList(row.authors_json, row.authors_text, 3),
     keywords_list: parseJsonArrayField(row.keywords_json),
+    source_databases_list: sourceDbs,
     has_doi: !!(row.doi && String(row.doi).trim()),
     has_notes: !!(row.notes && String(row.notes).trim()),
     is_duplicate: !!row.duplicate_of_record_id,

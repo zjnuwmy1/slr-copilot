@@ -443,15 +443,18 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
     return { format, total_parsed: 0, total_inserted: 0, total_duplicates: 0, errors: ['no data rows parsed'] }
   }
 
-  // 预取本 project 内已有 DOI / normalized_title 用作去重 set
-  const existingDois = new Set()
-  const existingTitles = new Set()
+  // 预取本 project 内已有 DOI / normalized_title → record_id + 已有 source_databases
+  // 用于:① 去重(同 DOI 或同 normalized_title 视为重复);② merge source_databases。
+  const existingByDoi = new Map()     // doi(lower) → { id, source_databases:Set<string> }
+  const existingByTitle = new Map()   // normalized_title → { id, source_databases:Set<string> }
   const existingRows = db
-    .prepare(`SELECT doi, normalized_title FROM records WHERE project_id = ?`)
+    .prepare(`SELECT id, doi, normalized_title, source_databases FROM records WHERE project_id = ?`)
     .all(projectId)
   for (const r of existingRows) {
-    if (r.doi) existingDois.add(String(r.doi).toLowerCase())
-    if (r.normalized_title) existingTitles.add(r.normalized_title)
+    const dbs = parseDbSet(r.source_databases)
+    const entry = { id: r.id, source_databases: dbs }
+    if (r.doi) existingByDoi.set(String(r.doi).toLowerCase(), entry)
+    if (r.normalized_title) existingByTitle.set(r.normalized_title, entry)
   }
 
   const insertStmt = db.prepare(`
@@ -460,18 +463,25 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
       zotero_item_id, zotero_rdf_about, item_type,
       title, normalized_title, authors_json, authors_text,
       year, date_text, journal, publisher,
-      doi, url, abstract, keywords_json, notes, has_pdf
+      doi, url, abstract, keywords_json, notes, has_pdf,
+      source_databases
     ) VALUES (
       ?, ?, NULL,
       NULL, NULL, ?,
       ?, ?, ?, ?,
       ?, NULL, ?, NULL,
-      ?, NULL, ?, ?, NULL, 0
+      ?, NULL, ?, ?, NULL, 0,
+      ?
     )
   `)
 
+  const updateSourcesStmt = db.prepare(`
+    UPDATE records SET source_databases = ? WHERE id = ?
+  `)
+
   let totalInserted = 0
-  let totalDuplicates = 0
+  let totalMergedSameDb = 0   // 同库重复(被丢弃,不增 source_databases)
+  let totalMergedCrossDb = 0  // 跨库重复(被合并到已有记录的 source_databases)
 
   const tx = db.transaction(() => {
     for (const r of parsed) {
@@ -479,29 +489,37 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
       const doi = normalizeDoi(r.doi)
       const normTitle = normalizeTitle(title)
 
-      // 去重(批内 + 已存在)
-      if (doi && existingDois.has(doi)) {
-        totalDuplicates += 1
-        continue
-      }
-      if (!doi && normTitle && existingTitles.has(normTitle)) {
-        totalDuplicates += 1
-        continue
-      }
-      if (!title && !doi) {
-        // 已经在 parseCsv 里跳了,但稳一手
+      if (!title && !doi) continue
+
+      // 找已有匹配(本批 + 历史)— DOI 优先
+      let existing = null
+      if (doi && existingByDoi.has(doi)) existing = existingByDoi.get(doi)
+      else if (!doi && normTitle && existingByTitle.has(normTitle)) existing = existingByTitle.get(normTitle)
+
+      if (existing) {
+        // 重复:合并 source_databases
+        if (existing.source_databases.has(format)) {
+          // 已经标过这个库 → 真重复,丢弃
+          totalMergedSameDb += 1
+        } else {
+          // 跨库新来源 → 添加这个库
+          existing.source_databases.add(format)
+          updateSourcesStmt.run(JSON.stringify([...existing.source_databases]), existing.id)
+          totalMergedCrossDb += 1
+        }
         continue
       }
 
+      // 新记录
       const id = randomId('rec')
+      const dbsArr = [format]
       insertStmt.run(
         id,
         projectId,
         // item_type
-        format === 'pubmed' ? 'journalArticle' : (format === 'scopus' ? 'journalArticle' : 'journalArticle'),
+        'journalArticle',
         title || `(Untitled csv row)`,
         normTitle || null,
-        // authors_json — CSV 没结构化,我们存一个简单 [{full:'...'}] 数组以备 dedup/citation 用
         JSON.stringify(
           r.authors_text
             ? r.authors_text.split(',').map((x) => ({ full: x.trim(), type: 'person' })).filter((a) => a.full)
@@ -513,11 +531,13 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
         doi || null,
         r.abstract || null,
         JSON.stringify(r.keywords || []),
+        JSON.stringify(dbsArr),
       )
 
-      // 记到 set 里,避免同次导入内部重复
-      if (doi) existingDois.add(doi)
-      if (normTitle) existingTitles.add(normTitle)
+      // 缓存到 map 里,避免本批后续行重复同 DOI/title 再插入
+      const cacheEntry = { id, source_databases: new Set(dbsArr) }
+      if (doi) existingByDoi.set(doi, cacheEntry)
+      if (normTitle) existingByTitle.set(normTitle, cacheEntry)
       totalInserted += 1
     }
   })
@@ -532,8 +552,22 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
     format,
     total_parsed: totalParsed,
     total_inserted: totalInserted,
-    total_duplicates: totalDuplicates,
+    total_duplicates: totalMergedSameDb + totalMergedCrossDb, // 向后兼容
+    total_merged_same_db: totalMergedSameDb,
+    total_merged_cross_db: totalMergedCrossDb,
     errors,
     source_filename: sourceFilename || null,
   }
+}
+
+// 解析 records.source_databases JSON 文本 → Set<string>(向后兼容 NULL / 旧行)
+function parseDbSet(jsonText) {
+  if (!jsonText) return new Set()
+  try {
+    const parsed = JSON.parse(jsonText)
+    if (Array.isArray(parsed)) {
+      return new Set(parsed.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim().toLowerCase()))
+    }
+  } catch { /* fall through */ }
+  return new Set()
 }

@@ -237,12 +237,24 @@
                 </td>
                 <td class="px-3 py-3 align-top">
                   <div class="flex flex-wrap gap-1">
+                    <% (r.source_databases_list || []).forEach(function(d) {
+                         const dbBadgeCls = ({
+                           wos:    'bg-blue-100 text-blue-700',
+                           scopus: 'bg-amber-100 text-amber-800',
+                           pubmed: 'bg-emerald-100 text-emerald-700',
+                           ieee:   'bg-rose-100 text-rose-700',
+                         })[d] || 'bg-slate-100 text-slate-600'
+                         const dbLabel = ({wos:'WoS',scopus:'Scopus',pubmed:'PubMed',ieee:'IEEE'})[d] || d.toUpperCase()
+                    %>
+                      <span class="rounded px-1.5 py-0.5 text-[10px] font-medium <%= dbBadgeCls %>"
+                            title="来源:<%= dbLabel %>"><%= dbLabel %></span>
+                    <% }) %>
                     <% if (r.has_pdf) { %>
-                      <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"
+                      <span class="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-emerald-200"
                             title="<%= r.pdf_count %> 个 PDF">PDF</span>
                     <% } %>
                     <% if (r.has_doi) { %>
-                      <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+                      <span class="rounded bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-slate-200"
                             title="<%= r.doi %>">DOI</span>
                     <% } %>
                     <% if (r.has_notes) { %>

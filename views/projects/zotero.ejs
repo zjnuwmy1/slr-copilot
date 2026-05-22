@@ -76,9 +76,13 @@
         <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">通用</span>
       </div>
       <p class="mt-1 text-sm text-slate-500">
-        没用 Zotero 也可以 —— 把检索数据库的导出文件上传到这里,系统自动识别格式、入库、去重(按 DOI / 标题)。
+        没用 Zotero 也可以 —— 把检索数据库的导出文件上传到这里,系统自动识别格式、入库、按 DOI / 标题去重。
+        <strong class="text-slate-700">可一次选多个不同库的导出文件</strong>(WoS + Scopus + PubMed 都可以一起拖进来),
+        被多个库收录的同一篇文献会去重合并,并标注 <code class="rounded bg-slate-100 px-1 text-xs">source_databases</code>(例如
+        <span class="rounded bg-blue-50 px-1 text-[10px] font-medium text-blue-700">WoS</span>
+        <span class="rounded bg-amber-50 px-1 text-[10px] font-medium text-amber-700">Scopus</span>)。
         支持:<strong>.csv / .tsv / .txt</strong>(Scopus / PubMed / WoS Plain Text)和
-        <strong>.xlsx / .xls</strong>(WoS "Export to Excel")。最大 50 MB。
+        <strong>.xlsx / .xls</strong>(WoS "Export to Excel")。每个文件最大 50 MB,一次最多 10 个。
       </p>
 
       <% if (!project.search_locked_at) { %>
@@ -102,6 +106,7 @@
             class="mt-4 flex flex-wrap items-center gap-3">
         <input type="file"
                name="csv_file"
+               multiple
                accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv,text/tab-separated-values,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                <%= project.search_locked_at ? 'required' : 'disabled' %>
                class="block text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-xs file:text-white hover:file:bg-slate-700 disabled:opacity-50" />

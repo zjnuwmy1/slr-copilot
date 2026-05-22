@@ -52,7 +52,7 @@ const upload = multer({
       cb(null, `import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`)
     },
   }),
-  limits: { fileSize: MAX_CSV_BYTES, files: 1 },
+  limits: { fileSize: MAX_CSV_BYTES, files: 10 },
   fileFilter(_req, file, cb) {
     const name = (file.originalname || '').toLowerCase()
     if (ALL_EXTS.some((e) => name.endsWith(e))) return cb(null, true)
@@ -113,72 +113,87 @@ router.post(
     next()
   },
   (req, res, next) => {
-    upload.single('csv_file')(req, res, (err) => {
+    // 一次最多 10 个文件(每个 50 MB),WoS+Scopus+PubMed+IEEE 同时上传也够
+    upload.array('csv_file', 10)(req, res, (err) => {
       if (err) {
-        req.session.flash = { type: 'error', message: 'CSV 上传失败:' + (err.message || String(err)) }
+        req.session.flash = { type: 'error', message: '上传失败:' + (err.message || String(err)) }
         return res.redirect(`/projects/${req.params.id}/zotero`)
       }
       next()
     })
   },
   async (req, res, next) => {
-    try {
-      const db = req.app.locals.db
-      const project = req._project
-      const file = req.file
-      if (!file) {
-        req.session.flash = { type: 'error', message: '请选择一个 .csv / .xlsx / .xls 文件' }
-        return res.redirect(`/projects/${project.id}/zotero`)
-      }
+    const db = req.app.locals.db
+    const project = req._project
+    const files = req.files || []
+    if (files.length === 0) {
+      req.session.flash = { type: 'error', message: '请至少选择 1 个 .csv / .xlsx / .xls 文件' }
+      return res.redirect(`/projects/${project.id}/zotero`)
+    }
 
+    // 逐文件处理 — 文件之间不互相阻断;失败的文件单独记录到 perFile.errors
+    const perFile = [] // { filename, format, parsed, inserted, mergedSameDb, mergedCrossDb, error? }
+    for (const file of files) {
       const ext = path.extname(file.originalname || '').toLowerCase()
       const isExcel = EXCEL_EXTS.includes(ext)
-
-      let csvText
+      let csvText = null
       try {
         if (isExcel) {
-          // WoS / Scopus 现在常导出 .xlsx — 转成 CSV 文本喂进同一个 pipeline
           csvText = await excelFileToCsvText(file.path)
         } else {
           csvText = fs.readFileSync(file.path, 'utf8')
         }
       } catch (e) {
         cleanupTmp(file)
-        req.session.flash = {
-          type: 'error',
-          message: (isExcel ? 'Excel 解析失败:' : '读取文件失败:') + (e.message || String(e)),
-        }
-        return res.redirect(`/projects/${project.id}/zotero`)
+        perFile.push({
+          filename: file.originalname || '(unknown)',
+          format: 'unknown',
+          parsed: 0, inserted: 0, mergedSameDb: 0, mergedCrossDb: 0,
+          error: (isExcel ? 'Excel 解析失败:' : '读取失败:') + (e.message || String(e)),
+        })
+        continue
       }
 
-      let summary
       try {
-        summary = ingestCsv(db, {
+        const summary = ingestCsv(db, {
           projectId: project.id,
           userId: req.user.id,
           csvText,
           sourceFilename: file.originalname || null,
         })
+        perFile.push({
+          filename: file.originalname || '(unknown)',
+          format: summary.format,
+          parsed: summary.total_parsed,
+          inserted: summary.total_inserted,
+          mergedSameDb: summary.total_merged_same_db || 0,
+          mergedCrossDb: summary.total_merged_cross_db || 0,
+          error: summary.format === 'unknown'
+            ? '无法识别格式(请确保是 WoS / Scopus / PubMed 原始导出)'
+            : (summary.errors?.length ? summary.errors.join('; ') : null),
+        })
+        audit(db, req, {
+          eventType: summary.format === 'unknown' ? 'csv_import_failed' : 'csv_imported',
+          userId: req.user.id,
+          projectId: project.id,
+          payload: {
+            format: summary.format,
+            source_filename: file.originalname || null,
+            size_bytes: file.size || null,
+            total_parsed: summary.total_parsed,
+            total_inserted: summary.total_inserted,
+            total_merged_same_db: summary.total_merged_same_db,
+            total_merged_cross_db: summary.total_merged_cross_db,
+            errors: summary.errors || [],
+          },
+        })
       } catch (e) {
-        cleanupTmp(file)
-        req.session.flash = {
-          type: 'error',
-          message: (isExcel ? 'Excel→CSV 入库失败:' : 'CSV 解析或入库失败:') + (e.message || String(e)),
-        }
-        return res.redirect(`/projects/${project.id}/zotero`)
-      } finally {
-        cleanupTmp(file)
-      }
-
-      // 识别失败 → 不写库,flash error
-      if (summary.format === 'unknown') {
-        req.session.flash = {
-          type: 'error',
-          message:
-            '无法识别 CSV 格式。请确保是 WoS / Scopus / PubMed 的原始导出文件(首行包含字段表头)。' +
-            (summary.errors && summary.errors.length ? ' 细节:' + summary.errors.join('; ') : ''),
-        }
-        // 即使识别失败也记一行 audit,便于排查
+        perFile.push({
+          filename: file.originalname || '(unknown)',
+          format: 'unknown',
+          parsed: 0, inserted: 0, mergedSameDb: 0, mergedCrossDb: 0,
+          error: '入库失败:' + (e.message || String(e)),
+        })
         audit(db, req, {
           eventType: 'csv_import_failed',
           userId: req.user.id,
@@ -186,40 +201,36 @@ router.post(
           payload: {
             source_filename: file.originalname || null,
             size_bytes: file.size || null,
-            reason: 'unknown_format',
-            errors: summary.errors || [],
+            reason: 'exception',
+            error: (e.message || String(e)).slice(0, 300),
           },
         })
-        return res.redirect(`/projects/${project.id}/zotero`)
+      } finally {
+        cleanupTmp(file)
       }
-
-      audit(db, req, {
-        eventType: 'csv_imported',
-        userId: req.user.id,
-        projectId: project.id,
-        payload: {
-          format: summary.format,
-          source_filename: file.originalname || null,
-          size_bytes: file.size || null,
-          total_parsed: summary.total_parsed,
-          total_inserted: summary.total_inserted,
-          total_duplicates: summary.total_duplicates,
-          errors: summary.errors || [],
-        },
-      })
-
-      req.session.flash = {
-        type: 'success',
-        message:
-          `CSV 导入成功(${summary.format.toUpperCase()}):` +
-          `共解析 ${summary.total_parsed} 条,入库 ${summary.total_inserted} 条,` +
-          `跳过重复 ${summary.total_duplicates} 条。`,
-      }
-      // 跳到文献列表
-      res.redirect(`/projects/${project.id}/records`)
-    } catch (e) {
-      next(e)
     }
+
+    // 汇总 flash
+    const totalInserted = perFile.reduce((s, f) => s + f.inserted, 0)
+    const totalMergedSame = perFile.reduce((s, f) => s + f.mergedSameDb, 0)
+    const totalMergedCross = perFile.reduce((s, f) => s + f.mergedCrossDb, 0)
+    const failed = perFile.filter((f) => f.error)
+    const perFileSummary = perFile
+      .map((f) => {
+        if (f.error) return `${f.filename}: ✗ ${f.error.slice(0, 60)}`
+        return `${f.filename} → ${f.format} (新增 ${f.inserted}${f.mergedCrossDb ? ', 跨库合并 ' + f.mergedCrossDb : ''}${f.mergedSameDb ? ', 同库重复 ' + f.mergedSameDb : ''})`
+      })
+      .join(' · ')
+
+    req.session.flash = {
+      type: failed.length === perFile.length ? 'error' : (failed.length ? 'error' : 'success'),
+      message:
+        `处理 ${perFile.length} 个文件:共新增 ${totalInserted} 条,` +
+        `跨库合并 ${totalMergedCross} 条(同一论文跨多库收录,已合并 source_databases),` +
+        `同库重复 ${totalMergedSame} 条。详情:${perFileSummary}`,
+    }
+
+    res.redirect(`/projects/${project.id}/records`)
   },
 )
 

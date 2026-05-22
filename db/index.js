@@ -66,4 +66,13 @@ function runMigrations(db) {
     )
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_final_search_project ON final_search_records(project_id)`)
+
+  // M5:records.source_databases —— 该文献被哪些数据库收录(JSON 字符串数组)
+  //    例:["wos"] 单库;["wos","scopus"] 跨两库收录的同一篇(跨库去重时合并)
+  //    用于:① 导入时按 DOI/normalized_title 去重并 merge;
+  //          ② records 列表/详情页展示来源 badge;
+  //          ③ PRISMA 报告里"records identified per database"统计。
+  if (!columnExists(db, 'records', 'source_databases')) {
+    db.exec(`ALTER TABLE records ADD COLUMN source_databases TEXT`)
+  }
 }
