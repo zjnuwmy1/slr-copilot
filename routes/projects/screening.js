@@ -939,6 +939,94 @@ router.post('/:id/screening/run-failed', (req, res) => {
 })
 
 // ============================================================
+// POST /:id/screening/bulk-accept-ai
+//   管理员专属:一键把所有 AI include/exclude 结论应用为人工决定。
+//   - ai_suggestion = 'uncertain' → 跳过(留给人工逐条复核)
+//   - human_decision 已有值(include/exclude/uncertain)→ 跳过(尊重已有决定)
+//   - ai_suggestion = 'not_run' / NULL → 跳过(没建议可应用)
+//
+//   body.confirm = 'yes' 才执行;否则只返回 JSON 预估数(给前端弹 confirm 用)。
+// ============================================================
+router.post('/:id/screening/bulk-accept-ai', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  // 仅管理员(role=admin,含超管)可执行
+  if (!req.user || req.user.role !== 'admin') {
+    req.session.flash = { type: 'error', message: '此操作仅管理员可执行' }
+    return res.redirect(`/projects/${project.id}/screening`)
+  }
+
+  // 预估统计
+  const stats = db.prepare(
+    `SELECT
+       SUM(CASE WHEN sd.ai_suggestion = 'include'   AND COALESCE(sd.human_decision, 'not_decided') = 'not_decided' THEN 1 ELSE 0 END) AS to_include,
+       SUM(CASE WHEN sd.ai_suggestion = 'exclude'   AND COALESCE(sd.human_decision, 'not_decided') = 'not_decided' THEN 1 ELSE 0 END) AS to_exclude,
+       SUM(CASE WHEN sd.ai_suggestion = 'uncertain' AND COALESCE(sd.human_decision, 'not_decided') = 'not_decided' THEN 1 ELSE 0 END) AS uncertain_left,
+       SUM(CASE WHEN COALESCE(sd.human_decision, 'not_decided') != 'not_decided' THEN 1 ELSE 0 END) AS already_decided
+     FROM screening_decisions sd
+     WHERE sd.project_id = ? AND sd.stage = 'title_abstract'`
+  ).get(project.id) || {}
+
+  const toInclude = stats.to_include || 0
+  const toExclude = stats.to_exclude || 0
+  const uncertainLeft = stats.uncertain_left || 0
+  const total = toInclude + toExclude
+
+  const confirmed = String(req.body.confirm || '').toLowerCase() === 'yes'
+  if (!confirmed) {
+    req.session.flash = {
+      type: 'error',
+      message: `请确认:将把 ${toInclude} 条 AI 建议纳入 + ${toExclude} 条 AI 建议排除 应用为人工决定(${uncertainLeft} 条 uncertain 保留待人工复核)。请通过页面按钮再次提交并勾选确认。`,
+    }
+    return res.redirect(`/projects/${project.id}/screening`)
+  }
+
+  if (total === 0) {
+    req.session.flash = { type: 'success', message: '没有可一键确认的 AI 建议(uncertain 不在此操作范围)。' }
+    return res.redirect(`/projects/${project.id}/screening`)
+  }
+
+  // 执行批量 UPDATE
+  const result = db.prepare(
+    `UPDATE screening_decisions
+     SET human_decision = ai_suggestion,
+         decided_at = datetime('now'),
+         decided_by = ?,
+         human_reason = COALESCE(NULLIF(human_reason, ''), 'auto: bulk-accepted AI suggestion by admin'),
+         updated_at = datetime('now')
+     WHERE project_id = ?
+       AND stage = 'title_abstract'
+       AND ai_suggestion IN ('include', 'exclude')
+       AND (human_decision IS NULL OR human_decision = 'not_decided')`
+  ).run(req.user.id, project.id)
+
+  audit(db, req, {
+    eventType: 'screening_bulk_accepted',
+    userId: req.user.id,
+    actorUserId: req.user.id,
+    projectId: project.id,
+    payload: {
+      project_id: project.id,
+      project_title: project.title,
+      updated_count: result.changes,
+      to_include: toInclude,
+      to_exclude: toExclude,
+      uncertain_left: uncertainLeft,
+    },
+  })
+
+  req.session.flash = {
+    type: 'success',
+    message: `✓ 已一键确认 ${result.changes} 条(${toInclude} 纳入 / ${toExclude} 排除)。剩 ${uncertainLeft} 条 uncertain 待人工复核。`,
+  }
+  // 跳到 uncertain 过滤,让管理员直接处理剩下的
+  res.redirect(`/projects/${project.id}/screening?ai=uncertain&human=not_decided`)
+})
+
+// ============================================================
 // GET /:id/screening/progress.json
 // ============================================================
 router.get('/:id/screening/progress.json', (req, res) => {

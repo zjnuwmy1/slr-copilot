@@ -251,6 +251,24 @@
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
+            <!-- 一键确认所有 AI 建议(仅管理员)— 把 AI include/exclude 全部应用为人工决定,uncertain 保留 -->
+            <% if (user && user.role === 'admin' && stats.ai_done > 0) { %>
+              <%
+                // 估算可一键确认的数量(只是给按钮 label 一个粗略提示;后端会重算精确数)
+                const bulkAcceptableEstimate = (stats.ai_include || 0) + (stats.ai_exclude || 0)
+                const uncertainEstimate = stats.ai_uncertain || 0
+              %>
+              <form method="post" action="<%= filterBase %>/bulk-accept-ai"
+                    onsubmit="return confirm('⚡ 一键确认 AI 筛查结论(管理员操作)\n\n将把 AI 建议为 纳入 / 排除 的全部条目自动设为人工决定(只覆盖未决定过的)。\nAI 建议为 不确定 的将保留,需人工逐条复核。\n\n精确数量:服务端会重算并 audit。\n\n继续吗?');">
+                <input type="hidden" name="confirm" value="yes" />
+                <button type="submit"
+                        title="管理员专属:把 AI include/exclude 全部应用为人工决定;uncertain 保留待复核"
+                        class="rounded-lg border-2 border-purple-400 bg-purple-50 px-4 py-2 text-sm font-medium text-purple-800 hover:bg-purple-100"
+                        <%= (batch && batch.status === 'running') ? 'disabled' : '' %>>
+                  ⚡ 一键确认 AI(<%= bulkAcceptableEstimate %><% if (uncertainEstimate > 0) { %>,<%= uncertainEstimate %> 疑保留<% } %>)
+                </button>
+              </form>
+            <% } %>
             <!-- 重跑失败 — 只在有失败时显示 -->
             <% if (stats.ai_failed > 0) { %>
               <form method="post" action="<%= filterBase %>/run-failed"
