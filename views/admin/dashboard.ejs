@@ -62,18 +62,34 @@ try {
       <p class="mt-1 text-xs text-slate-500">查看所有用户的 LLM 调用 / 耗时 / 错误</p>
     </a>
     <a
+      href="/admin/usage/by-user-model"
+      class="block rounded-xl border border-slate-200 bg-white p-5 transition hover:border-slate-400 hover:shadow-sm"
+    >
+      <p class="text-base font-semibold text-slate-800">用量 · 用户 × 模型</p>
+      <p class="mt-1 text-xs text-slate-500">按用户和模型聚合的 token 用量矩阵(7/30/90 天)</p>
+    </a>
+    <a
       href="/admin/audit"
       class="block rounded-xl border border-slate-200 bg-white p-5 transition hover:border-slate-400 hover:shadow-sm"
     >
       <p class="text-base font-semibold text-slate-800">审计日志</p>
       <p class="mt-1 text-xs text-slate-500">登录 / 注册 / 凭证 / 角色等敏感事件</p>
     </a>
+    <% if (user.is_super_admin) { %>
+      <a
+        href="/admin/step-presets"
+        class="block rounded-xl border-2 border-blue-300 bg-blue-50/40 p-5 transition hover:border-blue-500 hover:shadow-sm"
+      >
+        <p class="text-base font-semibold text-blue-900">⭐ Plan 配置(3 套预设)</p>
+        <p class="mt-1 text-xs text-blue-700">编辑 高性能 / 平衡 / 经济 各自的 step × 模型 × reasoning</p>
+      </a>
+    <% } %>
     <a
       href="/admin/settings"
       class="block rounded-xl border border-slate-200 bg-white p-5 transition hover:border-slate-400 hover:shadow-sm"
     >
-      <p class="text-base font-semibold text-slate-800">步骤模型配置</p>
-      <p class="mt-1 text-xs text-slate-500">配置每个 SLR 步骤用什么 LLM 模型</p>
+      <p class="text-base font-semibold text-slate-800">旧版步骤模型(全局)</p>
+      <p class="mt-1 text-xs text-slate-500">老的全局 step_model 配置(已被 Plan 系统取代,作 fallback 保留)</p>
     </a>
     <a
       href="/admin/storage"
