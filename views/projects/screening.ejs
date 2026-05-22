@@ -21,7 +21,13 @@
     })[s] || ['bg-slate-200 text-slate-600', s]
   }
   const filterBase = `/projects/${project.id}/screening`
+  // 旧 filterHref:只切 ai / human chip。新版用 buildHref(从路由传下来)保留所有过滤参数
   function filterHref(opts) {
+    if (typeof buildHref === 'function') {
+      // 用路由的 buildHref:保留 q / 年份 / PDF / DOI / 多语言等
+      return buildHref(opts || {})
+    }
+    // fallback(老路由,只支持 ai/human)
     const params = new URLSearchParams()
     const ai = opts && Object.prototype.hasOwnProperty.call(opts, 'ai') ? opts.ai : filterAi
     const hu = opts && Object.prototype.hasOwnProperty.call(opts, 'human') ? opts.human : filterHuman
@@ -30,7 +36,12 @@
     const qs = params.toString()
     return qs ? `${filterBase}?${qs}` : filterBase
   }
-  const hasAnyFilter = !!(filterAi || filterHuman)
+
+  // 全部过滤合并的"是否有过滤"判定
+  const ff = (typeof filters === 'object' && filters) ? filters : {}
+  const hasAnyFilter = !!(filterAi || filterHuman || ff.q || ff.year_from || ff.year_to
+                          || ff.has_pdf || ff.has_doi || ff.only_multi_language || ff.only_non_english)
+  const yearRangeView = (typeof yearRange === 'object' && yearRange) ? yearRange : { min_year: null, max_year: null }
 %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
@@ -44,13 +55,63 @@
       prismaItems: '#9a Selection process · #16a Study selection · #16b Reasons for exclusion',
     }) %>
 
-    <!-- 顶部操作栏 -->
-    <div class="flex justify-end">
+    <!-- 顶部操作栏 — 手动新增 / 文献导出 / CSV log / 一键清空 -->
+    <div class="flex flex-wrap items-center justify-end gap-2">
+      <a href="/projects/<%= project.id %>/records/new"
+         class="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700">
+        <span aria-hidden="true">+</span> 手动新增
+      </a>
+
+      <!-- 文献元数据导出 -->
+      <div class="relative" data-export-menu>
+        <button type="button"
+                aria-haspopup="true" aria-expanded="false"
+                onclick="(function(b){var m=b.parentNode.querySelector('[data-export-list]');var open=m.classList.toggle('hidden')===false;b.setAttribute('aria-expanded', open?'true':'false');})(this)"
+                class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+          导出文献 <span aria-hidden="true" class="text-xs">▾</span>
+        </button>
+        <div data-export-list
+             class="absolute right-0 z-10 mt-1 hidden w-56 rounded-lg border border-slate-200 bg-white shadow-lg">
+          <a href="/projects/<%= project.id %>/records.bib" class="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">BibTeX (.bib)</a>
+          <a href="/projects/<%= project.id %>/records.ris" class="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">RIS (.ris)</a>
+          <a href="/projects/<%= project.id %>/records.csl.json" class="block px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">CSL JSON</a>
+          <div class="border-t border-slate-100 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-slate-400">References Markdown</div>
+          <a href="/projects/<%= project.id %>/records.refs.md?style=apa" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">APA</a>
+          <a href="/projects/<%= project.id %>/records.refs.md?style=ieee" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">IEEE</a>
+          <a href="/projects/<%= project.id %>/records.refs.md?style=gb_t_7714" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">GB/T 7714</a>
+          <a href="/projects/<%= project.id %>/records.refs.md?style=chicago" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Chicago</a>
+          <a href="/projects/<%= project.id %>/records.refs.md?style=mla" class="block px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">MLA</a>
+        </div>
+      </div>
+
       <a href="<%= filterBase %>/export.csv"
          class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-100">
-        导出 CSV 筛选 log
+        导出筛选 CSV
       </a>
+
+      <!-- 一键清空(红底,二次确认走 /records/clear-pool) -->
+      <% if (stats.total > 0) { %>
+        <a href="/projects/<%= project.id %>/records/clear-pool"
+           class="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100"
+           title="清空全部论文 + AI 筛选 / 抽取记录(需在确认页输入 CLEAR)">
+          🗑 一键清空论文池
+        </a>
+      <% } %>
     </div>
+
+    <script>
+      // 点空白处收起导出下拉
+      document.addEventListener('click', function (e) {
+        document.querySelectorAll('[data-export-menu]').forEach(function (m) {
+          if (!m.contains(e.target)) {
+            var l = m.querySelector('[data-export-list]')
+            if (l && !l.classList.contains('hidden')) l.classList.add('hidden')
+            var b = m.querySelector('button[aria-expanded]')
+            if (b) b.setAttribute('aria-expanded', 'false')
+          }
+        })
+      })
+    </script>
 
     <!-- 协议状态 -->
     <% if (!protocol) { %>
@@ -177,9 +238,64 @@
     <% } %>
 
     <!-- 过滤 -->
-    <div class="rounded-2xl border border-slate-200 bg-white p-4">
-      <p class="text-xs font-medium uppercase tracking-wider text-slate-400">过滤</p>
-      <div class="mt-3 flex flex-wrap items-center gap-2 text-xs">
+    <!-- 过滤区 — 上半:关键词 + 年份 + 含 PDF/DOI / 语言;下半:AI / 人工 状态 chips -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
+      <!-- 元数据过滤表单(GET 提交) -->
+      <form method="get" action="<%= filterBase %>" class="space-y-3">
+        <!-- 保留 AI/Human 过滤为 hidden(避免提交时丢) -->
+        <% if (filterAi) { %><input type="hidden" name="ai" value="<%= filterAi %>" /><% } %>
+        <% if (filterHuman) { %><input type="hidden" name="human" value="<%= filterHuman %>" /><% } %>
+
+        <div class="flex flex-wrap items-end gap-3">
+          <div class="min-w-[200px] flex-1">
+            <label class="block text-xs font-medium text-slate-500">关键词</label>
+            <input type="text" name="q" value="<%= escAttr(ff.q || '') %>" placeholder="标题 / 作者 / 期刊 / DOI"
+                   class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500">年份起</label>
+            <input type="number" name="year_from" value="<%= escAttr(ff.year_from || '') %>"
+                   placeholder="<%= yearRangeView.min_year || '' %>"
+                   min="1900" max="2100"
+                   class="mt-1 w-24 rounded-lg border border-slate-300 px-2 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-500">年份止</label>
+            <input type="number" name="year_to" value="<%= escAttr(ff.year_to || '') %>"
+                   placeholder="<%= yearRangeView.max_year || '' %>"
+                   min="1900" max="2100"
+                   class="mt-1 w-24 rounded-lg border border-slate-300 px-2 py-2 text-sm focus:border-slate-500 focus:outline-none" />
+          </div>
+          <div class="flex flex-wrap items-center gap-3 text-sm">
+            <label class="inline-flex items-center gap-1.5">
+              <input type="checkbox" name="has_pdf" value="1" <%= ff.has_pdf ? 'checked' : '' %> class="rounded border-slate-300" />
+              <span>仅含 PDF</span>
+            </label>
+            <label class="inline-flex items-center gap-1.5">
+              <input type="checkbox" name="has_doi" value="1" <%= ff.has_doi ? 'checked' : '' %> class="rounded border-slate-300" />
+              <span>仅含 DOI</span>
+            </label>
+            <label class="inline-flex items-center gap-1.5" title="WoS LA= 实际上是『语言列表包含英文』,韩文/中文期刊带英文摘要的论文会漏进来。勾上只看这些可疑条目。">
+              <input type="checkbox" name="only_multi_language" value="1" <%= ff.only_multi_language ? 'checked' : '' %> class="rounded border-slate-300" />
+              <span class="text-amber-700">仅多语言</span>
+            </label>
+            <label class="inline-flex items-center gap-1.5" title="Language 字段不含英文(纯非英文论文)">
+              <input type="checkbox" name="only_non_english" value="1" <%= ff.only_non_english ? 'checked' : '' %> class="rounded border-slate-300" />
+              <span class="text-rose-700">仅非英文</span>
+            </label>
+          </div>
+          <div class="ml-auto flex gap-2">
+            <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">筛选</button>
+            <% if (hasAnyFilter) { %>
+              <a href="<%= filterBase %>"
+                 class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">重置全部</a>
+            <% } %>
+          </div>
+        </div>
+      </form>
+
+      <!-- 状态 chips(AI 建议 / 人工决定) -->
+      <div class="flex flex-wrap items-center gap-2 text-xs border-t border-slate-100 pt-3">
         <span class="text-slate-500">AI 建议:</span>
         <% ['include', 'exclude', 'uncertain', 'not_run'].forEach(v => {
              const [cls, label] = aiBadge(v)
@@ -201,11 +317,21 @@
             <%= label %>
           </a>
         <% }) %>
-        <% if (hasAnyFilter) { %>
-          <a href="<%= filterBase %>" class="ml-2 text-slate-500 underline hover:text-slate-900">清空过滤</a>
-        <% } %>
       </div>
     </div>
+
+    <!-- 当前过滤摘要条 -->
+    <% if (typeof totalFiltered === 'number' && typeof totalPages === 'number' && totalPages > 0) { %>
+      <div class="flex items-center justify-between text-xs text-slate-500">
+        <span>
+          显示第 <strong class="text-slate-700"><%= (page - 1) * pageSize + 1 %></strong>
+          – <strong class="text-slate-700"><%= Math.min(page * pageSize, totalFiltered) %></strong>
+          / 共 <strong class="text-slate-700"><%= totalFiltered %></strong> 条匹配
+          <% if (totalFiltered !== stats.total) { %>(项目共 <%= stats.total %> 条)<% } %>
+        </span>
+        <span>第 <%= page %> / <%= totalPages %> 页</span>
+      </div>
+    <% } %>
 
     <!-- 列表 -->
     <% if (rows.length === 0) { %>
@@ -311,8 +437,41 @@
         <% }) %>
       </div>
 
-      <% if (rows.length >= 500) { %>
-        <p class="text-center text-xs text-slate-400">列表上限 500 条;数据集更大时请用过滤器分批查看。</p>
+      <!-- 分页(沿用 records 的样式 — 首页 / 当前 ±1 / 末页 + 省略号) -->
+      <% if (typeof totalPages === 'number' && totalPages > 1 && typeof pageHref === 'function') { %>
+        <div class="flex items-center justify-center gap-1 text-sm">
+          <% if (page > 1) { %>
+            <a href="<%= pageHref(page - 1) %>"
+               class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50">← 上一页</a>
+          <% } else { %>
+            <span class="rounded-lg border border-slate-200 px-3 py-1.5 text-slate-300">← 上一页</span>
+          <% } %>
+
+          <%
+            const pagesToShow = new Set([1, totalPages, page - 1, page, page + 1])
+            const sorted = Array.from(pagesToShow).filter(n => n >= 1 && n <= totalPages).sort((a, b) => a - b)
+            let prev = 0
+          %>
+          <% sorted.forEach(n => { %>
+            <% if (n - prev > 1) { %>
+              <span class="px-2 text-slate-400">…</span>
+            <% } %>
+            <% if (n === page) { %>
+              <span class="rounded-lg bg-slate-900 px-3 py-1.5 font-medium text-white"><%= n %></span>
+            <% } else { %>
+              <a href="<%= pageHref(n) %>"
+                 class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50"><%= n %></a>
+            <% } %>
+            <% prev = n %>
+          <% }) %>
+
+          <% if (page < totalPages) { %>
+            <a href="<%= pageHref(page + 1) %>"
+               class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50">下一页 →</a>
+          <% } else { %>
+            <span class="rounded-lg border border-slate-200 px-3 py-1.5 text-slate-300">下一页 →</span>
+          <% } %>
+        </div>
       <% } %>
     <% } %>
 

@@ -575,7 +575,22 @@ function parseIdsQuery(q) {
 // ============================================================
 // GET /projects/:id/records — 列表
 // ============================================================
+//
+// /:id/records → 永久跳到 /:id/screening(合并后 /records 不再独立渲染)。
+// 透传所有 query string,保持过滤参数。下面的 _legacyListHandler 保留是
+// 为了将来需要时可以回退,但不挂载在路由表上。
 router.get('/:id/records', (req, res) => {
+  const project = ownProjectOr404(req.app.locals.db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  const qs = req.originalUrl.split('?')[1] || ''
+  // 302(不要 301,免得浏览器缓存导致回滚困难)
+  return res.redirect(qs ? `/projects/${project.id}/screening?${qs}` : `/projects/${project.id}/screening`)
+})
+
+// (legacy)旧 list handler — 不再被路由调用,保留作为参考实现
+function _legacyListHandler(req, res) {
   const db = req.app.locals.db
   const project = ownProjectOr404(db, req.params.id, req.user.id)
   if (!project) {
@@ -642,7 +657,9 @@ router.get('/:id/records', (req, res) => {
     },
     pageHref: (p) => buildPageHref(`/projects/${project.id}/records`, req.query, p),
   })
-})
+}
+// 上面的闭合 } 关闭 _legacyListHandler 函数;以前这里是 router.get 回调的 `})` —
+// 改函数后只需要单个 } 即可。
 
 // ============================================================
 // 批量导出(放在 /:id/records/:recordId 之前 — 带扩展名,Express 不会误匹配)

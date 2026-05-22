@@ -275,7 +275,21 @@ async function runScreeningOnce(db, {
 
 // ============================================================
 // GET /:id/screening
+// 合并了原 /records 的过滤 + 分页 + 元数据展示。
+// 过滤参数:
+//   ai           — AI 建议状态(include/exclude/uncertain/not_run)
+//   human        — 人工决定状态(include/exclude/uncertain/not_decided)
+//   q            — 关键词(标题/作者/期刊/DOI)
+//   year_from    — 年份起
+//   year_to      — 年份止
+//   has_pdf=1    — 只看含 PDF 的
+//   has_doi=1    — 只看含 DOI 的
+//   only_multi_language=1 — 只看多语言条目
+//   only_non_english=1    — 只看纯非英文条目
+//   page         — 分页(50/页)
 // ============================================================
+const PAGE_SIZE = 50
+
 router.get('/:id/screening', (req, res) => {
   const db = req.app.locals.db
   const project = ownProjectOr404(db, req.params.id, req.user.id)
@@ -284,6 +298,7 @@ router.get('/:id/screening', (req, res) => {
   }
   const protocol = getApprovedProtocol(db, project.id)
 
+  // ---- 解析过滤 ----
   const filterAi    = String(req.query.ai || '').trim()
   const filterHuman = String(req.query.human || '').trim()
   const AI_VALUES   = ['include', 'exclude', 'uncertain', 'not_run']
@@ -291,8 +306,25 @@ router.get('/:id/screening', (req, res) => {
   const aiF    = AI_VALUES.includes(filterAi) ? filterAi : null
   const humanF = HUMAN_VALUES.includes(filterHuman) ? filterHuman : null
 
-  // 列表:所有 records LEFT JOIN screening_decisions(stage='title_abstract')
-  // 默认隐藏重复
+  const q = (req.query.q ? String(req.query.q).slice(0, 200).trim() : '')
+  let yearFrom = null, yearTo = null
+  if (req.query.year_from) {
+    const n = parseInt(req.query.year_from, 10)
+    if (Number.isFinite(n) && n > 0 && n < 9999) yearFrom = n
+  }
+  if (req.query.year_to) {
+    const n = parseInt(req.query.year_to, 10)
+    if (Number.isFinite(n) && n > 0 && n < 9999) yearTo = n
+  }
+  const onlyPdf = req.query.has_pdf === '1' || req.query.has_pdf === 'on' || req.query.has_pdf === 'true'
+  const onlyDoi = req.query.has_doi === '1' || req.query.has_doi === 'on' || req.query.has_doi === 'true'
+  const onlyMultiLang = req.query.only_multi_language === '1'
+  const onlyNonEnglish = req.query.only_non_english === '1'
+
+  let page = parseInt(req.query.page, 10)
+  if (!Number.isFinite(page) || page < 1) page = 1
+
+  // ---- where 构造 ----
   const where = ['r.project_id = ?', 'r.duplicate_of_record_id IS NULL']
   const params = [project.id]
   if (aiF) {
@@ -303,10 +335,43 @@ router.get('/:id/screening', (req, res) => {
     where.push(`COALESCE(sd.human_decision, 'not_decided') = ?`)
     params.push(humanF)
   }
+  if (onlyPdf) where.push('r.has_pdf = 1')
+  if (onlyDoi) where.push("r.doi IS NOT NULL AND r.doi != ''")
+  if (onlyMultiLang) {
+    where.push(`(r.language IS NOT NULL AND r.language != '' AND
+      (r.language LIKE '%;%' OR r.language LIKE '%,%' OR r.language LIKE '%/%' OR r.language LIKE '%、%'))`)
+  }
+  if (onlyNonEnglish) {
+    where.push(`(r.language IS NOT NULL AND r.language != ''
+      AND LOWER(r.language) NOT LIKE '%english%'
+      AND LOWER(r.language) NOT LIKE '%eng%'
+      AND LOWER(r.language) NOT LIKE 'en;%'
+      AND LOWER(r.language) != 'en')`)
+  }
+  if (yearFrom != null) { where.push('r.year >= ?'); params.push(yearFrom) }
+  if (yearTo != null) { where.push('r.year <= ?'); params.push(yearTo) }
+  if (q) {
+    where.push(`(r.title LIKE ? OR r.authors_text LIKE ? OR r.journal LIKE ? OR r.doi LIKE ?)`)
+    const like = `%${q}%`
+    params.push(like, like, like, like)
+  }
+  const whereSql = where.join(' AND ')
+
+  // ---- 总条数 + 分页 ----
+  const totalFiltered = (db.prepare(
+    `SELECT COUNT(*) AS n FROM records r
+     LEFT JOIN screening_decisions sd ON sd.record_id = r.id AND sd.stage = 'title_abstract'
+     WHERE ${whereSql}`
+  ).get(...params) || {}).n || 0
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE))
+  if (page > totalPages) page = totalPages
+  const offset = (page - 1) * PAGE_SIZE
+
+  // ---- 主查询 ----
   const rows = db
     .prepare(
       `SELECT r.id, r.title, r.year, r.journal, r.authors_text, r.abstract,
-              r.keywords_json, r.has_pdf,
+              r.keywords_json, r.has_pdf, r.doi, r.language, r.source_databases,
               sd.id AS sd_id, sd.ai_suggestion, sd.ai_reason, sd.ai_confidence,
               sd.ai_model, sd.ai_matched_inclusion, sd.ai_matched_exclusion,
               sd.ai_need_full_text, sd.ai_ran_at,
@@ -314,21 +379,41 @@ router.get('/:id/screening', (req, res) => {
        FROM records r
        LEFT JOIN screening_decisions sd
          ON sd.record_id = r.id AND sd.stage = 'title_abstract'
-       WHERE ${where.join(' AND ')}
+       WHERE ${whereSql}
        ORDER BY (r.year IS NULL), r.year DESC, r.title
-       LIMIT 500`
+       LIMIT ? OFFSET ?`
     )
-    .all(...params)
-    .map((r) => ({
-      ...r,
-      ai_matched_inclusion: parseJsonArrayField(r.ai_matched_inclusion),
-      ai_matched_exclusion: parseJsonArrayField(r.ai_matched_exclusion),
-      ai_need_full_text:    parseJsonArrayField(r.ai_need_full_text),
-      keywords_list:        parseJsonArrayField(r.keywords_json),
-      ai_suggestion: r.ai_suggestion || 'not_run',
-      human_decision: r.human_decision || 'not_decided',
-      has_abstract: !!(r.abstract && String(r.abstract).trim()),
-    }))
+    .all(...params, PAGE_SIZE, offset)
+    .map((r) => {
+      const langRaw = (r.language || '').trim()
+      let langList = []
+      if (langRaw) langList = langRaw.split(/[;,\/、]/).map((s) => s.trim()).filter(Boolean)
+      const lower = langList.map((l) => l.toLowerCase())
+      const hasEnglish = lower.some((l) => l === 'english' || l === 'eng' || l === 'en')
+      const hasOther = lower.some((l) => l && l !== 'english' && l !== 'eng' && l !== 'en' && l !== 'unspecified' && l !== 'unknown')
+      let sourceDbs = []
+      if (r.source_databases) {
+        try {
+          const parsed = JSON.parse(r.source_databases)
+          if (Array.isArray(parsed)) sourceDbs = parsed.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim().toLowerCase())
+        } catch { /* ignore */ }
+      }
+      return {
+        ...r,
+        ai_matched_inclusion: parseJsonArrayField(r.ai_matched_inclusion),
+        ai_matched_exclusion: parseJsonArrayField(r.ai_matched_exclusion),
+        ai_need_full_text:    parseJsonArrayField(r.ai_need_full_text),
+        keywords_list:        parseJsonArrayField(r.keywords_json),
+        ai_suggestion: r.ai_suggestion || 'not_run',
+        human_decision: r.human_decision || 'not_decided',
+        has_abstract: !!(r.abstract && String(r.abstract).trim()),
+        has_doi: !!(r.doi && String(r.doi).trim()),
+        language_list: langList,
+        is_multi_language: hasOther,
+        is_non_english_only: langList.length > 0 && !hasEnglish,
+        source_databases_list: sourceDbs,
+      }
+    })
 
   // 统计(项目全貌,不受过滤影响)
   const statsRow = db
@@ -370,6 +455,41 @@ router.get('/:id/screening', (req, res) => {
     console.error('[screening] getProjectProgress failed:', e.message)
   }
 
+  // 年份范围(给过滤表单 placeholder 用)
+  const yearRange = db
+    .prepare('SELECT MIN(year) AS min_year, MAX(year) AS max_year FROM records WHERE project_id = ? AND year IS NOT NULL')
+    .get(project.id) || {}
+
+  // 给视图用:重建当前 URL(保留所有过滤,用于"清空过滤"、AI/Human chip 切换的 base URL)
+  const buildHref = (overrides = {}) => {
+    const qs = new URLSearchParams()
+    const cur = { ai: aiF, human: humanF, q, year_from: yearFrom, year_to: yearTo,
+                  has_pdf: onlyPdf ? '1' : '', has_doi: onlyDoi ? '1' : '',
+                  only_multi_language: onlyMultiLang ? '1' : '',
+                  only_non_english: onlyNonEnglish ? '1' : '' }
+    const merged = { ...cur, ...overrides }
+    for (const [k, v] of Object.entries(merged)) {
+      if (v != null && v !== '' && v !== false) qs.set(k, String(v))
+    }
+    const s = qs.toString()
+    return s ? `/projects/${project.id}/screening?${s}` : `/projects/${project.id}/screening`
+  }
+  const pageHref = (p) => {
+    const qs = new URLSearchParams()
+    if (aiF) qs.set('ai', aiF)
+    if (humanF) qs.set('human', humanF)
+    if (q) qs.set('q', q)
+    if (yearFrom != null) qs.set('year_from', String(yearFrom))
+    if (yearTo != null) qs.set('year_to', String(yearTo))
+    if (onlyPdf) qs.set('has_pdf', '1')
+    if (onlyDoi) qs.set('has_doi', '1')
+    if (onlyMultiLang) qs.set('only_multi_language', '1')
+    if (onlyNonEnglish) qs.set('only_non_english', '1')
+    if (p > 1) qs.set('page', String(p))
+    const s = qs.toString()
+    return s ? `/projects/${project.id}/screening?${s}` : `/projects/${project.id}/screening`
+  }
+
   res.render('projects/screening', {
     title: `初筛 · ${project.title}`,
     project,
@@ -378,6 +498,18 @@ router.get('/:id/screening', (req, res) => {
     stats,
     filterAi: aiF,
     filterHuman: humanF,
+    filters: {
+      q, year_from: yearFrom, year_to: yearTo,
+      has_pdf: onlyPdf, has_doi: onlyDoi,
+      only_multi_language: onlyMultiLang, only_non_english: onlyNonEnglish,
+    },
+    yearRange: { min_year: yearRange.min_year || null, max_year: yearRange.max_year || null },
+    page,
+    totalPages,
+    totalFiltered,
+    pageSize: PAGE_SIZE,
+    pageHref,
+    buildHref,
     batch: progressGet(project.id),
     progress,
     currentStep: 'screening',
