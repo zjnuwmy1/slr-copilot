@@ -98,6 +98,15 @@ function runMigrations(db) {
     db.exec(`ALTER TABLE screening_decisions ADD COLUMN ai_matched_concepts TEXT`)
   }
 
+  // M7.6: projects.screening_target_include_pct —— 用户期望的初筛纳入率
+  //    INTEGER,0-100 之间(NULL = 未设定,LLM 不接受软目标)。
+  //    用作软目标注入 screening prompt:边缘 include/exclude 时按这个比例调,
+  //    但**绝不破坏**客观决策树底线(命中排除标准 / 类型不符 / 无概念重叠)。
+  //    用户可手填,也可点"AI 推荐"按钮让 LLM 根据协议反推一个值。
+  if (!columnExists(db, 'projects', 'screening_target_include_pct')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN screening_target_include_pct INTEGER`)
+  }
+
   // M7:pending_iterations —— 跑完 diagnose 但用户还没决定 adopt/discard 的
   //    LLM 输出。之前放在 cookie-session 里,几 KB 的 JSON 把 Set-Cookie
   //    header 撑爆,Nginx proxy_buffer_size 8K 直接 502 Bad Gateway。

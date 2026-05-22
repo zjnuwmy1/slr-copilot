@@ -24,6 +24,9 @@ import {
   buildScreeningUserPrompt,
   normalizeScreeningOutput,
   SCREENING_DECISIONS,
+  SUGGEST_TARGET_SYSTEM,
+  buildSuggestTargetPrompt,
+  normalizeSuggestTargetOutput,
 } from '../../services/prompts/screening.js'
 import { getProjectProgress } from '../../services/prisma.js'
 
@@ -191,6 +194,11 @@ async function runScreeningOnce(db, {
 
   // 把项目级 metadata(年份 / 文献类型 / 语言)也传给 prompt builder,
   // 用作客观决策树里"文献类型明显不符"的判断依据。
+  // targetIncludePct = 用户期望纳入率(0-100 整数或 null),作为边缘 case 软目标。
+  const targetIncludePct = (project.screening_target_include_pct != null
+    && Number.isFinite(Number(project.screening_target_include_pct)))
+    ? Number(project.screening_target_include_pct)
+    : null
   const userPrompt = buildScreeningUserPrompt({
     protocol,
     record,
@@ -200,6 +208,7 @@ async function runScreeningOnce(db, {
       document_types: Array.isArray(project.document_types) ? project.document_types : [],
       language_limits: Array.isArray(project.language_limits) ? project.language_limits : [],
     },
+    targetIncludePct,
   })
 
   let result
@@ -504,6 +513,15 @@ router.get('/:id/screening', (req, res) => {
     return s ? `/projects/${project.id}/screening?${s}` : `/projects/${project.id}/screening`
   }
 
+  // 项目级目标纳入率 + 当前实际通过率(给 UI 展示对比)
+  const targetIncludePct = (project.screening_target_include_pct != null
+    && Number.isFinite(Number(project.screening_target_include_pct)))
+    ? Number(project.screening_target_include_pct)
+    : null
+  const actualIncludePct = stats.ai_done > 0
+    ? Math.round((stats.ai_include / stats.ai_done) * 100)
+    : null
+
   res.render('projects/screening', {
     title: `初筛 · ${project.title}`,
     project,
@@ -526,9 +544,113 @@ router.get('/:id/screening', (req, res) => {
     buildHref,
     batch: progressGet(project.id),
     progress,
+    targetIncludePct,
+    actualIncludePct,
     currentStep: 'screening',
     stepLabel: '3. 筛选(Screening)',
   })
+})
+
+// ============================================================
+// POST /:id/screening/target
+//   body: target_include_pct(0-100 整数,或 'clear' 清空)
+//   保存用户期望的初筛通过率,会注入到后续 screening prompt
+// ============================================================
+router.post('/:id/screening/target', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+
+  const raw = String(req.body.target_include_pct || '').trim()
+  let pct = null
+  if (raw && raw.toLowerCase() !== 'clear') {
+    const n = parseInt(raw, 10)
+    if (!Number.isFinite(n) || n < 0 || n > 100) {
+      req.session.flash = { type: 'error', message: '目标纳入率必须是 0-100 的整数(留空 / 输入 clear = 清除)。' }
+      return res.redirect(`/projects/${project.id}/screening`)
+    }
+    pct = n
+  }
+
+  db.prepare(
+    `UPDATE projects SET screening_target_include_pct = ?, updated_at = datetime('now') WHERE id = ?`
+  ).run(pct, project.id)
+
+  audit(db, req, {
+    eventType: 'screening_target_set',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: { target_include_pct: pct },
+  })
+
+  req.session.flash = {
+    type: 'success',
+    message: pct == null
+      ? '已清除目标通过率,后续 AI 初筛不再注入软目标。'
+      : `已设置目标通过率 ~${pct}%。下次 AI 初筛(单条或批量)会按此软目标判定边缘 case。`,
+  }
+  res.redirect(`/projects/${project.id}/screening`)
+})
+
+// ============================================================
+// POST /:id/screening/target/suggest
+//   AI 根据协议反推一个合理通过率;返回 JSON(给前端 AJAX 调)
+// ============================================================
+router.post('/:id/screening/target/suggest', async (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) return res.status(404).json({ ok: false, error: 'not_found' })
+  const protocol = getApprovedProtocol(db, project.id)
+  if (!protocol) return res.status(400).json({ ok: false, error: '请先审批协议再让 AI 推荐通过率。' })
+
+  const userPrompt = buildSuggestTargetPrompt({
+    protocol,
+    projectInput: {
+      topic: project.topic, discipline: project.discipline, goal: project.goal,
+      document_types: Array.isArray(project.document_types) ? project.document_types : [],
+      year_start: project.year_start, year_end: project.year_end,
+    },
+  })
+
+  let result
+  try {
+    result = await runLlm(db, {
+      userId: req.user.id,
+      actionType: 'screening_target_suggest',
+      projectId: project.id,
+      system: SUGGEST_TARGET_SYSTEM,
+      prompt: userPrompt,
+      expectJson: true,
+      model: 'light',
+      maxTokens: 400,
+      timeoutMs: 60_000,
+    })
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: 'LLM 调用异常:' + (e?.message || '').slice(0, 200) })
+  }
+
+  if (!result.ok) {
+    return res.status(502).json({
+      ok: false,
+      error: `AI 推荐失败:${result.status} ${(result.error || '').slice(0, 200)}`,
+    })
+  }
+
+  const norm = normalizeSuggestTargetOutput(result.data || null)
+  if (!norm) {
+    return res.status(502).json({ ok: false, error: 'AI 返回解析失败,可重试。' })
+  }
+
+  audit(db, req, {
+    eventType: 'screening_target_suggested',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: { recommended_pct: norm.recommended_pct, reasoning: norm.reasoning, model: result.model },
+  })
+
+  res.json({ ok: true, recommended_pct: norm.recommended_pct, reasoning: norm.reasoning, model: result.model })
 })
 
 // ============================================================

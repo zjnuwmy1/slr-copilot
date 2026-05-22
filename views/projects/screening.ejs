@@ -196,7 +196,50 @@
 
     <!-- 批量运行 + 进度 -->
     <% if (protocol) { %>
-      <div class="rounded-2xl border border-slate-200 bg-white p-4">
+      <div class="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+        <!-- 目标通过率配置 -->
+        <%
+          const tgtPct = (typeof targetIncludePct === 'number') ? targetIncludePct : null
+          const actPct = (typeof actualIncludePct === 'number') ? actualIncludePct : null
+        %>
+        <div class="rounded-lg border border-blue-100 bg-blue-50/50 p-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <p class="text-sm font-medium text-blue-900">🎯 目标通过率(软目标,影响 AI 对边缘 case 的判断)</p>
+            <% if (actPct != null) { %>
+              <span class="text-xs text-blue-700">
+                当前实际:<strong><%= actPct %>%</strong>
+                <% if (tgtPct != null) { %>
+                  <span class="<%= (Math.abs(actPct - tgtPct) <= 5) ? 'text-emerald-700' : 'text-amber-700' %>">
+                    (目标 <%= tgtPct %>%,差 <%= actPct - tgtPct >= 0 ? '+' : '' %><%= actPct - tgtPct %>)
+                  </span>
+                <% } %>
+              </span>
+            <% } %>
+          </div>
+          <form method="post" action="<%= filterBase %>/target" id="target-form"
+                class="mt-2 flex flex-wrap items-end gap-2">
+            <div>
+              <label for="target-pct-input" class="block text-[11px] text-slate-500">目标 %(留空 = 不设)</label>
+              <input id="target-pct-input" type="number" name="target_include_pct"
+                     min="0" max="100" step="1"
+                     value="<%= tgtPct != null ? tgtPct : '' %>"
+                     placeholder="如 20"
+                     class="mt-0.5 w-24 rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-blue-500 focus:outline-none" />
+            </div>
+            <button type="submit" class="rounded-md bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-500">保存</button>
+            <button type="button" id="ai-suggest-btn"
+                    class="rounded-md border border-blue-300 bg-white px-3 py-1 text-xs text-blue-700 hover:bg-blue-50 disabled:opacity-60">
+              🤖 让 AI 根据协议推荐
+            </button>
+            <span id="ai-suggest-result" class="text-xs text-slate-600"></span>
+          </form>
+          <p class="mt-2 text-[11px] text-slate-500 leading-relaxed">
+            5-15% = 主题细分严控  ·  <strong>15-25%</strong> = 典型 SLR  ·  25-40% = 较宽 / scoping 倾向。
+            目标只影响 LLM 对"勉强相关"边缘 case 的方向倾斜,**不会改判**客观 exclude(命中排除标准 / 类型不符 / 无概念重叠)。
+          </p>
+        </div>
+
+        <!-- 批量运行按钮 -->
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p class="text-sm font-medium text-slate-900">批量 AI 初筛</p>
@@ -522,6 +565,43 @@
 
 <script>
 (function() {
+  // —— AI 推荐通过率按钮 ——
+  var sugBtn = document.getElementById('ai-suggest-btn')
+  var sugOut = document.getElementById('ai-suggest-result')
+  var pctInput = document.getElementById('target-pct-input')
+  if (sugBtn) {
+    sugBtn.addEventListener('click', function() {
+      sugBtn.disabled = true
+      sugBtn.innerText = '🤖 AI 思考中…'
+      if (sugOut) sugOut.textContent = ''
+      fetch(<%- JSON.stringify(`/projects/${project.id}/screening/target/suggest`) %>, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+      })
+        .then(function(r) { return r.json() })
+        .then(function(d) {
+          sugBtn.disabled = false
+          sugBtn.innerText = '🤖 让 AI 根据协议推荐'
+          if (!d || !d.ok) {
+            if (sugOut) sugOut.textContent = '✗ ' + ((d && d.error) || '失败')
+            return
+          }
+          if (pctInput) pctInput.value = d.recommended_pct
+          if (sugOut) {
+            sugOut.innerHTML = '✓ 推荐 <strong>' + d.recommended_pct + '%</strong>:' +
+              (d.reasoning ? d.reasoning.replace(/[<>&]/g, '') : '') +
+              '(点保存生效)'
+          }
+        })
+        .catch(function(err) {
+          sugBtn.disabled = false
+          sugBtn.innerText = '🤖 让 AI 根据协议推荐'
+          if (sugOut) sugOut.textContent = '✗ 网络错误'
+        })
+    })
+  }
+
   // 批量进度轮询
   var pjId = <%- JSON.stringify(project.id) %>;
   var box = document.getElementById('batch-progress');

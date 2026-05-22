@@ -120,8 +120,9 @@ SLR 方法学共识 —— 这一步的目标是"**不漏掉相关论文**",而�
  * @param {object} args.protocol  approved & parsed protocol(research_questions / inclusion_criteria / exclusion_criteria / concept_groups 是数组)
  * @param {object} args.record    一条 records 行(title / abstract / keywords_list / authors_text / year / journal)
  * @param {object} [args.projectInput]  可选:协议外的项目级信息(year_start / year_end / document_types / language_limits)
+ * @param {number} [args.targetIncludePct]  可选:用户期望的初筛纳入率(0-100),作为边缘 case 的软目标
  */
-export function buildScreeningUserPrompt({ protocol, record, projectInput }) {
+export function buildScreeningUserPrompt({ protocol, record, projectInput, targetIncludePct }) {
   const p = protocol || {}
   const r = record || {}
   const pi = projectInput || {}
@@ -209,11 +210,141 @@ export function buildScreeningUserPrompt({ protocol, record, projectInput }) {
     lines.push('(摘要缺失)')
   }
 
+  // ===== 用户期望纳入率(软目标 — 只影响边缘 case)=====
+  const tgt = Number.isFinite(Number(targetIncludePct)) ? Number(targetIncludePct) : null
+  if (tgt != null && tgt >= 0 && tgt <= 100) {
+    lines.push('')
+    lines.push(`## 用户期望的初筛纳入率: ~${tgt}%(软目标)`)
+    lines.push(`  - 这是"基于本协议主题广度,用户预期约 ${tgt}% 的论文最终能 include"的指引。`)
+    lines.push(`  - **仅用于**边缘 case 的判定:决策树走到【5】默认 include 的"勉强相关"边缘上,`)
+    lines.push(`    若目标 ≤ 15% 收紧些(更倾向 exclude/uncertain),若 ≥ 30% 放宽些(更倾向 include)。`)
+    lines.push(`  - **绝不破坏底线**:【2】命中排除标准 / 【3】文献类型不符 / 【4】无概念重叠 —`)
+    lines.push(`    这三类客观 exclude **不能**因为目标率调整而改判 include。`)
+    lines.push(`  - 你不知道当前累计通过率,所以**按单条情况判断**,目标只用于边缘 case 的方向倾斜。`)
+  }
+
   lines.push('')
   lines.push('────────────────────────────────────')
   lines.push('请严格按 system message 的决策树 + JSON schema 输出。')
   lines.push('记住:title/abstract 阶段宽进严出。"可能相关但不能确认细节" → include(留全文阶段)。')
   return lines.join('\n')
+}
+
+// ============================================================
+// AI 推荐目标纳入率
+// ============================================================
+
+/**
+ * 让 LLM 根据协议反推一个合理的初筛纳入率(整数百分比)。
+ *
+ * 判断依据:
+ *   - 概念组数量 + 词项广度(多 + 宽 → 召回多 → 通过率低)
+ *   - 纳入标准严格度(越具体 → 通过率低)
+ *   - 排除标准条数(越多越严 → 通过率低)
+ *   - 主题特异性(冷门细分 → 高;泛主题 → 低)
+ *
+ * 输出 JSON: { "recommended_pct": <0-100 整数>, "reasoning": "≤80 字中文" }
+ */
+export const SUGGEST_TARGET_SYSTEM = `你是 SLR 方法学顾问。
+任务:根据用户给的协议(主题 + 概念组 + 纳排标准),反推这个 SLR 在
+**title/abstract 初筛阶段**大约能通过多少比例的论文。
+
+经验区间(参考):
+- 5-15%:主题非常细分 / 概念组多且严 / 排除标准多 / 检索式精准
+- 15-25%:典型 SLR(中等特异性主题,概念组 2-3 个,标准明确)
+- 25-40%:主题较宽 / 概念组只有 1-2 个 / 排除标准少 / 检索式宽
+- >40%:几乎是 scoping review,主题很宽
+
+判断时**只看协议本身**,不要假设论文质量。
+
+**输出严格 JSON,不要任何前后文字 / Markdown / 代码围栏**:
+{
+  "recommended_pct": <整数,0-100>,
+  "reasoning": "≤ 80 字中文,说明依据(从协议哪几条推导出来)"
+}
+`
+
+export function buildSuggestTargetPrompt({ protocol, projectInput }) {
+  const p = protocol || {}
+  const pi = projectInput || {}
+  const lines = []
+  lines.push('请根据以下 SLR 协议,推荐一个合理的初筛通过率(整数百分比)。')
+  lines.push('')
+
+  if (pi.topic) lines.push(`## 项目主题: ${pi.topic}`)
+  if (pi.discipline) lines.push(`## 学科: ${pi.discipline}`)
+  if (pi.goal) lines.push(`## 研究目标: ${pi.goal}`)
+
+  const rqs = Array.isArray(p.research_questions) ? p.research_questions : []
+  if (rqs.length) {
+    lines.push('')
+    lines.push('## 研究问题')
+    rqs.forEach((q, i) => lines.push(`  RQ${i + 1}. ${q}`))
+  }
+
+  const cg = Array.isArray(p.concept_groups) ? p.concept_groups : []
+  if (cg.length) {
+    lines.push('')
+    lines.push(`## 概念组(共 ${cg.length} 组)`)
+    cg.forEach((g, i) => {
+      const terms = Array.isArray(g.terms) ? g.terms : []
+      lines.push(`  ${i + 1}. ${g.name || '未命名'}(${terms.length} 个词): ${terms.slice(0, 15).join(' | ')}${terms.length > 15 ? ' ...' : ''}`)
+    })
+  }
+
+  const ic = Array.isArray(p.inclusion_criteria) ? p.inclusion_criteria : []
+  if (ic.length) {
+    lines.push('')
+    lines.push(`## 纳入标准(共 ${ic.length} 条)`)
+    ic.forEach((c, i) => lines.push(`  I${i + 1}. ${c}`))
+  }
+
+  const ec = Array.isArray(p.exclusion_criteria) ? p.exclusion_criteria : []
+  if (ec.length) {
+    lines.push('')
+    lines.push(`## 排除标准(共 ${ec.length} 条)`)
+    ec.forEach((c, i) => lines.push(`  E${i + 1}. ${c}`))
+  }
+
+  const dts = Array.isArray(pi.document_types) ? pi.document_types : []
+  if (dts.length) {
+    lines.push('')
+    lines.push(`## 允许文献类型: ${dts.join(' / ')}`)
+  }
+
+  lines.push('')
+  lines.push('请输出 JSON:{ "recommended_pct": <整数 0-100>, "reasoning": "≤80 字" }')
+  return lines.join('\n')
+}
+
+/**
+ * Normalize AI 推荐输出
+ */
+export function normalizeSuggestTargetOutput(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  // 剥 wrapper
+  let r = raw
+  for (let i = 0; i < 3 && r && typeof r === 'object'; i++) {
+    if (r.recommended_pct !== undefined || r.recommendedPct !== undefined) break
+    const inner = r.result || r.data || r.output || r.response
+    if (inner && typeof inner === 'object') r = inner
+    else break
+  }
+  const pctRaw = r.recommended_pct ?? r.recommendedPct ?? r.pct ?? r.percent
+  let pct = null
+  if (typeof pctRaw === 'number' && Number.isFinite(pctRaw)) pct = pctRaw
+  else if (typeof pctRaw === 'string') {
+    const m = pctRaw.match(/\d+/)
+    if (m) pct = Number.parseInt(m[0], 10)
+  }
+  if (pct == null || !Number.isFinite(pct)) return null
+  if (pct < 0) pct = 0
+  if (pct > 100) pct = 100
+  pct = Math.round(pct)
+  const reason = typeof r.reasoning === 'string'
+    ? r.reasoning.trim().slice(0, 300)
+    : (typeof r.reason === 'string' ? r.reason.trim().slice(0, 300) : '')
+  return { recommended_pct: pct, reasoning: reason }
 }
 
 // ============================================================
