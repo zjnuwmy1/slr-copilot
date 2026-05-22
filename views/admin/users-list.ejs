@@ -45,7 +45,9 @@ try {
             <td class="px-4 py-3 font-medium text-slate-800"><%= u.email %></td>
             <td class="px-4 py-3 text-slate-600"><%= u.display_name || '—' %></td>
             <td class="px-4 py-3">
-              <% if (u.role === 'admin') { %>
+              <% if (u.is_super_admin) { %>
+                <span class="rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">SUPER ADMIN</span>
+              <% } else if (u.role === 'admin') { %>
                 <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">ADMIN</span>
               <% } else { %>
                 <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">user</span>
@@ -86,21 +88,42 @@ try {
       <h2 class="text-base font-semibold text-slate-800">未使用的邀请码</h2>
       <p class="mt-1 text-xs text-slate-500">共 <%= invites.length %> 个(最多显示 20)</p>
       <ul class="mt-4 divide-y divide-slate-100 text-sm">
-        <% invites.forEach(function(inv) { %>
-          <li class="flex items-center justify-between gap-4 py-2">
-            <div class="flex items-center gap-3">
+        <% invites.forEach(function(inv) {
+             const isAdminInvite = inv.preset_role === 'admin'
+             const canDelete = !isAdminInvite || (user && user.is_super_admin)
+        %>
+          <li class="flex items-center justify-between gap-4 py-2.5">
+            <div class="flex items-center gap-3 min-w-0">
               <code class="rounded bg-slate-100 px-2 py-1 font-mono text-sm tracking-wider"><%= inv.code %></code>
-              <% if (inv.preset_role === 'admin') { %>
+              <% if (isAdminInvite) { %>
                 <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">ADMIN</span>
               <% } else { %>
                 <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">user</span>
               <% } %>
               <% if (inv.note) { %>
-                <span class="text-xs text-slate-500"><%= inv.note %></span>
+                <span class="truncate text-xs text-slate-500"><%= inv.note %></span>
               <% } %>
             </div>
-            <div class="text-xs text-slate-500">
-              <% if (inv.expires_at) { %>过期:<%= inv.expires_at %><% } else { %>永不过期<% } %>
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-slate-500">
+                <% if (inv.expires_at) { %>过期:<%= inv.expires_at %><% } else { %>永不过期<% } %>
+              </span>
+              <button type="button"
+                      onclick="navigator.clipboard.writeText(location.origin + '/register?code=' + '<%= inv.code %>').then(()=>{this.textContent='✓ 已复制';setTimeout(()=>this.textContent='复制链接',1200)})"
+                      class="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50 transition">
+                复制链接
+              </button>
+              <% if (canDelete) { %>
+                <form method="post" action="/admin/users/invites/<%= encodeURIComponent(inv.code) %>/delete" class="inline"
+                      onsubmit="return confirm('删除邀请码 <%= inv.code %>?该链接将立即失效。')">
+                  <button type="submit"
+                          class="rounded-md border border-rose-200 px-2 py-1 text-[11px] text-rose-600 hover:bg-rose-50 hover:border-rose-300 transition">
+                    删除
+                  </button>
+                </form>
+              <% } else { %>
+                <span class="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-400" title="仅超级管理员可删除">删除</span>
+              <% } %>
             </div>
           </li>
         <% }) %>

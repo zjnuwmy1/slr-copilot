@@ -31,6 +31,7 @@
 
 import { getDecrypted, listForUser, listUsableForUser, getDecryptedForUsage } from './credentials.js'
 import { checkQuotaBeforeCall } from './quota.js'
+import { getPlatformCredentialRow, PROVIDERS as PLATFORM_PROVIDERS } from './platform-credentials.js'
 import * as anthropicApi from './providers/anthropic-api.js'
 import * as anthropicCli from './providers/anthropic-cli.js'
 import * as openaiApi from './providers/openai-api.js'
@@ -78,14 +79,48 @@ function resolveModel(db, { model, provider, actionType }) {
 }
 
 /**
- * 选凭证:
- *   - 显式 credentialId → 直接用(校验属于用户 + active)
- *   - 否则按 preferredProvider / preferredAuthType 过滤 active 列表,取第一个
- *   - 都不指定时,任意一条 active
+ * 选凭证。最高优先级规则:
+ *
+ *   1. 用户不是超管 → 强制走平台凭证(超管在 /admin/platform-credentials 配置的那套)
+ *      — 忽略用户自己的 user_credentials 与所有 credential_shares;
+ *      — 按 preferredProvider 选 anthropic / openai,其次按 active 顺序兜底;
+ *      — 平台凭证未配置或失效 → 返回 no_platform_credential,前端提示联系超管。
+ *
+ *   2. 用户是超管 → 旧行为:显式 credentialId 优先,否则 owner-first + 共享列表。
+ *
+ * 这样保证「所有普通用户共享超管的订阅 token」,同时超管仍可独立调试或绑定多套。
  */
 function pickCredential(db, { userId, credentialId, preferredProvider, preferredAuthType }) {
+  // 0. 查 super-admin 标志
+  const userRow = db.prepare('SELECT is_super_admin FROM users WHERE id = ?').get(userId)
+  const isSuper = !!(userRow && userRow.is_super_admin)
+
+  // —— 非超管:强制走平台凭证 ——
+  if (!isSuper) {
+    const order = preferredProvider
+      ? [preferredProvider, ...PLATFORM_PROVIDERS.filter((p) => p !== preferredProvider)]
+      : PLATFORM_PROVIDERS
+    for (const p of order) {
+      const row = getPlatformCredentialRow(db, p)
+      if (!row) continue
+      if (row.status !== 'active') continue
+      if (preferredAuthType && row.auth_type !== preferredAuthType) continue
+      return { ok: true, cred: { ...row, via: 'platform' } }
+    }
+    // 退化:不强求 authType 匹配
+    if (preferredAuthType) {
+      for (const p of order) {
+        const row = getPlatformCredentialRow(db, p)
+        if (row && row.status === 'active') {
+          return { ok: true, cred: { ...row, via: 'platform' } }
+        }
+      }
+    }
+    return { ok: false, reason: 'no_platform_credential' }
+  }
+
+  // —— 超管:走旧逻辑 ——
   if (credentialId) {
-    // 显式指定:owner 优先,然后 shared
     const own = db
       .prepare(
         `SELECT id, user_id, provider, auth_type, label, status
@@ -96,7 +131,6 @@ function pickCredential(db, { userId, credentialId, preferredProvider, preferred
       if (own.status !== 'active') return { ok: false, reason: 'credential_not_active', detail: own.status }
       return { ok: true, cred: { ...own, via: 'owner' } }
     }
-    // shared
     const shared = db.prepare(`
       SELECT uc.id, uc.user_id, uc.provider, uc.auth_type, uc.label, uc.status
       FROM credential_shares cs
@@ -108,14 +142,12 @@ function pickCredential(db, { userId, credentialId, preferredProvider, preferred
     return { ok: true, cred: { ...shared, via: 'shared' } }
   }
 
-  // 自动选:owner 自有的优先,然后是共享给我的
-  const all = listUsableForUser(db, userId)  // 已按 owner-first 排序
+  const all = listUsableForUser(db, userId)
   if (all.length === 0) return { ok: false, reason: 'no_active_credential' }
-
   let candidates = all
   if (preferredProvider) candidates = candidates.filter((c) => c.provider === preferredProvider)
   if (preferredAuthType) candidates = candidates.filter((c) => c.auth_type === preferredAuthType)
-  if (candidates.length === 0) candidates = all  // 退化
+  if (candidates.length === 0) candidates = all
   return { ok: true, cred: candidates[0] }
 }
 

@@ -18,13 +18,22 @@
     <form action="/admin/users/invites" method="post" class="mt-6 space-y-5">
       <div>
         <label class="block text-sm font-medium text-slate-700">角色</label>
-        <select
-          name="preset_role"
-          class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
-        >
-          <option value="user" <%= form.preset_role === 'user' ? 'selected' : '' %>>user(普通用户)</option>
-          <option value="admin" <%= form.preset_role === 'admin' ? 'selected' : '' %>>admin(管理员)</option>
-        </select>
+        <% if (isSuperAdmin) { %>
+          <select
+            name="preset_role"
+            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
+          >
+            <option value="user" <%= form.preset_role === 'user' ? 'selected' : '' %>>user(普通用户)</option>
+            <option value="admin" <%= form.preset_role === 'admin' ? 'selected' : '' %>>admin(管理员)</option>
+          </select>
+          <p class="mt-1 text-xs text-slate-500">仅超级管理员可签发 admin 邀请码。</p>
+        <% } else { %>
+          <input type="hidden" name="preset_role" value="user">
+          <div class="mt-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            user(普通用户)
+          </div>
+          <p class="mt-1 text-xs text-slate-500">如需创建管理员账号,请联系超级管理员。</p>
+        <% } %>
       </div>
 
       <div>

@@ -31,6 +31,7 @@ import {
   listSharedWithUser,
 } from '../../services/credentials.js'
 import { listCredentialsSharedToUser } from '../../services/credential-sharing.js'
+import { listPlatformCredentials, PROVIDERS as PLATFORM_PROVIDERS } from '../../services/platform-credentials.js'
 
 const router = Router()
 
@@ -46,10 +47,14 @@ router.get('/', (req, res) => {
   const db = req.app.locals.db
   const credentials = listForUser(db, req.user.id)
   const sharedWithMe = listSharedWithUser(db, req.user.id)
+  // 平台凭证状态:非超管看到的是「正在使用的平台凭证」摘要
+  const platformCreds = listPlatformCredentials(db)
   res.render('account/credentials/list', {
     title: '我的凭证',
     credentials,
     sharedWithMe,
+    platformCreds,
+    isSuperAdmin: !!req.user.is_super_admin,
   })
 })
 

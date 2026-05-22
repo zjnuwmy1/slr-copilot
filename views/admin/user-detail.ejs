@@ -37,7 +37,9 @@ try {
       <div>
         <dt class="text-xs text-slate-500">角色</dt>
         <dd class="mt-0.5">
-          <% if (target.role === 'admin') { %>
+          <% if (target.is_super_admin) { %>
+            <span class="rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">SUPER ADMIN</span>
+          <% } else if (target.role === 'admin') { %>
             <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">ADMIN</span>
           <% } else { %>
             <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">user</span>
@@ -101,6 +103,10 @@ try {
       <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500">角色</h2>
       <% if (isSelf) { %>
         <p class="mt-4 text-xs text-slate-500">这是你自己,不能把自己降级。</p>
+      <% } else if (!viewerIsSuperAdmin) { %>
+        <p class="mt-4 text-xs text-slate-500">仅超级管理员可调整用户角色。</p>
+      <% } else if (target.is_super_admin) { %>
+        <p class="mt-4 text-xs text-slate-500">该用户是超级管理员。如需降级请先在数据库取消 <code class="rounded bg-slate-100 px-1">is_super_admin</code> 标志。</p>
       <% } else { %>
         <form action="/admin/users/<%= encodeURIComponent(target.id) %>/role" method="post" class="mt-4 flex items-center gap-3">
           <select

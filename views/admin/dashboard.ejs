@@ -13,7 +13,9 @@ try {
 
 <section class="space-y-6">
   <div>
-    <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin</p>
+    <p class="text-xs font-medium uppercase tracking-wider <%= user.is_super_admin ? 'text-purple-600' : 'text-amber-600' %>">
+      <%= user.is_super_admin ? 'Super Admin' : 'Admin' %>
+    </p>
     <h1 class="mt-1 text-2xl font-semibold tracking-tight">管理后台</h1>
     <p class="mt-1 text-sm text-slate-500">欢迎,<%= user.display_name || user.email %></p>
   </div>
@@ -80,6 +82,15 @@ try {
       <p class="text-base font-semibold text-slate-800">储存空间</p>
       <p class="mt-1 text-xs text-slate-500">磁盘 / DB / 项目占用 + 孤儿清理</p>
     </a>
+    <% if (user.is_super_admin) { %>
+      <a
+        href="/admin/platform-credentials"
+        class="block rounded-xl border border-purple-200 bg-purple-50/30 p-5 transition hover:border-purple-400 hover:shadow-sm"
+      >
+        <p class="text-base font-semibold text-purple-900">平台凭证</p>
+        <p class="mt-1 text-xs text-purple-700">配置所有用户共享的 Claude / Codex token</p>
+      </a>
+    <% } %>
   </div>
 </section>
 

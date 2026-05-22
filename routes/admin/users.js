@@ -13,6 +13,11 @@
  *   POST   /users/:id/deactivate  → 停用(不能停自己)
  *   POST   /users/:id/role        → 改角色(不能降自己)
  *   POST   /users/:id/quota       → 设/改配额
+ *   POST   /users/invites/:code/delete → 删除未使用的邀请码
+ *
+ * 超管专属(下面这些路由内部用 req.user.is_super_admin 守卫):
+ *   - 创建/晋升角色为 admin
+ *   - 把别的 admin 改成 super_admin(本期不暴露 UI,只在 bootstrap 自动完成)
  */
 
 import { Router } from 'express'
@@ -21,6 +26,15 @@ import { audit } from '../../services/audit.js'
 import { listProjectsForUser } from './projects.js'
 
 const router = Router()
+
+function requireSuperAdminInline(req, res, redirectTo = '/admin/users') {
+  if (!req.user?.is_super_admin) {
+    flash(req, 'error', '此操作仅超级管理员可执行')
+    res.redirect(redirectTo)
+    return false
+  }
+  return true
+}
 
 function flash(req, type, message) {
   if (!req.session) return
@@ -73,7 +87,8 @@ router.get('/users', (req, res) => {
   const db = req.app.locals.db
   const users = db
     .prepare(
-      `SELECT id, email, display_name, role, is_active, created_at, last_login_at
+      `SELECT id, email, display_name, role, is_active, is_super_admin,
+              created_at, last_login_at
        FROM users
        ORDER BY created_at DESC`
     )
@@ -101,12 +116,22 @@ router.get('/users/new', (req, res) => {
     title: '生成邀请码',
     error: null,
     form: { preset_role: 'user', note: '', expires_days: '7' },
+    isSuperAdmin: !!req.user.is_super_admin,
   })
 })
 
 router.post('/users/invites', (req, res) => {
   const db = req.app.locals.db
-  const preset_role = req.body.preset_role === 'admin' ? 'admin' : 'user'
+  let preset_role = req.body.preset_role === 'admin' ? 'admin' : 'user'
+  // 守卫:只有超管能签发 admin 邀请码
+  if (preset_role === 'admin' && !req.user.is_super_admin) {
+    return res.status(403).render('admin/user-new', {
+      title: '生成邀请码',
+      error: '仅超级管理员可以创建管理员账号',
+      form: { preset_role: 'user', note: req.body.note || '', expires_days: req.body.expires_days || '7' },
+      isSuperAdmin: false,
+    })
+  }
   const note = String(req.body.note || '').trim().slice(0, 200) || null
 
   // expires_days(更友好)或 expires_at(显式时间);留空 = 永不过期
@@ -120,6 +145,7 @@ router.post('/users/invites', (req, res) => {
         title: '生成邀请码',
         error: '过期时间格式无效',
         form: { preset_role, note: note || '', expires_days: expiresDays },
+        isSuperAdmin: !!req.user.is_super_admin,
       })
     }
   } else if (expiresDays) {
@@ -129,6 +155,7 @@ router.post('/users/invites', (req, res) => {
         title: '生成邀请码',
         error: '过期天数请填 1-365 之间的整数',
         form: { preset_role, note: note || '', expires_days: expiresDays },
+        isSuperAdmin: !!req.user.is_super_admin,
       })
     }
     const d = new Date(Date.now() + n * 24 * 60 * 60 * 1000)
@@ -177,6 +204,42 @@ router.post('/users/invites', (req, res) => {
   res.redirect('/admin/users')
 })
 
+// ============== 删除邀请码(仅未使用的) ==============
+
+router.post('/users/invites/:code/delete', (req, res) => {
+  const db = req.app.locals.db
+  const code = String(req.params.code || '').trim()
+  if (!code) {
+    flash(req, 'error', '缺少邀请码')
+    return res.redirect('/admin/users')
+  }
+  const row = db.prepare(
+    'SELECT code, used_by_user_id, preset_role FROM invite_codes WHERE code = ?'
+  ).get(code)
+  if (!row) {
+    flash(req, 'error', '邀请码不存在')
+    return res.redirect('/admin/users')
+  }
+  if (row.used_by_user_id) {
+    flash(req, 'error', '该邀请码已被使用,无法删除(保留作为注册记录)')
+    return res.redirect('/admin/users')
+  }
+  // 守卫:admin 邀请码只有超管能删(普通 admin 也不能签发,自然不能删)
+  if (row.preset_role === 'admin' && !req.user.is_super_admin) {
+    flash(req, 'error', '只有超级管理员可以删除管理员邀请码')
+    return res.redirect('/admin/users')
+  }
+  db.prepare('DELETE FROM invite_codes WHERE code = ?').run(code)
+  audit(db, req, {
+    eventType: 'invite_deleted',
+    userId: req.user.id,
+    actorUserId: req.user.id,
+    payload: { code, preset_role: row.preset_role },
+  })
+  flash(req, 'success', `邀请码 ${code} 已删除`)
+  res.redirect('/admin/users')
+})
+
 // ============== 用户详情 ==============
 
 router.get('/users/:id', (req, res) => {
@@ -207,13 +270,16 @@ router.get('/users/:id', (req, res) => {
       allowedAuthTypes = null
     }
   }
+  // 把 is_super_admin 也带到 view
+  const fullUser = db.prepare('SELECT is_super_admin FROM users WHERE id = ?').get(id)
   res.render('admin/user-detail', {
     title: `用户:${user.display_name || user.email}`,
-    target: user,
+    target: { ...user, is_super_admin: !!fullUser?.is_super_admin },
     quota,
     allowedProviders,
     allowedAuthTypes,
     isSelf: req.user.id === user.id,
+    viewerIsSuperAdmin: !!req.user.is_super_admin,
   })
 })
 
@@ -268,15 +334,33 @@ router.post('/users/:id/role', (req, res) => {
   const id = String(req.params.id)
   const role = req.body.role === 'admin' ? 'admin' : 'user'
 
-  if (id === req.user.id && role !== 'admin') {
-    flash(req, 'error', '不能把自己降级,请让另一个 admin 操作')
+  // 守卫:只有超管能改任何用户的角色(普通 admin 无权晋升 / 降级他人)
+  if (!req.user.is_super_admin) {
+    flash(req, 'error', '仅超级管理员可调整用户角色')
     return res.redirect(`/admin/users/${encodeURIComponent(id)}`)
   }
 
-  const u = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id)
+  if (id === req.user.id && role !== 'admin') {
+    flash(req, 'error', '不能把自己降级,请让另一个超管操作')
+    return res.redirect(`/admin/users/${encodeURIComponent(id)}`)
+  }
+
+  const u = db.prepare('SELECT id, role, is_super_admin FROM users WHERE id = ?').get(id)
   if (!u) {
     flash(req, 'error', '用户不存在')
     return res.redirect('/admin/users')
+  }
+  // 安全:不允许把仅剩的一个超管降级为 user
+  if (u.is_super_admin && role === 'user') {
+    const otherSupers = db.prepare(
+      'SELECT COUNT(*) AS c FROM users WHERE is_super_admin = 1 AND id != ?'
+    ).get(id).c
+    if (otherSupers === 0) {
+      flash(req, 'error', '不能降级最后一名超级管理员')
+      return res.redirect(`/admin/users/${encodeURIComponent(id)}`)
+    }
+    // 降为 user 时同时清掉 super_admin 标志
+    db.prepare('UPDATE users SET is_super_admin = 0 WHERE id = ?').run(id)
   }
   if (u.role === role) {
     flash(req, 'success', '角色没有变化')

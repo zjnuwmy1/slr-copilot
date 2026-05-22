@@ -357,7 +357,7 @@ export function listAllShares(db) {
 }
 
 /**
- * 给 LLM router 用的解密:允许 owner OR 被共享对象访问。
+ * 给 LLM router 用的解密:允许 owner / 被共享对象 / 平台凭证(超管已配置)三种来源。
  * 返回解密后的明文凭证(含 api_key / home_path)。
  */
 export function getDecryptedForUsage(db, { userId, credentialId }) {
@@ -381,6 +381,27 @@ export function getDecryptedForUsage(db, { userId, credentialId }) {
   if (shared) {
     try { return { ...shared, ...decryptJson(shared.credential_blob_enc), via: 'shared', ownerUserId: shared.owner_user_id } }
     catch (e) { throw new Error(`decrypt_failed: ${e.message}`) }
+  }
+  // 平台凭证:owner 必须是超管,且当前在 system_settings 里被指定为平台默认
+  const platform = db.prepare(`
+    SELECT uc.id, uc.user_id AS owner_user_id, uc.provider, uc.auth_type, uc.label,
+           uc.credential_blob_enc, uc.status,
+           ss.value AS platform_key_value
+    FROM user_credentials uc
+    JOIN users u ON u.id = uc.user_id
+    JOIN system_settings ss ON ss.key = 'platform_credential_' || uc.provider
+    WHERE uc.id = ? AND uc.status = 'active' AND u.is_super_admin = 1
+      AND ss.value = uc.id
+  `).get(credentialId)
+  if (platform) {
+    try {
+      return {
+        ...platform,
+        ...decryptJson(platform.credential_blob_enc),
+        via: 'platform',
+        ownerUserId: platform.owner_user_id,
+      }
+    } catch (e) { throw new Error(`decrypt_failed: ${e.message}`) }
   }
   throw new Error('credential_not_accessible')
 }
