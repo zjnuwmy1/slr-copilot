@@ -515,27 +515,29 @@
                 <span class="text-xs text-slate-400">先审批协议才能跑 AI</span>
               <% } %>
 
-              <!-- 人工决定(AJAX — 不跳转,提交后视觉反馈) -->
+              <!-- 人工决定(AJAX — 点按钮即提交,不需要勾选 radio + 保存两步) -->
               <form method="post" action="<%= filterBase %>/decide/<%= r.id %>"
                     data-ajax-decide
                     data-record-id="<%= r.id %>"
                     class="flex flex-wrap items-center gap-2">
+                <input type="text" name="reason" maxlength="2000"
+                       value="<%= escAttr(r.human_reason) %>"
+                       placeholder="备注(可选,先填再点决定按钮)"
+                       class="w-56 rounded-md border border-slate-300 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none" />
                 <% ['include', 'exclude', 'uncertain'].forEach(v => {
                      const [cls, label] = humanBadge(v)
                      const checked = r.human_decision === v
+                     // 当前已是该决定 → 灰一点,提示"这就是当前选择",但仍可点(等同重新保存)
+                     const btnCls = checked
+                       ? `${cls} ring-2 ring-blue-300`
+                       : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
                 %>
-                  <label class="inline-flex items-center gap-1 rounded-md border <%= checked ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-300' %> px-2 py-1 text-xs cursor-pointer hover:bg-slate-50">
-                    <input type="radio" name="decision" value="<%= v %>" <%= checked ? 'checked' : '' %> class="h-3 w-3" />
+                  <button type="submit" name="decision" value="<%= v %>"
+                          title="<%= checked ? '当前选择是 ' + label + ',点击重新保存' : '设为 ' + label %>"
+                          class="rounded-md px-2.5 py-1 text-xs font-medium <%= btnCls %> disabled:opacity-60">
                     <%= label %>
-                  </label>
+                  </button>
                 <% }) %>
-                <input type="text" name="reason" maxlength="2000"
-                       value="<%= escAttr(r.human_reason) %>"
-                       placeholder="人工备注(可选)"
-                       class="w-56 rounded-md border border-slate-300 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none" />
-                <button type="submit" class="rounded-md bg-slate-900 px-2.5 py-1 text-xs text-white hover:bg-slate-700 disabled:opacity-60">
-                  保存
-                </button>
                 <span class="ajax-feedback text-xs text-slate-500" aria-live="polite"></span>
               </form>
             </div>
@@ -635,17 +637,21 @@
   document.querySelectorAll('form[data-ajax-decide]').forEach(function(form) {
     form.addEventListener('submit', function(e) {
       e.preventDefault()
-      var btn = form.querySelector('button[type=submit]')
       var fb = form.querySelector('.ajax-feedback')
-      var checked = form.querySelector('input[name="decision"]:checked')
-      if (!checked) {
-        if (fb) { fb.textContent = '请先勾选纳/排/疑'; fb.style.color = '#e11d48' }
+      // 改用 event.submitter 拿被点击的按钮(每个按钮 name="decision" value="include/exclude/uncertain")
+      var submitter = e.submitter
+      if (!submitter || !submitter.value) {
+        if (fb) { fb.textContent = '请点击纳/排/疑按钮'; fb.style.color = '#e11d48' }
         return
       }
+      var decisionValue = submitter.value
+      var btn = submitter
       var prevBtnText = btn ? btn.textContent : ''
-      if (btn) { btn.disabled = true; btn.textContent = '保存中…' }
+      if (btn) { btn.disabled = true; btn.textContent = '…' }
       if (fb) { fb.textContent = ''; fb.style.color = '' }
       var fd = new FormData(form)
+      // 显式带上 decision(因为 FormData(form) 不会自动包含 submit button 的 value)
+      fd.set('decision', decisionValue)
       fetch(form.action, {
         method: 'POST',
         credentials: 'same-origin',
