@@ -598,11 +598,11 @@ router.get('/:id/report/export.md', (req, res) => {
   try {
     const checklist = db
       .prepare(
-        `SELECT item_number, section, item_title, recommendation,
+        `SELECT item_number, section, topic, recommendation,
                 workflow_step, status, notes, evidence_url
          FROM prisma_checklist
          WHERE project_id = ?
-         ORDER BY CAST(SUBSTR(item_number, 1, INSTR(item_number || 'x', LENGTH(item_number) > 1 ? SUBSTR(item_number, -1) : 'x') - 1) AS INTEGER), item_number`
+         ORDER BY id ASC`
       )
       .all(project.id)
     if (checklist.length > 0) {
@@ -616,7 +616,7 @@ router.get('/:id/report/export.md', (req, res) => {
       for (const it of checklist) {
         const status = statusIcon[it.status] || '○'
         const notes = (it.notes || '').replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 200)
-        parts.push(`| ${it.item_number} | ${it.section || ''} | ${it.item_title || ''} | ${status} | ${notes} |`)
+        parts.push(`| ${it.item_number} | ${it.section || ''} | ${it.topic || ''} | ${status} | ${notes} |`)
       }
       parts.push('')
     }

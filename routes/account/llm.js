@@ -3,6 +3,11 @@ import { runLlm } from '../../services/llm.js'
 
 const router = express.Router()
 
+// GET /  — 没有专门的 LLM 主页,转回凭证列表
+router.get('/', (req, res) => {
+  res.redirect('/account/credentials')
+})
+
 /**
  * GET /account/llm/ping
  * 一次性 LLM 调用诊断:用用户绑的凭证发送最小消息,验证整条链路。

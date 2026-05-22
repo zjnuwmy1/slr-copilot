@@ -38,6 +38,11 @@ function flash(req, type, message) {
   if (req.session) req.session.flash = { type, message }
 }
 
+// GET /  — 没有专门的 oauth 主页,转回凭证列表
+router.get('/', (req, res) => {
+  res.redirect('/account/credentials')
+})
+
 // GET /start
 router.get('/start', (req, res) => {
   const provider = String(req.query.provider || '').toLowerCase()
