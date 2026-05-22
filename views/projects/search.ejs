@@ -472,7 +472,7 @@
                                        (s.result_count != null ? ' (' + s.result_count + ' 条)' : '')
                       %>
                         <option value="<%= s.id %>"
-                                data-query-text="<%= s.query_text.replace(/"/g, '&quot;') %>"
+                                data-query-text="<%= s.query_text %>"
                                 <%= rec.strategy_id === s.id ? 'selected' : '' %>>
                           <%= isMain ? '★ ' : '' %><%= lab %>
                         </option>
