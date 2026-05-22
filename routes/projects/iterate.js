@@ -111,6 +111,10 @@ router.post('/:id/iterate/diagnose', async (req, res) => {
       total_records: snapshot.record_counts.total,
       include_rate: snapshot.screening_stats?.title_abstract?.include_rate,
       user_feedback_len: userFeedback.length,
+      per_record_decisions_count: Array.isArray(snapshot.per_record_decisions)
+        ? snapshot.per_record_decisions.length : 0,
+      per_record_decisions_total: snapshot.per_record_decisions?.totalCandidates ?? null,
+      per_record_decisions_truncated: !!snapshot.per_record_decisions?.truncated,
     },
   })
 

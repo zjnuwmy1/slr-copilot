@@ -132,9 +132,15 @@ export function gatherProjectSnapshot(db, projectId) {
   // —— AI 筛选意见的整体分布 + AI vs human 一致性矩阵 ——
   const aiScreeningDetails = gatherAiScreeningDetails(db, projectId)
 
-  // —— 每条 record 的 AI 判断细节(按信号价值排序,cap 默认 300) ——
+  // —— 每条 record 的 AI 判断细节(按信号价值排序) ——
   // LLM 拿这个能直接看到 "哪几条 AI 错过了" / "哪几条 AI 过纳了" 的原文
-  const perRecordDecisions = gatherPerRecordDecisions(db, projectId, 300)
+  //
+  // cap 设 2000 足以覆盖绝大多数真实 SLR 项目(典型 200-1500 条已筛 records),
+  // 即便顶到 cap,排序保证最有诊断价值的(disagree)永远进得去。
+  // opus-4-7 / gpt-5.5 都有 1M context 窗口,2000 条 × ~400 字 ≈ 800K 字符
+  // ≈ 200K tokens,在窗口内且不会触发 lost-in-the-middle。
+  const PER_RECORD_CAP = 2000
+  const perRecordDecisions = gatherPerRecordDecisions(db, projectId, PER_RECORD_CAP)
 
   // —— Themes(若有) ——
   const themes = (() => {
@@ -367,16 +373,17 @@ function gatherPerRecordDecisions(db, projectId, maxRows = 300) {
   const t3 = sortInTier(tier3)
   const t4 = sortInTier(tier4)
 
-  // 全部 tier1 + tier2 都进,然后 tier3 限 80,tier4 限 30(超 cap 截尾)
-  const picked = [
-    ...t1,
-    ...t2,
-    ...t3.slice(0, 80),
-    ...t4.slice(0, 30),
-  ].slice(0, maxRows)
+  // 配额:tier1 + tier2 全进;tier3 优先;tier4 兜底。总 cap = maxRows。
+  // 真实使用上 maxRows=2000 几乎不会触顶,但代码仍按优先级排序确保上限内总是
+  // 最有诊断价值的先进。
+  const candidates = [...t1, ...t2, ...t3, ...t4]
+  const totalCandidates = candidates.length
+  const picked = candidates.slice(0, maxRows)
+  const truncated = totalCandidates > picked.length
+  const truncatedCount = totalCandidates - picked.length
 
   // 压缩输出形状(每条只留 LLM 需要的字段,title 截断 160,reason 240)
-  return picked.map((r, idx) => ({
+  const out = picked.map((r, idx) => ({
     idx: idx + 1,
     record_id: r.id,
     title: truncate(r.title, 160),
@@ -394,6 +401,12 @@ function gatherPerRecordDecisions(db, projectId, maxRows = 300) {
     human_reason: truncate(r.human_reason, 240),
     tier: tier1.includes(r) ? 'disagree' : tier2.includes(r) ? 'uncertain' : tier3.includes(r) ? 'agree' : 'ai_only',
   }))
+
+  // 用 Object.defineProperty 给数组挂 metadata,view/route 用得到但不污染 JSON
+  out.totalCandidates = totalCandidates
+  out.truncated = truncated
+  out.truncatedCount = truncatedCount
+  return out
 }
 
 function truncate(s, n) {
@@ -720,8 +733,11 @@ export function buildIterationUserPrompt({ snapshot, userFeedback }) {
       if (byTier[r.tier]) byTier[r.tier].push(r)
     }
     lines.push('')
-    lines.push(`===== 逐条 records 的 AI ↔ 人工判断(共 ${sp.per_record_decisions.length} 条,按信号强度分组)=====`)
-    lines.push('  格式: [tier] AI=X(conf) Human=Y · "title" · doi · AI reason · matched_inc/exc · Human reason')
+    const cov = sp.per_record_decisions.truncated
+      ? `共 ${sp.per_record_decisions.totalCandidates} 条已筛 records,本次给你看 ${sp.per_record_decisions.length} 条(按信号强度排了序,被截断的 ${sp.per_record_decisions.truncatedCount} 条是 tier 较低的 agree / ai_only)`
+      : `共 ${sp.per_record_decisions.length} 条(全部已筛 records 都给你)`
+    lines.push(`===== 逐条 records 的 AI ↔ 人工判断 — ${cov} =====`)
+    lines.push('  格式: #idx AI=X(conf) Human=Y · "title" · doi · AI: "reason" · matched_inc/exc · Human: "reason"')
 
     const sections = [
       ['🔴 分歧(disagree) — 这些最关键,直接揭示协议描述对 AI 不够精确', byTier.disagree],
