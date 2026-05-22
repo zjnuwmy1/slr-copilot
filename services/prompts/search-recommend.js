@@ -68,20 +68,38 @@ export function buildRecommendSystem({ targetDatabases }) {
 任务:基于"已审批协议 + 用户跑过的 exploration 检索式命中数",
 为本项目用户勾选的 ${N} 个库(${dbList})合成主检索。
 
+🚨🚨🚨 **核心原则:你的工作是"分析",不是"创作"** 🚨🚨🚨
+   exploration 数据是基准事实。你的 concept_set 词项**必须只能来自 exploration query_text
+   里实际出现过的词项**(允许词形变体:复数 / 截词 / 大小写),
+   **不允许凭空加未在任何 exploration 里出现过的新概念词 / 新同义词**。
+   原因:exploration 已经实测过这些词的命中数,任何引入未测过的词都会让预估偏离真实。
+
+   ✅ 合法:
+   - 删:把 high_recall 里某个产生过多噪音的词从 concept_set 里去掉
+   - 收紧:把宽截词 \`learn*\` 改为精确词 \`learning\` (仍属同一词根)
+   - 变体:exploration 用了 "metacognitive",改成 "metacognit*" 以同时覆盖名词/形容词
+   - 拆/合:exploration 把"AI" 和 "deep learning" 分两个组,主检索合并为同一组的 OR
+   - 字段:exploration 全部用 TS=/TITLE-ABS-KEY,主检索仍用 TS=/TITLE-ABS-KEY(不切到标题)
+
+   ❌ 违法:
+   - 加新词:exploration 里所有 query 都没有 "neural"、"backpropagation"、"transformer",
+            你不能在主检索里凭空加它们
+   - 加新概念组:exploration 里只测了 [AI × 教育] 两组,你不能加第三组 "评估方法"
+   - 跨库不同:WoS 加了 "DL",Scopus 没加 — 违反跨库一致性
+
 🔒 **严格按协议(优化只能在协议框架内,不要漂移)**:
    - **year_range 必须 = 协议给的起止年**,逐字使用。不要 "last 10 years" / "近 10 年" /
      "recent decade",不要私自把 2016-2026 改成 2016-2025 或 2020-2026。
    - **document_types 必须 = 协议允许列表**;**excluded_document_types** 包含所有协议未勾选的常见类型
      (Conference Paper / Editorial / Letter / Comment / Meeting Abstract)。
    - **language 必须 = 协议指定**。协议未指定则不写。
-   - **concept_groups 以协议为骨架**,允许扩同义词 / 缩写,但不能漂移核心概念。
+   - **concept_groups 以协议为骨架**,且词项必须来自 exploration 实测过的词(见上面"核心原则")。
 
 📊 **优化只能动以下几样(在协议框架内,基于命中数反馈)**:
-   - concept_groups 内部的同义词增删 / 词形变体
-   - 字段标签(全文 vs 标题/关键词,例如 high_recall 用 TITLE-ABS-KEY,
-     主检索可能更偏向标题字段以收紧)
-   - 截词位置 / 邻近运算符
-   - **不要**:动 year_range / 动 document_types / 动 language。
+   - 删 exploration 里已测过但产生过宽噪音的同义词
+   - 同词根的截词变体(\`learn*\` ↔ \`learning\`)
+   - concept_groups 拆分/合并(但不引入新组)
+   - **不要**:动 year_range / 动 document_types / 动 language / 加新词。
      如果命中数太多 / 太少,在 rationale 里说明并 warning 给用户,**不要私自压缩或扩大协议范围**。
 
 🚫 **典型反模式 — 这些会让 query 零命中 / 报错,绝对不要做**:
@@ -134,23 +152,41 @@ export function buildRecommendSystem({ targetDatabases }) {
 
 **输出格式 — 严格 JSON,字段名一字不差**(不要包在 result/data/output 任何 envelope 里,直接顶层输出):
 {
+  "evidence_analysis": {
+    "term_universe": ["<列出 exploration 全部 query_text 里出现过的核心词项,去重,合并词形变体>"],
+    "per_database": [
+      {
+        "database": "wos",
+        "rows": [
+          { "query_type": "high_recall",    "actual_hits": 130, "key_diffs_vs_balanced": "包含了 X / Y 两个宽词" },
+          { "query_type": "balanced",       "actual_hits": 106, "key_diffs_vs_high_precision": "比 hp 多了 Z 词" },
+          { "query_type": "high_precision", "actual_hits": 5,   "what_made_it_drop": "只用了 TI=,而且只保留 A/B 两词" }
+        ],
+        "summary": "≤120 字中文 — 这个库的命中数分布说明了什么,主检索应该靠近哪个版本"
+      }
+    ],
+    "target_decision": "≤120 字中文 — 综合所有库 + 用户期望(如有),决定主检索向哪个区间靠"
+  },
   "concept_set": {
     "concept_groups": [
-      { "name": "AI 技术", "terms": ["deep learning", "neural network*", ...] },
-      { "name": "医学影像", "terms": ["medical imag*", "radiolog*", ...] }
+      { "name": "<协议里的组名>", "terms": ["<仅限 exploration 出现过的词或其词形变体>"] }
     ],
     "year_range": [起, 止],
-    "document_types": ["Article", "Review"],
+    "document_types": ["Journal Article"],
     "excluded_document_types": ["Conference Paper", "Editorial", "Letter"],
-    "language": ["English"]
+    "language": ["English"],
+    "removed_terms": ["<从 exploration 砍掉的词,每个标注砍掉的理由>"],
+    "kept_terms_summary": "≤80 字 — 保留的核心词项群"
   },
   "optimized_queries": [
     {
       "database": "<必须是 ${dbs.map((k) => `'${k}'`).join(' / ')} 之一>",
       "query_text": "<concept_set 在该库语法下的完整渲染 — 必含概念组 + 年份 + 文献类型(含 NOT 排除)+ 语言>",
-      "rationale": "≤80 字中文 — concept_set 比 exploration 改了什么,为什么更好",
-      "based_on_strategy_ids": ["<引用了哪几条已跑过的 strategy id,可空数组>"],
-      "expected_count_estimate": <整数 — 你预估该库命中数,SLR sweet spot 是 100-2000>
+      "rationale": "≤80 字中文 — concept_set 比 exploration 改了什么,为什么这样改后命中会落在预期",
+      "based_on_strategy_ids": ["<必填!引用至少 1 条 exploration strategy id,说明这条优化是从哪个版本演变来的>"],
+      "expected_count_estimate": <整数 — 你预估该库主检索的命中数>,
+      "expected_within_explored_range": <true|false — 你的估算是否落在该库 exploration 三个版本的 [min, max] 范围内>,
+      "expected_count_basis": "≤80 字中文 — 用哪两条 exploration 行 + 改动来推导这个数字(例如:'balanced 106 - 去掉宽词 X 估计 -15%')"
     }
   ],
   "overall_rationale": "1-2 句中文 — 整体优化思路",
@@ -158,18 +194,28 @@ export function buildRecommendSystem({ targetDatabases }) {
 }
 
 **绝对规则**:
-1. \`concept_set\` 是顶层必填字段,**全部 \`optimized_queries\` 共用一套**。
-2. \`optimized_queries\` **数组长度必须等于 ${N}**,每个库各出现一次。
-3. **${N} 条 query_text 的概念词、年份、文献类型允许/排除列表、语言必须完全一致** —
+1. \`evidence_analysis\` 是顶层必填字段 — **先分析,后改**。不允许跳过这一步直接出 query。
+2. \`concept_set\` 是顶层必填字段,**全部 \`optimized_queries\` 共用一套**。
+3. \`optimized_queries\` **数组长度必须等于 ${N}**,每个库各出现一次。
+4. **${N} 条 query_text 的概念词、年份、文献类型允许/排除列表、语言必须完全一致** —
    只允许字段标签和语法不同。请自己在头脑里逐条对照检查后再输出。
-4. database 字段只能是:${dbs.map((k) => `'${k}'`).join(', ')}。
-5. 优化方向(全部体现在 concept_set 里,然后同步渲染到所有库):
-   - 命中数 < 30 → concept_set 加同义词 / 放宽截词
-   - 命中数 > 5000 → concept_set 删过宽的同义词 / 加严格的标题字段限定
-   - 100-2000 → 接近 sweet spot,小幅微调
-6. rationale 解释 concept_set 相比 exploration 的具体改动(加了哪个同义词、去了哪个,引用了哪条命中数)。
-7. **绝对不要** 直接复制 exploration 的 query_text — 主检索是基于 concept_set 重新渲染。
-8. **只输出 JSON**,不要前后加解释、Markdown、代码围栏(\`\`\`)。
+5. database 字段只能是:${dbs.map((k) => `'${k}'`).join(', ')}。
+6. **\`expected_count_estimate\` 必须落在该库 exploration 命中数 [min, max] 之间**(没有用户目标时)。
+   - 若用户给了目标区间,先取 \`intersect(用户目标, [exploration_min, exploration_max])\`,
+     主检索预估必须落在这个交集里。
+   - 若 \`expected_within_explored_range = false\`,你必须在 \`expected_count_basis\` 里**逐条解释**为什么有信心破例
+     (例如:"删掉了 high_recall 里专门拉宽用的 \`foundation model*\`,该词在标题摘要里出现 50+ 次,
+     去掉后估算从 130 降到 40")—— 否则系统会拒绝接收。
+7. **词项宇宙**:\`concept_set.concept_groups[*].terms\` 里的每个词,**必须**能在
+   \`evidence_analysis.term_universe\` 里找到对应(允许词形变体)。引入未测过的新词 = 输出会被拒绝。
+8. \`based_on_strategy_ids\` **不能为空** — 主检索是 exploration 的演化,必须能引用到具体 id。
+9. 优化方向(全部体现在 concept_set 里,然后同步渲染到所有库):
+   - 命中数 < 30 → 警告(不要凭空加新词,告诉用户 exploration 词项太狭窄需要补充)
+   - 命中数 > 2000 → 从 exploration 里挑过宽的词砍掉
+   - 100-1000 → 接近 sweet spot,小幅微调
+10. rationale 解释 concept_set 相比 exploration 的具体改动 — 必须**引用具体的 strategy_id 和命中数字**。
+11. **绝对不要** 直接复制 exploration 的 query_text — 主检索是基于 concept_set 重新渲染。
+12. **只输出 JSON**,不要前后加解释、Markdown、代码围栏(\`\`\`)。
 
 **各库语法块**(查询里必须正确使用):
 
@@ -337,6 +383,19 @@ export function buildRecommendPrompt({
   // —— 已跑过的 exploration 检索式 + 命中数(关键反馈信号) ——
   lines.push('')
   lines.push('===== 已跑过的检索式 + 命中数(主检索优化的依据)=====')
+  // 收集每个库的 [min, max] 命中数,给 LLM 一个硬约束区间
+  const dbHitRanges = {}  // db => { min, max, hits: [{ qt, count }] }
+  if (Array.isArray(previousStrategies) && previousStrategies.length) {
+    for (const s of previousStrategies) {
+      const db = s.database_name || s.database
+      if (s.result_count == null) continue
+      if (!dbHitRanges[db]) dbHitRanges[db] = { min: Infinity, max: -Infinity, hits: [] }
+      dbHitRanges[db].min = Math.min(dbHitRanges[db].min, s.result_count)
+      dbHitRanges[db].max = Math.max(dbHitRanges[db].max, s.result_count)
+      dbHitRanges[db].hits.push({ qt: s.query_type, count: s.result_count })
+    }
+  }
+
   if (!Array.isArray(previousStrategies) || previousStrategies.length === 0) {
     lines.push('(无前序数据 — 请仅基于协议生成稳健的初版主检索)')
   } else {
@@ -375,9 +434,42 @@ export function buildRecommendPrompt({
     }
   }
 
+  // —— 关键约束:每个库的 [min, max] 命中数范围 + 用户目标 ——
+  const hasRanges = Object.keys(dbHitRanges).length > 0
+  if (hasRanges) {
+    lines.push('')
+    lines.push('===== 主检索预估命中数的硬约束区间 =====')
+    lines.push('每条 optimized_queries[*].expected_count_estimate **必须落在下面对应库的区间内**:')
+    for (const db of dbs) {
+      const r = dbHitRanges[db]
+      if (!r) {
+        lines.push(`  ${DB_LABEL[db] || db}: 无 exploration 数据 → 跳过约束(请保守预估)`)
+        continue
+      }
+      // 把用户目标和 exploration 范围求交集
+      let lo = r.min, hi = r.max
+      let intersected = false
+      if (userTargetHits) {
+        const tmin = userTargetHits.min
+        const tmax = userTargetHits.max
+        if (tmin != null) { lo = Math.max(lo, tmin); intersected = true }
+        if (tmax != null) { hi = Math.min(hi, tmax); intersected = true }
+      }
+      const note = lo > hi
+        ? `(⚠ 用户目标 [${userTargetHits.min ?? '∞'}, ${userTargetHits.max ?? '∞'}] 与 exploration [${r.min}, ${r.max}] **无交集** — 在 warnings 里告知用户,然后向 exploration 区间靠拢)`
+        : (intersected ? ' (= 用户目标 ∩ exploration 范围)' : '')
+      lines.push(`  ${DB_LABEL[db] || db}: 预估必须 ∈ [${lo}, ${hi}]${note}`)
+      lines.push(`     依据数据点:${r.hits.map((h) => `${h.qt}=${h.count}`).join(' / ')}`)
+    }
+    lines.push('')
+    lines.push('如果你**确实**有充分把握破例(例如砍掉了一个出现频繁的过宽词,预计降幅可量化),')
+    lines.push('请在 `expected_count_basis` 里**用具体词项 + 命中数**做推导。否则不要破例。')
+  }
+
   lines.push('')
   lines.push(`请按 system 的 JSON schema 输出 **正好 ${dbs.length} 条** optimized_queries,每个目标库 1 条。`)
   lines.push('每条 query_text 必须包含:概念组 + 年份过滤 + 文献类型过滤(含显式 NOT 排除)+ 语言过滤,缺一不可。')
+  lines.push('记得先填 `evidence_analysis`(对每行 exploration 的命中数做因果分析)再出 concept_set 和 query。')
   return lines.join('\n')
 }
 
@@ -471,7 +563,7 @@ function readQueryText(obj) {
  * @param {Set<string>} [ctx.knownStrategyIds]  exploration strategy id 集合(用于校验 based_on_strategy_ids)
  * @returns {{ ok: boolean, error?: string, data?: object }}
  */
-export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyIds, protocolYearRange, protocolDocumentTypes, protocolLanguages } = {}) {
+export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyIds, protocolYearRange, protocolDocumentTypes, protocolLanguages, explorationHitRanges, userTargetHits } = {}) {
   if (!raw || typeof raw !== 'object') {
     return { ok: false, error: 'LLM 返回不是有效 JSON 对象' }
   }
@@ -479,6 +571,9 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
     ? targetDatabases.filter((d) => VALID_DATABASES.includes(d))
     : VALID_DATABASES
   const known = knownStrategyIds instanceof Set ? knownStrategyIds : null
+  // explorationHitRanges: { wos: { min, max, hits: [{qt,count}] }, scopus: {...}, ... }
+  const hitRanges = (explorationHitRanges && typeof explorationHitRanges === 'object')
+    ? explorationHitRanges : {}
 
   const arr = findOptimizedArray(raw)
   if (!Array.isArray(arr) || arr.length === 0) {
@@ -545,12 +640,25 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
       }
     }
 
+    // 抓取额外字段(新 schema):expected_count_basis、expected_within_explored_range
+    const expectedBasis = (typeof item.expected_count_basis === 'string')
+      ? item.expected_count_basis.trim().slice(0, 400)
+      : (typeof item.expected_basis === 'string'
+        ? item.expected_basis.trim().slice(0, 400)
+        : null)
+    const withinRangeRaw = item.expected_within_explored_range ?? item.expected_within_range
+    let withinRange = null
+    if (typeof withinRangeRaw === 'boolean') withinRange = withinRangeRaw
+    else if (typeof withinRangeRaw === 'string') withinRange = /^(true|yes|1)$/i.test(withinRangeRaw.trim())
+
     out.push({
       database,
       query_text: queryText,
       rationale: readReason(item),
       based_on_strategy_ids: basedOn,
       expected_count_estimate: expected,
+      expected_count_basis: expectedBasis,
+      expected_within_explored_range: withinRange,
       filters,
     })
   }
@@ -635,6 +743,39 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
     }
   }
 
+  // expected_count_estimate 范围校验 — 把 AI 预估和 exploration 实测对比,偏离太大就 warning
+  // 让用户在 UI 上一眼看出"AI 这次估的数字靠不靠谱"。不阻断,但显眼提示。
+  for (const q of out) {
+    const r = hitRanges[q.database]
+    if (!r || !Number.isFinite(r.min) || !Number.isFinite(r.max)) continue
+    if (q.expected_count_estimate == null) {
+      warnings.push(`⚠ AI 没给 ${q.database.toUpperCase()} 的预估命中数 — 重跑可能改善。`)
+      continue
+    }
+    let lo = r.min, hi = r.max
+    let userClamped = false
+    if (userTargetHits) {
+      if (userTargetHits.min != null) { lo = Math.max(lo, userTargetHits.min); userClamped = true }
+      if (userTargetHits.max != null) { hi = Math.min(hi, userTargetHits.max); userClamped = true }
+    }
+    if (lo > hi) {
+      // 用户目标与 exploration 范围无交集 — 已经在 prompt 里告知,这里跳过强校验
+      continue
+    }
+    const est = q.expected_count_estimate
+    if (est < lo || est > hi) {
+      const within = q.expected_within_explored_range
+      const tag = userClamped ? `用户目标∩exploration=[${lo}, ${hi}]` : `exploration=[${r.min}, ${r.max}]`
+      if (within === false && q.expected_count_basis) {
+        // LLM 已明确破例并给出依据 → 信息级提示
+        warnings.push(`ℹ ${q.database.toUpperCase()} 预估 ${est} 在 ${tag} 之外,AI 已说明依据:${q.expected_count_basis.slice(0, 100)}`)
+      } else {
+        // 没有破例说明 → 警告级
+        warnings.unshift(`⚠ ${q.database.toUpperCase()} 预估 ${est} 偏离 ${tag} — AI 未给充分依据,真实命中可能差距较大,建议重跑或人工复核。`)
+      }
+    }
+  }
+
   return {
     ok: true,
     data: {
@@ -643,6 +784,8 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
       overall_rationale: overall,
       warnings,
       missing_databases: missingDbs,
+      // 透传 evidence_analysis 给上层(展示 + audit),非必需字段
+      evidence_analysis: (raw && typeof raw.evidence_analysis === 'object') ? raw.evidence_analysis : null,
     },
   }
 }

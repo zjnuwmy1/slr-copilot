@@ -688,12 +688,28 @@ router.post('/:id/search/recommend-best', async (req, res) => {
   const protocolYearRange = (project.year_start || project.year_end)
     ? [project.year_start || null, project.year_end || null].filter((x) => x != null).map((x) => Number(x))
     : null
+  // exploration 每个库的命中数 [min, max] — 让 normalizer 校验 AI 的 expected_count_estimate
+  const explorationHitRanges = {}
+  for (const s of logged) {
+    const dbk = s.database_name
+    if (!targetDatabases.includes(dbk)) continue
+    if (s.result_count == null) continue
+    if (!explorationHitRanges[dbk]) {
+      explorationHitRanges[dbk] = { min: Infinity, max: -Infinity, hits: [] }
+    }
+    const r = explorationHitRanges[dbk]
+    r.min = Math.min(r.min, s.result_count)
+    r.max = Math.max(r.max, s.result_count)
+    r.hits.push({ qt: s.query_type, count: s.result_count })
+  }
   const normalized = normalizeRecommendOutput(result.data || null, {
     targetDatabases,
     knownStrategyIds,
     protocolYearRange: (Array.isArray(protocolYearRange) && protocolYearRange.length === 2) ? protocolYearRange : null,
     protocolDocumentTypes: Array.isArray(project.document_types) ? project.document_types : null,
     protocolLanguages: Array.isArray(project.language_limits) ? project.language_limits : null,
+    explorationHitRanges,
+    userTargetHits,
   })
 
   if (!normalized.ok) {

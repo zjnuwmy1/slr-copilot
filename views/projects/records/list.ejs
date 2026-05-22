@@ -203,6 +203,27 @@
         </a>
       </div>
 
+      <!-- 危险区:手动清空论文池(只在有数据时显示) -->
+      <% if (scrStats.total > 0) { %>
+        <details class="rounded-lg border border-rose-200 bg-rose-50/30 text-xs">
+          <summary class="cursor-pointer px-3 py-2 font-medium text-rose-700 hover:text-rose-900">
+            ⚠ 论文池管理(危险区)
+          </summary>
+          <div class="border-t border-rose-100 px-3 py-2 space-y-2">
+            <p class="text-rose-800">
+              换了检索式后想重新导入?可以手动清空当前的
+              <strong><%= scrStats.total %></strong> 篇论文 + 所有 AI 筛选 / 抽取记录,
+              释放空间从头开始。
+            </p>
+            <a href="<%= recordsBase %>/clear-pool"
+               class="inline-flex items-center gap-1 rounded border border-rose-300 bg-white px-3 py-1.5 text-rose-700 hover:bg-rose-50">
+              🗑 清空论文池 →(需二次确认)
+            </a>
+          </div>
+        </details>
+      <% } %>
+    </section>
+
       <!-- 进度条(运行中显示,JS 轮询填值)-->
       <div id="batch-progress" class="hidden">
         <div class="flex items-center justify-between text-xs text-slate-500">

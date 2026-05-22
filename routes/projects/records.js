@@ -27,6 +27,13 @@ import {
   exportReferencesSection,
 } from '../../services/reference-export.js'
 import { fetchByDoi } from '../../services/crossref.js'
+import {
+  countDerivedRows,
+  hasDerivedData,
+  estimateDiskUsage,
+  clearDerivedData,
+  formatBytes as formatResetBytes,
+} from '../../services/reset-on-protocol-change.js'
 
 const router = express.Router({ mergeParams: true })
 
@@ -709,6 +716,82 @@ router.get('/:id/records.refs.md', (req, res) => {
     eventType: `markdown_${style}`,
     render: (rows) => exportReferencesSection(rows, { style }),
   })
+})
+
+// ============================================================
+// GET  /:id/records/clear-pool  — 渲染确认页(列出待清空的内容)
+// POST /:id/records/clear-pool  — confirm_phrase=CLEAR 才执行
+//
+// **必须在 /:id/records/:recordId 之前注册**,否则会被 :recordId 抢匹配。
+// 与"协议重批自动清空"共用同一个 service(clearDerivedData),
+// 这里是**用户主动手动清空**的入口(无需协议变更)。
+// ============================================================
+router.get('/:id/records/clear-pool', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+  const counts = countDerivedRows(db, project.id)
+  const disk = estimateDiskUsage(db, project.id)
+  const anyData = hasDerivedData(db, project.id)
+
+  res.render('projects/records/clear-pool-confirm', {
+    title: `清空论文池 · ${project.title}`,
+    project,
+    counts,
+    diskBytes: disk.bytes,
+    diskBytesFormatted: formatResetBytes(disk.bytes),
+    diskFiles: disk.files,
+    anyData,
+  })
+})
+
+router.post('/:id/records/clear-pool', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+  }
+
+  const confirmed = String(req.body.confirm_clear || '').toLowerCase() === 'yes'
+  const confirmPhrase = String(req.body.confirm_phrase || '').trim()
+  if (!confirmed || confirmPhrase !== 'CLEAR') {
+    req.session.flash = {
+      type: 'error',
+      message: '清空被拒:必须勾选确认且在框里逐字输入大写 CLEAR。',
+    }
+    return res.redirect(`/projects/${project.id}/records/clear-pool`)
+  }
+
+  if (!hasDerivedData(db, project.id)) {
+    req.session.flash = { type: 'success', message: '当前论文池本来就是空的,无需清空。' }
+    return res.redirect(`/projects/${project.id}/records`)
+  }
+
+  const summary = clearDerivedData(db, project.id, { actorUserId: req.user.id, req })
+  if (summary.db_error) {
+    req.session.flash = {
+      type: 'error',
+      message: `清空时数据库报错:${summary.db_error}。请联系管理员。`,
+    }
+    return res.redirect(`/projects/${project.id}/records`)
+  }
+
+  const c = summary.db_rows_deleted || {}
+  const parts = []
+  if (c.records)             parts.push(`${c.records} 篇论文`)
+  if (c.attachments)         parts.push(`${c.attachments} 个附件`)
+  if (c.screening_decisions) parts.push(`${c.screening_decisions} 个 AI 筛选`)
+  if (c.extractions)         parts.push(`${c.extractions} 个抽取`)
+  if (c.themes)              parts.push(`${c.themes} 个主题`)
+  if (c.draft_sections)      parts.push(`${c.draft_sections} 个章节`)
+  const dataParts = parts.length ? parts.join(' / ') : '0 项'
+  req.session.flash = {
+    type: 'success',
+    message: `论文池已清空:${dataParts},以及 ${summary.files_removed} 个文件(${formatResetBytes(summary.bytes_removed)})。可以重新导入了。`,
+  }
+  res.redirect(`/projects/${project.id}/records`)
 })
 
 // ============================================================
