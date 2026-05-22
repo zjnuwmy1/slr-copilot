@@ -5,6 +5,13 @@ import { runLlm } from '../../services/llm.js'
 import { deleteProject } from '../../services/project-delete.js'
 import { getProjectStorage, formatBytes } from '../../services/storage.js'
 import {
+  countDerivedRows,
+  hasDerivedData,
+  estimateDiskUsage,
+  clearDerivedData,
+  formatBytes as formatResetBytes,
+} from '../../services/reset-on-protocol-change.js'
+import {
   PROTOCOL_SYSTEM,
   buildProtocolUserPrompt,
   normalizeProtocolOutput,
@@ -369,6 +376,19 @@ router.post('/:id/protocol/generate', async (req, res) => {
 })
 
 // ---------- POST /projects/:id/protocol/:protocolId/approve ----------
+//
+// 协议审批:同时实现"重批新协议时清空旧协议衍生数据"的两阶段确认。
+//
+// 触发场景:
+//   A. 第一次审批 → 直接通过。
+//   B. 已有审批过的旧协议 + 项目里没有衍生数据(刚审批就改协议)→ 直接通过。
+//   C. 已有审批过的旧协议 + 项目里**有**衍生数据(records / screening / extractions ...)
+//      → 渲染确认页,列出会清掉的行数 + 磁盘占用,
+//        用户勾"我确认清空" + 输入 CONFIRM 字符串后,再次 POST 时带
+//        confirm_clear=yes 才真正执行 "清空 + 审批"。
+//
+// 该路由是衍生数据进入"重置态"的**唯一入口**,所有清空走 clearDerivedData()。
+// ---------------------------------------------------------------------
 router.post('/:id/protocol/:protocolId/approve', (req, res) => {
   const db = req.app.locals.db
   const project = ownProjectOr404(db, req.params.id, req.user.id)
@@ -381,7 +401,57 @@ router.post('/:id/protocol/:protocolId/approve', (req, res) => {
   if (!row) {
     return res.status(404).render('error', { title: 'Not Found', message: '协议版本不存在' })
   }
-  // 先把同 project 其他版本撤销 approval
+
+  // 检测是否需要触发"重置"流程
+  const previousApproved = db
+    .prepare(
+      `SELECT id, version, approved_at FROM protocols
+       WHERE project_id = ? AND approved_by_user = 1 AND id != ?`
+    )
+    .get(project.id, row.id)
+  const needsReset = !!previousApproved && hasDerivedData(db, project.id)
+  const confirmed = String(req.body.confirm_clear || '').toLowerCase() === 'yes'
+  const confirmPhrase = String(req.body.confirm_phrase || '').trim()
+
+  // 需要清空但用户还没确认 → 渲染确认页
+  if (needsReset && !confirmed) {
+    const counts = countDerivedRows(db, project.id)
+    const disk = estimateDiskUsage(db, project.id)
+    return res.render('projects/protocol-approve-confirm', {
+      title: `确认审批协议 v${row.version}`,
+      project,
+      protocol: row,
+      previousApproved,
+      counts,
+      diskBytes: disk.bytes,
+      diskBytesFormatted: formatResetBytes(disk.bytes),
+      diskFiles: disk.files,
+    })
+  }
+
+  // 需要清空且已确认 → 验证 confirm_phrase 防"手抖式确认"
+  if (needsReset && confirmed && confirmPhrase !== 'CLEAR') {
+    req.session.flash = {
+      type: 'error',
+      message: '确认词输入错误。请在确认框里逐字输入大写 CLEAR 才会真正清空数据。',
+    }
+    return res.redirect(`/projects/${project.id}#protocol-v${row.version}`)
+  }
+
+  // 真正执行清空(如需)
+  let resetSummary = null
+  if (needsReset) {
+    resetSummary = clearDerivedData(db, project.id, { actorUserId: req.user.id, req })
+    if (resetSummary.db_error) {
+      req.session.flash = {
+        type: 'error',
+        message: `清空数据时数据库报错:${resetSummary.db_error}。协议未审批,请联系管理员排查。`,
+      }
+      return res.redirect(`/projects/${project.id}#protocol-v${row.version}`)
+    }
+  }
+
+  // 审批 — 撤销其他版本,激活本版本
   db.transaction(() => {
     db.prepare('UPDATE protocols SET approved_by_user = 0, approved_at = NULL WHERE project_id = ?').run(project.id)
     db.prepare(`UPDATE protocols SET approved_by_user = 1, approved_at = datetime('now') WHERE id = ?`).run(row.id)
@@ -391,9 +461,36 @@ router.post('/:id/protocol/:protocolId/approve', (req, res) => {
     eventType: 'protocol_approved',
     userId: req.user.id,
     projectId: project.id,
-    payload: { protocol_id: row.id, version: row.version },
+    payload: {
+      protocol_id: row.id,
+      version: row.version,
+      caused_reset: !!resetSummary,
+      reset_rows: resetSummary ? resetSummary.db_rows_deleted : null,
+      reset_files: resetSummary ? resetSummary.files_removed : null,
+      reset_bytes: resetSummary ? resetSummary.bytes_removed : null,
+    },
   })
-  req.session.flash = { type: 'success', message: `协议 v${row.version} 已审批,可以进入下一步:检索式生成(Phase 3)。` }
+
+  // flash 文案区分两种情况
+  if (resetSummary) {
+    const c = resetSummary.db_rows_deleted
+    const parts = []
+    if (c.records)             parts.push(`${c.records} 篇论文`)
+    if (c.screening_decisions) parts.push(`${c.screening_decisions} 个 AI 筛选`)
+    if (c.extractions)         parts.push(`${c.extractions} 个抽取`)
+    if (c.themes)              parts.push(`${c.themes} 个主题`)
+    if (c.draft_sections)      parts.push(`${c.draft_sections} 个章节`)
+    const dataParts = parts.length ? parts.join(' / ') : '0 项'
+    req.session.flash = {
+      type: 'success',
+      message: `协议 v${row.version} 已审批。已同时清空旧协议衍生数据:${dataParts},以及 ${resetSummary.files_removed} 个文件(${formatResetBytes(resetSummary.bytes_removed)})。`,
+    }
+  } else {
+    req.session.flash = {
+      type: 'success',
+      message: `协议 v${row.version} 已审批,可以进入下一步:检索式生成(Phase 3)。`,
+    }
+  }
   res.redirect(`/projects/${project.id}`)
 })
 

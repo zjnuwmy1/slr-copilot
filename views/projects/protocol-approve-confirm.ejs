@@ -1,0 +1,129 @@
+<%- include('../partials/header', { title }) %>
+<%- include('partials/project-header', { project }) %>
+
+<%
+  const c = counts || {}
+  // 列表(展示给用户)
+  const rowsTable = [
+    ['records',             '导入论文',           c.records || 0],
+    ['attachments',         'PDF / 附件',         c.attachments || 0],
+    ['paper_chunks',        'PDF 解析段落',       c.paper_chunks || 0],
+    ['zotero_packages',     'Zotero 包',          c.zotero_packages || 0],
+    ['screening_decisions', 'AI 筛选 + 人工决定', c.screening_decisions || 0],
+    ['extractions',         '全文结构化抽取',     c.extractions || 0],
+    ['literature_matrix',   '文献矩阵',           c.literature_matrix || 0],
+    ['themes',              '主题聚类',           c.themes || 0],
+    ['evidence_points',     '证据点',             c.evidence_points || 0],
+    ['draft_sections',      '综述章节草稿',       c.draft_sections || 0],
+    ['grade_assessments',   'GRADE 评估',         c.grade_assessments || 0],
+  ]
+  const totalRows = rowsTable.reduce((s, [, , n]) => s + n, 0)
+%>
+
+<div class="mx-auto max-w-3xl space-y-6">
+  <header class="text-center">
+    <p class="text-xs font-medium uppercase tracking-wider text-rose-600">⚠ 重要确认</p>
+    <h2 class="mt-2 text-2xl font-bold text-slate-900">审批协议 v<%= protocol.version %> 将清空旧协议的衍生数据</h2>
+    <p class="mt-2 text-sm text-slate-600">
+      项目之前已审批过 <strong>协议 v<%= previousApproved.version %></strong>
+      (<%= previousApproved.approved_at || '—' %>),并基于该协议产生了下列数据。
+    </p>
+    <p class="mt-1 text-sm text-rose-700">
+      新协议的纳排标准 / 概念组不同,这些数据如果保留会污染后续 AI 筛选与抽取。
+      <strong>因此审批新协议时必须先清空它们。</strong>
+    </p>
+  </header>
+
+  <!-- 待清空的数据表 -->
+  <section class="rounded-2xl border-2 border-rose-200 bg-rose-50/40 p-5">
+    <h3 class="text-base font-semibold text-rose-900">将被清空(共 <%= totalRows %> 行 + <%= diskFiles %> 个文件 / <%= diskBytesFormatted %>)</h3>
+    <div class="mt-3 overflow-hidden rounded-xl border border-rose-200 bg-white">
+      <table class="w-full text-sm">
+        <thead class="bg-rose-50 text-xs uppercase tracking-wider text-rose-700">
+          <tr>
+            <th class="px-4 py-2 text-left">数据类别</th>
+            <th class="px-4 py-2 text-left">表名</th>
+            <th class="px-4 py-2 text-right">行数</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-rose-100">
+          <% rowsTable.forEach(([key, label, n]) => { %>
+            <tr class="<%= n > 0 ? '' : 'opacity-50' %>">
+              <td class="px-4 py-2 text-slate-800"><%= label %></td>
+              <td class="px-4 py-2 font-mono text-xs text-slate-500"><%= key %></td>
+              <td class="px-4 py-2 text-right <%= n > 0 ? 'font-semibold text-rose-700' : 'text-slate-400' %>"><%= n %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+    <% if (diskBytes > 0) { %>
+      <p class="mt-3 text-xs text-rose-700">
+        💾 同时会删除 <strong><%= diskFiles %></strong> 个上传文件
+        (Zotero 包 + 手动上传的 PDF),释放约 <strong><%= diskBytesFormatted %></strong> 磁盘空间。
+      </p>
+    <% } %>
+  </section>
+
+  <!-- 保留清单 -->
+  <section class="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-5">
+    <h3 class="text-base font-semibold text-emerald-900">保留(不受影响)</h3>
+    <ul class="mt-2 space-y-1 text-sm text-emerald-800">
+      <li>📘 <strong>协议历史</strong>:全部版本 (v1, v2, ... 包括新审批的 v<%= protocol.version %>)</li>
+      <li>🔍 <strong>检索式历史</strong>:你跑过的所有 exploration / 主检索版本</li>
+      <li>📋 <strong>PRISMA 27 项清单</strong>:报告字段</li>
+      <li>📊 <strong>矩阵字段定义</strong>(matrix_columns):你自定义的抽取字段</li>
+      <li>📰 <strong>目标期刊模板</strong>(target_journal_templates)</li>
+      <li>📝 <strong>审计日志</strong> + <strong>用量记录</strong>(完整保留)</li>
+    </ul>
+  </section>
+
+  <!-- 二次确认表单 -->
+  <form method="post" action="/projects/<%= project.id %>/protocol/<%= protocol.id %>/approve"
+        class="rounded-2xl border-2 border-rose-300 bg-white p-5 space-y-4">
+    <input type="hidden" name="confirm_clear" value="yes" />
+
+    <div class="rounded-lg bg-rose-50 p-4 text-sm text-rose-900">
+      <p><strong>⚠ 此操作不可撤销。</strong></p>
+      <p class="mt-1">
+        审批后,旧协议 v<%= previousApproved.version %> 的全部论文 / AI 筛选 / 抽取 / 综合数据会立即从数据库和磁盘删除。
+        如果你想保留这些数据,请<strong>先导出</strong>(records 列表 → 批量导出 / screening → CSV 导出)再回来审批。
+      </p>
+    </div>
+
+    <div>
+      <label for="confirm_phrase" class="block text-sm font-medium text-slate-800">
+        在下方框里逐字输入大写 <code class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-rose-700">CLEAR</code> 以确认:
+      </label>
+      <input type="text" name="confirm_phrase" id="confirm_phrase" required
+             autocomplete="off" autocapitalize="characters"
+             placeholder="输入 CLEAR"
+             pattern="CLEAR"
+             class="mt-2 block w-full rounded-lg border-2 border-rose-300 px-3 py-2 text-base font-mono uppercase focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-200" />
+      <p class="mt-1 text-xs text-slate-500">这是防误操作的二次确认,必须严格匹配。</p>
+    </div>
+
+    <div class="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-rose-100">
+      <a href="/projects/<%= project.id %>"
+         class="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">
+        ← 取消(返回项目)
+      </a>
+      <button type="submit"
+              class="rounded-lg bg-rose-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-rose-500">
+        ✓ 我已确认,清空旧数据并审批新协议 v<%= protocol.version %>
+      </button>
+    </div>
+  </form>
+
+  <!-- 提示:导出旧数据 -->
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+    <p class="font-medium text-slate-700">想先备份旧数据?</p>
+    <ul class="mt-1 space-y-0.5 list-disc list-inside">
+      <li><a href="/projects/<%= project.id %>/records.csl.json" class="text-blue-700 underline">导出全部论文 (CSL JSON)</a> · <a href="/projects/<%= project.id %>/records.bib" class="text-blue-700 underline">BibTeX</a> · <a href="/projects/<%= project.id %>/records.ris" class="text-blue-700 underline">RIS</a></li>
+      <li><a href="/projects/<%= project.id %>/screening/export.csv" class="text-blue-700 underline">导出 AI 筛选 + 人工决定 CSV</a></li>
+      <li>导完之后再回来点上面的"我已确认"按钮。</li>
+    </ul>
+  </div>
+</div>
+
+<%- include('../partials/footer') %>
