@@ -22,6 +22,9 @@ import {
   buildIterationUserPrompt,
   normalizeIterationOutput,
   adoptIterationAsNewProtocol,
+  savePendingIteration,
+  loadPendingIteration,
+  deletePendingIteration,
 } from '../../services/iteration.js'
 
 const router = express.Router({ mergeParams: true })
@@ -66,17 +69,16 @@ router.get('/:id/iterate', (req, res) => {
     snapshotError = e.message
   }
 
+  // 从 DB 读 pending(不再用 cookie-session,避免 Set-Cookie 撑爆 nginx buffer)
+  const pendingDiagnosis = loadPendingIteration(db, { projectId: project.id, userId: req.user.id })
+
   res.render('projects/iterate', {
     title: `复盘迭代 · ${project.title}`,
     project,
     snapshot,
     summary,
     snapshotError,
-    // 是否已有 pending 诊断
-    pendingDiagnosis: req.session?.iterationDiagnosis
-      && req.session.iterationDiagnosis.projectId === project.id
-      ? req.session.iterationDiagnosis
-      : null,
+    pendingDiagnosis,
   })
 })
 
@@ -167,16 +169,23 @@ router.post('/:id/iterate/diagnose', async (req, res) => {
     return res.redirect(`/projects/${project.id}/iterate`)
   }
 
-  // 存 session,redirect 到 review 页
-  req.session.iterationDiagnosis = {
-    projectId: project.id,
-    snapshotSummary: buildSnapshotSummary(snapshot),
-    data: normalized.data,
-    model: result.model,
-    reasoning: result.reasoning,
-    durationMs: result.durationMs,
-    userFeedback,
-    createdAt: new Date().toISOString(),
+  // 存入 DB 替代 cookie-session(大对象塞 cookie 会触发 nginx upstream
+  // sent too big header → 502 Bad Gateway)
+  try {
+    savePendingIteration(db, {
+      projectId: project.id,
+      userId: req.user.id,
+      data: normalized.data,
+      snapshotSummary: buildSnapshotSummary(snapshot),
+      model: result.model,
+      reasoning: result.reasoning,
+      durationMs: result.durationMs,
+      userFeedback,
+    })
+  } catch (e) {
+    console.error('[iterate/diagnose] savePendingIteration failed:', e)
+    req.session.flash = { type: 'error', message: '保存诊断结果失败:' + (e.message || String(e)).slice(0, 200) }
+    return res.redirect(`/projects/${project.id}/iterate`)
   }
 
   audit(db, req, {
@@ -206,8 +215,8 @@ router.get('/:id/iterate/review', (req, res) => {
   if (!project) {
     return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
   }
-  const pending = req.session?.iterationDiagnosis
-  if (!pending || pending.projectId !== project.id) {
+  const pending = loadPendingIteration(db, { projectId: project.id, userId: req.user.id })
+  if (!pending) {
     req.session.flash = { type: 'error', message: '没有待审阅的诊断结果,请先跑一次诊断。' }
     return res.redirect(`/projects/${project.id}/iterate`)
   }
@@ -243,8 +252,8 @@ router.post('/:id/iterate/adopt', (req, res) => {
   if (!project) {
     return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
   }
-  const pending = req.session?.iterationDiagnosis
-  if (!pending || pending.projectId !== project.id) {
+  const pending = loadPendingIteration(db, { projectId: project.id, userId: req.user.id })
+  if (!pending) {
     req.session.flash = { type: 'error', message: '没有待审阅的诊断结果。' }
     return res.redirect(`/projects/${project.id}/iterate`)
   }
@@ -272,14 +281,14 @@ router.post('/:id/iterate/adopt', (req, res) => {
     payload: {
       new_protocol_id: inserted.id,
       new_version: inserted.version,
-      from_version: pending.snapshotSummary.from_version,
+      from_version: pending.snapshotSummary?.from_version,
       confidence: pending.data.diagnosis.confidence,
       model: pending.model,
     },
   })
 
-  // 清掉 session,跳到协议页让用户审批
-  delete req.session.iterationDiagnosis
+  // 删除 pending,跳到协议页让用户审批
+  try { deletePendingIteration(db, { projectId: project.id, userId: req.user.id }) } catch { /* ignore */ }
   req.session.flash = {
     type: 'success',
     message: `已生成协议 v${inserted.version}(未审批)。请审阅 + 编辑 + 审批后,再去检索页重跑 exploration / 主检索。`,
@@ -291,9 +300,10 @@ router.post('/:id/iterate/adopt', (req, res) => {
 // POST /:id/iterate/discard — 丢弃 pending 诊断
 // ============================================================
 router.post('/:id/iterate/discard', (req, res) => {
-  const project = ownProjectOr404(req.app.locals.db, req.params.id, req.user.id)
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
   if (!project) return res.status(404).send('not found')
-  if (req.session) delete req.session.iterationDiagnosis
+  try { deletePendingIteration(db, { projectId: project.id, userId: req.user.id }) } catch { /* ignore */ }
   req.session.flash = { type: 'success', message: '已丢弃 AI 诊断结果。' }
   res.redirect(`/projects/${project.id}/iterate`)
 })

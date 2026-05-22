@@ -883,6 +883,66 @@ export function normalizeIterationOutput(raw) {
 // 4) 入库:把 normalized.data + snapshot 写成新 protocol 版本(unapproved)
 // ============================================================
 
+// ============================================================
+// pending_iterations 存取(DB 替代 cookie-session,避免 Set-Cookie 撑爆)
+// ============================================================
+
+/**
+ * 写一条 pending iteration。同 project + user 同时只保留 1 条
+ * (新写入会先删旧的 — 用户重新跑诊断时覆盖)。
+ */
+export function savePendingIteration(db, { projectId, userId, data, snapshotSummary, model, reasoning, durationMs, userFeedback }) {
+  const id = 'piter_' + Math.random().toString(36).slice(2, 14) + Math.random().toString(36).slice(2, 10)
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM pending_iterations WHERE project_id = ? AND user_id = ?').run(projectId, userId)
+    db.prepare(`
+      INSERT INTO pending_iterations (
+        id, project_id, user_id, data_json, snapshot_summary_json,
+        model, reasoning, duration_ms, user_feedback
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, projectId, userId,
+      JSON.stringify(data),
+      snapshotSummary ? JSON.stringify(snapshotSummary) : null,
+      model || null,
+      reasoning || null,
+      durationMs || null,
+      userFeedback || null,
+    )
+  })
+  tx()
+  return id
+}
+
+/** 返回最新一条 pending iteration(若有),已 parse 完毕。 */
+export function loadPendingIteration(db, { projectId, userId }) {
+  const row = db.prepare(
+    `SELECT * FROM pending_iterations
+     WHERE project_id = ? AND user_id = ?
+     ORDER BY created_at DESC LIMIT 1`
+  ).get(projectId, userId)
+  if (!row) return null
+  let data, snapshotSummary
+  try { data = JSON.parse(row.data_json) } catch { return null }
+  try { snapshotSummary = row.snapshot_summary_json ? JSON.parse(row.snapshot_summary_json) : null } catch { snapshotSummary = null }
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    data,
+    snapshotSummary,
+    model: row.model,
+    reasoning: row.reasoning,
+    durationMs: row.duration_ms,
+    userFeedback: row.user_feedback,
+    createdAt: row.created_at,
+  }
+}
+
+/** 删除 pending iteration(adopt 或 discard 后调用)。 */
+export function deletePendingIteration(db, { projectId, userId }) {
+  db.prepare('DELETE FROM pending_iterations WHERE project_id = ? AND user_id = ?').run(projectId, userId)
+}
+
 /**
  * 创建新协议版本(approved_by_user = 0,等待用户审批)。
  *

@@ -78,16 +78,28 @@ function runMigrations(db) {
 
   // M6:protocols.iteration_metadata —— 当该 protocol 是由"复盘 & 迭代"
   //    机制生成时,保存 AI 的 diagnosis + 看过哪些前序数据,以便审计追踪。
-  //    JSON 形如:
-  //      {
-  //        iterated_from_version: 1,
-  //        diagnosis: "...",
-  //        proposed_changes: [...],
-  //        snapshot_used: { record_count: N, include_rate: 0.12, ... },
-  //        model: "gpt-5.5", reasoning: "high",
-  //        generated_at: "YYYY-MM-DD HH:MM:SS"
-  //      }
   if (!columnExists(db, 'protocols', 'iteration_metadata')) {
     db.exec(`ALTER TABLE protocols ADD COLUMN iteration_metadata TEXT`)
   }
+
+  // M7:pending_iterations —— 跑完 diagnose 但用户还没决定 adopt/discard 的
+  //    LLM 输出。之前放在 cookie-session 里,几 KB 的 JSON 把 Set-Cookie
+  //    header 撑爆,Nginx proxy_buffer_size 8K 直接 502 Bad Gateway。
+  //    现在入库;session 只存 trigger 标志位。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_iterations (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      data_json TEXT NOT NULL,
+      snapshot_summary_json TEXT,
+      model TEXT,
+      reasoning TEXT,
+      duration_ms INTEGER,
+      user_feedback TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_pending_iterations_project ON pending_iterations(project_id, user_id)`)
 }
