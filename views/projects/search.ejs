@@ -620,18 +620,36 @@
   // ============================================================
   // AJAX 保存 — 命中数 / 检索日期 / 备注
   // 不刷新页面 → 不重置当前 tab、滚动位置、其他正在编辑的输入
+  //
+  // 注:用内联 style 而非 Tailwind classList,因为按钮基础色已经是
+  //     bg-slate-900(黑),再 add bg-emerald-600 在 Tailwind 同 specificity
+  //     下不一定能 override(取决于 CSS 生成顺序),会出现"看着没变化"。
+  //     inline style 优先级高于 utility class,稳定。
   // ============================================================
+  function setBtnState(btn, state) {
+    if (!btn) return
+    if (state.label !== undefined) btn.textContent = state.label
+    if (state.bg !== undefined)    btn.style.backgroundColor = state.bg   // '' 清掉
+    if (state.fg !== undefined)    btn.style.color           = state.fg
+    if (state.border !== undefined) btn.style.borderColor    = state.border
+    if (state.disabled !== undefined) btn.disabled = state.disabled
+  }
+
   document.querySelectorAll('form[data-ajax-save]').forEach((form) => {
     form.addEventListener('submit', async (e) => {
       e.preventDefault()
       const kind = form.dataset.ajaxSave  // 'log' or 'notes'
       const btn = form.querySelector('button[type=submit]')
-      const originalBtnText = btn ? btn.textContent : ''
+      const originalLabel = btn ? btn.textContent : ''
 
-      if (btn) {
-        btn.disabled = true
-        btn.textContent = '保存中…'
-      }
+      // 进入"保存中"状态(琥珀色 — 与基础黑 / 白底都形成对比)
+      setBtnState(btn, {
+        label: '保存中…',
+        bg: '#d97706',  // amber-600
+        fg: '#ffffff',
+        border: '#d97706',
+        disabled: true,
+      })
 
       const fd = new FormData(form)
       try {
@@ -644,29 +662,37 @@
         const data = await r.json().catch(() => ({ ok: false, error: 'HTTP ' + r.status }))
 
         if (!r.ok || !data.ok) {
-          if (btn) {
-            btn.textContent = '保存失败'
-            btn.classList.add('bg-rose-600', 'text-white', 'border-rose-300')
-            setTimeout(() => {
-              btn.textContent = originalBtnText
-              btn.classList.remove('bg-rose-600', 'text-white', 'border-rose-300')
-              btn.disabled = false
-            }, 1800)
-          }
+          setBtnState(btn, {
+            label: '保存失败',
+            bg: '#e11d48',  // rose-600
+            fg: '#ffffff',
+            border: '#e11d48',
+          })
+          setTimeout(() => {
+            setBtnState(btn, {
+              label: originalLabel,
+              bg: '', fg: '', border: '',
+              disabled: false,
+            })
+          }, 2000)
           console.error('[ajax-save]', data.error || ('HTTP ' + r.status))
           return
         }
 
-        // 成功反馈:按钮短暂变绿 ✓ 已保存
-        if (btn) {
-          btn.textContent = '✓ 已保存'
-          btn.classList.add('bg-emerald-600', 'text-white', 'border-emerald-600')
-          setTimeout(() => {
-            btn.textContent = originalBtnText
-            btn.classList.remove('bg-emerald-600', 'text-white', 'border-emerald-600')
-            btn.disabled = false
-          }, 1100)
-        }
+        // 成功反馈:绿色 + ✓ 已保存,持续 1.5 秒
+        setBtnState(btn, {
+          label: '✓ 已保存',
+          bg: '#059669',  // emerald-600
+          fg: '#ffffff',
+          border: '#059669',
+        })
+        setTimeout(() => {
+          setBtnState(btn, {
+            label: originalLabel,
+            bg: '', fg: '', border: '',
+            disabled: false,
+          })
+        }, 1500)
 
         // notes 表单顺便更新 summary 里的「·已填」标志
         if (kind === 'notes') {
@@ -686,15 +712,19 @@
         }
       } catch (err) {
         console.error('[ajax-save] network error:', err)
-        if (btn) {
-          btn.textContent = '网络错误'
-          btn.classList.add('bg-rose-600', 'text-white', 'border-rose-300')
-          setTimeout(() => {
-            btn.textContent = originalBtnText
-            btn.classList.remove('bg-rose-600', 'text-white', 'border-rose-300')
-            btn.disabled = false
-          }, 1800)
-        }
+        setBtnState(btn, {
+          label: '网络错误',
+          bg: '#e11d48',
+          fg: '#ffffff',
+          border: '#e11d48',
+        })
+        setTimeout(() => {
+          setBtnState(btn, {
+            label: originalLabel,
+            bg: '', fg: '', border: '',
+            disabled: false,
+          })
+        }, 2000)
       }
     })
   })
