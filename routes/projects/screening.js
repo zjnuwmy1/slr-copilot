@@ -439,6 +439,7 @@ router.get('/:id/screening', (req, res) => {
     })
 
   // 统计(项目全貌,不受过滤影响)
+  // ai_failed:LLM 调用失败的条目(可一键重跑)— 任何以 llm_/codex_/json_/spawn_/proc_ 等错误前缀开头的 reason
   const statsRow = db
     .prepare(
       `SELECT
@@ -450,7 +451,12 @@ router.get('/:id/screening', (req, res) => {
          SUM(CASE WHEN COALESCE(sd.human_decision, 'not_decided') != 'not_decided' THEN 1 ELSE 0 END) AS human_done,
          SUM(CASE WHEN sd.human_decision = 'include'  THEN 1 ELSE 0 END) AS human_include,
          SUM(CASE WHEN sd.human_decision = 'exclude'  THEN 1 ELSE 0 END) AS human_exclude,
-         SUM(CASE WHEN sd.human_decision = 'uncertain' THEN 1 ELSE 0 END) AS human_uncertain
+         SUM(CASE WHEN sd.human_decision = 'uncertain' THEN 1 ELSE 0 END) AS human_uncertain,
+         SUM(CASE WHEN sd.ai_reason LIKE 'llm_%'
+                    OR sd.ai_reason LIKE 'codex_%'
+                    OR sd.ai_reason LIKE 'json_parse_failed%'
+                    OR sd.ai_reason LIKE 'spawn_%'
+                    OR sd.ai_reason LIKE 'proc_%' THEN 1 ELSE 0 END) AS ai_failed
        FROM records r
        LEFT JOIN screening_decisions sd
          ON sd.record_id = r.id AND sd.stage = 'title_abstract'
@@ -463,6 +469,7 @@ router.get('/:id/screening', (req, res) => {
     ai_include: statsRow.ai_include || 0,
     ai_exclude: statsRow.ai_exclude || 0,
     ai_uncertain: statsRow.ai_uncertain || 0,
+    ai_failed: statsRow.ai_failed || 0,  // LLM 调用失败的条目数(可一键重跑)
     human_done: statsRow.human_done || 0,
     human_include: statsRow.human_include || 0,
     human_exclude: statsRow.human_exclude || 0,
@@ -817,6 +824,115 @@ router.post('/:id/screening/run-batch', (req, res) => {
         userId,
         projectId: project.id,
         payload: { total: final.total, done: final.done, errors: final.errors },
+      })
+    }
+  })
+})
+
+// ============================================================
+// POST /:id/screening/run-failed
+//   一键重跑所有 LLM 调用失败的条目(ai_reason 以错误前缀开头)。
+//   原因前缀:llm_error / llm_threw / codex_xxx / json_parse_failed / spawn_ / proc_
+//   失败重跑不改变 human_decision,只覆盖 ai_* 字段。
+// ============================================================
+router.post('/:id/screening/run-failed', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+  }
+  const protocol = getApprovedProtocol(db, project.id)
+  const screeningUrl = `/projects/${project.id}/screening`
+  const redirectUrl = safeRedirectTo(req, project.id, screeningUrl)
+  if (!protocol) {
+    req.session.flash = {
+      type: 'error',
+      message: '请先在第 1 步审批协议,才能跑 AI 初筛。',
+    }
+    return res.redirect(redirectUrl)
+  }
+  if (runningBatches.has(project.id)) {
+    req.session.flash = {
+      type: 'error',
+      message: '已有批量任务在跑,请等它跑完(刷新页面看进度)。',
+    }
+    return res.redirect(redirectUrl)
+  }
+
+  // 找所有 ai_reason 是错误前缀的 records — 这些是 LLM 调用失败的,需要重跑
+  const targets = db
+    .prepare(
+      `SELECT r.id
+       FROM records r
+       LEFT JOIN screening_decisions sd
+         ON sd.record_id = r.id AND sd.stage = 'title_abstract'
+       WHERE r.project_id = ?
+         AND r.duplicate_of_record_id IS NULL
+         AND sd.ai_reason IS NOT NULL
+         AND (sd.ai_reason LIKE 'llm_%'
+              OR sd.ai_reason LIKE 'codex_%'
+              OR sd.ai_reason LIKE 'json_parse_failed%'
+              OR sd.ai_reason LIKE 'spawn_%'
+              OR sd.ai_reason LIKE 'proc_%')
+       ORDER BY r.title`
+    )
+    .all(project.id)
+
+  if (targets.length === 0) {
+    req.session.flash = { type: 'success', message: '没有失败的条目可重跑。' }
+    return res.redirect(redirectUrl)
+  }
+
+  runningBatches.add(project.id)
+  progressInit(project.id, targets.length)
+  const userId = req.user.id
+  const fakeReq = { ip: req.ip, get: (h) => req.get(h) }
+
+  audit(db, req, {
+    eventType: 'screening_batch_started',
+    userId,
+    projectId: project.id,
+    payload: { total: targets.length, mode: 'run_failed' },
+  })
+
+  req.session.flash = {
+    type: 'success',
+    message: `已启动重跑 ${targets.length} 条失败条目。保持页面打开看进度,完成后会通知。`,
+  }
+  res.redirect(redirectUrl)
+
+  setImmediate(async () => {
+    try {
+      for (const t of targets) {
+        const record = getRecordInProject(db, project.id, t.id)
+        if (!record) {
+          progressUpdate(project.id, {
+            done: (batchProgress.get(project.id)?.done || 0) + 1,
+            errors: (batchProgress.get(project.id)?.errors || 0) + 1,
+          })
+          continue
+        }
+        progressUpdate(project.id, { current_title: (record.title || '').slice(0, 80) })
+        const r = await runScreeningOnce(db, { userId, project, protocol, record, req: fakeReq })
+        const cur = batchProgress.get(project.id) || { done: 0, errors: 0 }
+        progressUpdate(project.id, {
+          done: cur.done + 1,
+          errors: cur.errors + (r.ok ? 0 : 1),
+        })
+      }
+    } catch (e) {
+      console.error('[screening] run-failed loop crashed:', e)
+    } finally {
+      progressUpdate(project.id, {
+        status: 'finished', current_title: null,
+        finished_at: new Date().toISOString(),
+      })
+      runningBatches.delete(project.id)
+      const final = progressGet(project.id) || {}
+      audit(db, fakeReq, {
+        eventType: 'screening_batch_finished',
+        userId, projectId: project.id,
+        payload: { total: final.total, done: final.done, errors: final.errors, mode: 'run_failed' },
       })
     }
   })

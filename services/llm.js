@@ -335,6 +335,10 @@ export async function runLlm(db, opts) {
     preferredAuthType = null,
     credentialId: credIdOverride = null,
     timeoutMs,
+    // OpenAI / Codex CLI 专用:opt-in 工具白名单(如 ['image_generation', 'tool_search']),
+    // 默认 null = 全部 disable(适合 JSON 输出场景)。详见 openai-cli.js DISABLABLE_TOOL_FEATURES。
+    // Anthropic 路径目前不使用此参数。
+    enabledTools = null,
   } = opts
 
   if (!userId) {
@@ -441,6 +445,7 @@ export async function runLlm(db, opts) {
       providerResult = await openaiCli.sendMessage({
         homePath: decrypted.home_path,
         model, system, prompt, reasoning,
+        enabledTools,                  // 透传:默认 null = 全部 disable
         timeoutMs: timeoutMs ?? 180_000,
       })
     } else {

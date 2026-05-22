@@ -46,7 +46,42 @@ const OPENAI_VALID_EFFORTS = new Set(['minimal', 'low', 'medium', 'high'])
  * @param {string} a.outFile
  * @param {string} [a.reasoningEffort] — minimal | low | medium | high
  */
-export function buildExecArgs({ model, fullPrompt, outFile, reasoningEffort }) {
+/**
+ * codex 0.132.0 默认开启、但我们大多数自动化场景不需要的"工具"feature。
+ * 这些都是会改变 API 请求行为的 feature(会被翻译成 OpenAI Responses API tools):
+ *
+ *   image_generation       — 图片生成
+ *   tool_search            — Web 搜索(API tool name: web_search)
+ *   computer_use           — 计算机操作
+ *   browser_use            — 浏览器操作
+ *   browser_use_external   — 外部浏览器操作
+ *   in_app_browser         — 应用内浏览器
+ *   multi_agent            — 多 agent 协作
+ *
+ * gpt-5.x + reasoning.effort='minimal' + 任何工具 = OpenAI API 400 错误。
+ * 即使不是 minimal,带工具也会让响应变慢、增加额外费用。
+ *
+ * 默认行为:全部 --disable(适合 SLR 自动化场景 — 只要 JSON / 纯文本)。
+ * 调用方传 enabledTools: ['image_generation'] 等可 opt-in 单个工具。
+ */
+export const DISABLABLE_TOOL_FEATURES = [
+  'image_generation', 'tool_search', 'computer_use',
+  'browser_use', 'browser_use_external', 'in_app_browser',
+  'multi_agent',
+]
+
+/**
+ * @param {object} a
+ * @param {string} a.model
+ * @param {string} a.fullPrompt
+ * @param {string} a.outFile
+ * @param {string} [a.reasoningEffort] — minimal | low | medium | high
+ * @param {string[]} [a.enabledTools] — 想保留启用的工具 feature 名;
+ *                                       null/undefined = 默认全 disable(常用于自动化)。
+ *                                       [] = 显式全 disable(等价于 null)。
+ *                                       ['image_generation'] = 仅这个保留,其余 disable。
+ */
+export function buildExecArgs({ model, fullPrompt, outFile, reasoningEffort, enabledTools }) {
   const args = [
     'exec',
     '--json',
@@ -55,20 +90,14 @@ export function buildExecArgs({ model, fullPrompt, outFile, reasoningEffort }) {
     '-m', model,
     '-o', outFile,
     '-c', 'sandbox_permissions=["disk-full-read-access"]',
-    // 关掉 codex 默认开的"工具"feature。
-    // 原因:gpt-5.x 与 reasoning.effort='minimal' 配合时,API 不允许任何工具调用,
-    // 但 codex 0.132.0 默认会带 image_generation + tool_search(=web_search)+
-    // computer_use + browser_use 等。我们的 prompt 只是要 JSON 输出,完全不需要工具 —
-    // 关掉它们既避免 minimal 冲突,又减少不必要的服务端开销。
-    // 单元化用 --disable <feature>(等价于 -c features.<name>=false)
-    '--disable', 'image_generation',
-    '--disable', 'tool_search',
-    '--disable', 'computer_use',
-    '--disable', 'browser_use',
-    '--disable', 'browser_use_external',
-    '--disable', 'in_app_browser',
-    '--disable', 'multi_agent',
   ]
+  // 按 enabledTools 白名单决定 disable 哪些
+  const enabled = Array.isArray(enabledTools) ? new Set(enabledTools.map((s) => String(s).trim())) : new Set()
+  for (const t of DISABLABLE_TOOL_FEATURES) {
+    if (!enabled.has(t)) {
+      args.push('--disable', t)
+    }
+  }
   if (reasoningEffort && OPENAI_VALID_EFFORTS.has(reasoningEffort)) {
     args.push('-c', `model_reasoning_effort="${reasoningEffort}"`)
   }
@@ -91,6 +120,13 @@ export async function sendMessage({
   system,
   prompt,
   reasoning,
+  /**
+   * 工具开关 — 可选数组,opt-in 模式。
+   *   null / undefined / []  → 默认全部 disable(SLR 自动化推荐:只要纯文本/JSON)
+   *   ['image_generation']   → 仅开图片生成,其余仍 disable
+   * 可用值见 DISABLABLE_TOOL_FEATURES。
+   */
+  enabledTools = null,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }) {
   if (!homePath) throw new Error('openai-cli.sendMessage: homePath required')
@@ -106,18 +142,20 @@ export async function sendMessage({
     `codex_out_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`
   )
 
-  // 3) args(可选注入 reasoning_effort)
+  // 3) args(可选注入 reasoning_effort + 工具白名单)
   // 防御:gpt-5.x + reasoning.effort='minimal' + 任何工具 = 400 invalid_request_error。
-  // 我们已经 --disable 了 image_generation / tool_search / browser_use 等,
-  // 但万一 codex 未来又默认开新工具,minimal 还是会炸。所以双保险:
-  // 看到 minimal 就 bump 到 low(对 screening 影响极小,gpt-5.5 low 一样快)。
+  // 只在调用方启用了至少一个工具时才 bump minimal→low。否则保持原意(minimal 最快最便宜)。
+  const enabledToolsList = Array.isArray(enabledTools)
+    ? enabledTools.filter((s) => typeof s === 'string' && s.trim())
+    : []
   let reasoningEffort = String(reasoning || '').toLowerCase()
-  if (reasoningEffort === 'minimal') {
+  if (reasoningEffort === 'minimal' && enabledToolsList.length > 0) {
     reasoningEffort = 'low'
   }
   const args = buildExecArgs({
     model, fullPrompt, outFile,
     reasoningEffort: OPENAI_VALID_EFFORTS.has(reasoningEffort) ? reasoningEffort : null,
+    enabledTools: enabledToolsList,
   })
 
   // 4) env:HOME 隔离

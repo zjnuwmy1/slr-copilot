@@ -239,28 +239,46 @@
           </p>
         </div>
 
-        <!-- 批量运行按钮 -->
+        <!-- 批量运行按钮 + 重跑失败按钮 -->
         <div class="flex flex-wrap items-center justify-between gap-3">
-          <div>
+          <div class="min-w-0">
             <p class="text-sm font-medium text-slate-900">批量 AI 初筛</p>
             <p class="mt-0.5 text-xs text-slate-500">
               对所有未跑 AI 的条目串行调用(~15-25s 每条)。批量任务跑在内存,Node 重启 / 进程崩溃会丢进度(可重启再点)。
+              <% if (stats.ai_failed > 0) { %>
+                <br/><span class="text-amber-700">⚠ 有 <strong><%= stats.ai_failed %></strong> 条 LLM 调用失败,可一键重跑(右侧 ▶︎)。</span>
+              <% } %>
             </p>
           </div>
-          <form method="post" action="<%= filterBase %>/run-batch"
-                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='启动中…';">
-            <button type="submit"
-                    class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:bg-slate-500 disabled:cursor-wait"
-                    <%= (batch && batch.status === 'running') ? 'disabled' : '' %>>
-              <% if (batch && batch.status === 'running') { %>
-                正在运行(<%= batch.done %>/<%= batch.total %>)
-              <% } else if (stats.ai_pending === 0) { %>
-                全部已跑(可重新生成单条)
-              <% } else { %>
-                对未跑的 <%= stats.ai_pending %> 条运行 AI
-              <% } %>
-            </button>
-          </form>
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- 重跑失败 — 只在有失败时显示 -->
+            <% if (stats.ai_failed > 0) { %>
+              <form method="post" action="<%= filterBase %>/run-failed"
+                    onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='重跑中…';">
+                <button type="submit"
+                        title="只重跑那些 LLM 调用报错的条目(ai_reason 以 llm_/codex_/json_parse_failed/spawn_ 开头)"
+                        class="rounded-lg border border-amber-400 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-60 disabled:cursor-wait"
+                        <%= (batch && batch.status === 'running') ? 'disabled' : '' %>>
+                  ↻ 重跑失败 <%= stats.ai_failed %> 条
+                </button>
+              </form>
+            <% } %>
+            <!-- 批量运行 — 跑未跑的 -->
+            <form method="post" action="<%= filterBase %>/run-batch"
+                  onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='启动中…';">
+              <button type="submit"
+                      class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:bg-slate-500 disabled:cursor-wait"
+                      <%= (batch && batch.status === 'running') ? 'disabled' : '' %>>
+                <% if (batch && batch.status === 'running') { %>
+                  正在运行(<%= batch.done %>/<%= batch.total %>)
+                <% } else if (stats.ai_pending === 0) { %>
+                  全部已跑(可重新生成单条)
+                <% } else { %>
+                  对未跑的 <%= stats.ai_pending %> 条运行 AI
+                <% } %>
+              </button>
+            </form>
+          </div>
         </div>
 
         <!-- 进度条 — 即使没在跑也保留一次结果展示;运行中由 JS 轮询更新 -->
