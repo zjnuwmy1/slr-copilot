@@ -189,7 +189,18 @@ async function runScreeningOnce(db, {
   // 确保 row 存在
   ensureScreeningRow(db, { recordId: record.id, projectId: project.id })
 
-  const userPrompt = buildScreeningUserPrompt({ protocol, record })
+  // 把项目级 metadata(年份 / 文献类型 / 语言)也传给 prompt builder,
+  // 用作客观决策树里"文献类型明显不符"的判断依据。
+  const userPrompt = buildScreeningUserPrompt({
+    protocol,
+    record,
+    projectInput: {
+      year_start: project.year_start,
+      year_end: project.year_end,
+      document_types: Array.isArray(project.document_types) ? project.document_types : [],
+      language_limits: Array.isArray(project.language_limits) ? project.language_limits : [],
+    },
+  })
 
   let result
   try {
@@ -241,7 +252,8 @@ async function runScreeningOnce(db, {
   db.prepare(
     `UPDATE screening_decisions
      SET ai_suggestion = ?, ai_reason = ?, ai_confidence = ?, ai_model = ?,
-         ai_matched_inclusion = ?, ai_matched_exclusion = ?, ai_need_full_text = ?,
+         ai_matched_inclusion = ?, ai_matched_exclusion = ?,
+         ai_matched_concepts  = ?, ai_need_full_text = ?,
          ai_ran_at = datetime('now'),
          updated_at = datetime('now')
      WHERE record_id = ? AND stage = 'title_abstract'`
@@ -252,6 +264,7 @@ async function runScreeningOnce(db, {
     result.model || null,
     JSON.stringify(norm.matched_inclusion),
     JSON.stringify(norm.matched_exclusion),
+    JSON.stringify(norm.matched_concepts || []),
     JSON.stringify(norm.need_full_text_check),
     record.id,
   )
@@ -374,7 +387,7 @@ router.get('/:id/screening', (req, res) => {
               r.keywords_json, r.has_pdf, r.doi, r.language, r.source_databases,
               sd.id AS sd_id, sd.ai_suggestion, sd.ai_reason, sd.ai_confidence,
               sd.ai_model, sd.ai_matched_inclusion, sd.ai_matched_exclusion,
-              sd.ai_need_full_text, sd.ai_ran_at,
+              sd.ai_matched_concepts, sd.ai_need_full_text, sd.ai_ran_at,
               sd.human_decision, sd.human_reason, sd.decided_at
        FROM records r
        LEFT JOIN screening_decisions sd
@@ -402,6 +415,7 @@ router.get('/:id/screening', (req, res) => {
         ...r,
         ai_matched_inclusion: parseJsonArrayField(r.ai_matched_inclusion),
         ai_matched_exclusion: parseJsonArrayField(r.ai_matched_exclusion),
+        ai_matched_concepts:  parseJsonArrayField(r.ai_matched_concepts),
         ai_need_full_text:    parseJsonArrayField(r.ai_need_full_text),
         keywords_list:        parseJsonArrayField(r.keywords_json),
         ai_suggestion: r.ai_suggestion || 'not_run',

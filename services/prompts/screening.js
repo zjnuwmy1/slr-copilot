@@ -2,69 +2,132 @@
  * Title / Abstract Screening — 用已审批协议(纳入/排除标准)对每条 record 的
  * 标题 + 摘要 + 关键词做 include / exclude / uncertain 三态初筛。
  *
- * 落地自用户设计文档 Prompt 3。
+ * 设计哲学(2026-05 重写,从"严格 gate"改为"宽进严出"):
+ *
+ *   SLR 方法学共识:title/abstract 筛选目标是 **高 recall / 低 specificity**
+ *   ——"不漏掉好论文"远比"提前剔不相关"重要。严判应留到 full-text 阶段。
+ *
+ *   早期版本要求 include 必须"同时满足所有纳入标准",但 title/abstract 信息
+ *   不全,会把大量原本该 include 的论文推到 uncertain / exclude。
+ *   实测纳入率仅 8%,远低于健康区间 15-30%。
+ *
+ * 新决策树(客观、可机器化):
+ *
+ *   1. 摘要完全缺失 + 标题信息不足 → uncertain(留全文确认)
+ *   2. 标题/摘要里**有明确文字命中**任一排除标准 → exclude(可引证)
+ *   3. **文献类型与协议明显不符**(协议要 RCT,这是 narrative review)→ exclude
+ *   4. 标题/摘要/关键词里**完全找不到任何核心概念组的关键词** → exclude(主题不沾边)
+ *   5. **其余默认 include**,即便不能 100% 确认所有纳入标准也允许通过 —
+ *      把"是否真的满足必要条件 X"留给全文阶段判断
+ *
+ *   底线:不编造,不引用文中没出现的内容,不查外部知识。
  *
  * 严格规则:
  *   - 只能用 title / abstract / keywords / authors / year / journal 作判断依据,
  *     不引外部知识(不查作者、不查影响因子、不脑补研究结论)。
- *   - 信息不足时**必须 uncertain**,不要硬猜。
+ *   - exclude 必须能引证标题/摘要里的具体文字(matched_exclusion 不能为空)
+ *   - uncertain 仅保留给真信息缺失场景(摘要缺失 / 标题模糊)
  *   - 输出严格 JSON,字段见 OUTPUT_SCHEMA。
  */
 
-export const SCREENING_SYSTEM = `你是系统性文献综述(SLR)筛选助手。
-你的工作是基于用户给定的"纳入标准 / 排除标准 / 研究问题",对单篇文献的**标题 + 摘要 + 关键词**做初筛,给出 include / exclude / uncertain 三态判断。
+export const SCREENING_SYSTEM = `你是 SLR 文献筛选助手。
+任务:对单篇文献的 **标题 + 摘要 + 关键词** 做 include / exclude / uncertain 三态初筛。
 
-工作准则:
-1. **只看用户提供的信息**:title / abstract / keywords / authors / year / journal。
-   - **不要**用外部知识脑补内容(不查影响因子、不假设作者背景、不补缺失的方法学细节)。
-   - **不要**引用文中没出现的结论。
+🎯 **核心哲学:title/abstract 阶段宽进严出**
+SLR 方法学共识 —— 这一步的目标是"**不漏掉相关论文**",而不是确认它一定符合每条标准。
+具体的资格判断留到**全文阶段**做。本步遵循 **高 recall / 低 specificity** 原则。
 
-2. **三态判断规则**:
-   - \`include\`:标题/摘要明确显示同时满足所有"必要"纳入标准,且不命中任何排除标准。
-   - \`exclude\`:命中任意一条排除标准,或明显不满足某条核心纳入标准(如学科不符、文献类型不符)。
-   - \`uncertain\`:信息不足以判断(摘要缺失、关键字段没说清楚)。**宁可 uncertain 也不要硬猜**。
+──────────────────────────────────────────────
+**决策树(严格按顺序判,先命中先生效)**
 
-3. **输出严格 JSON**,字段如下(顺序可变):
-   {
-     "decision": "include" | "exclude" | "uncertain",
-     "confidence": 0.0 到 1.0,
-     "reason": "1-2 句话,说清判断依据;直接引证标题/摘要里的话,不要绕。",
-     "matched_inclusion": ["命中的纳入标准原文(从用户标准里抄,不要改写)"],
-     "matched_exclusion": ["命中的排除标准原文"],
-     "need_full_text_check": ["uncertain 时,列出需要看全文才能确认的具体字段(如 '样本量' '研究设计' '干预细节')"]
-   }
+【1】 信息不足 → \`uncertain\`
+   触发:摘要缺失 **且** 标题信息不够(<10 字 / 只是数字编号 / 完全没出现任何概念词)
+   动作:列 need_full_text_check 给用户提示需要看全文哪些字段
 
-4. **confidence 校准**:
-   - 0.9-1.0:摘要里直接写明,几乎不会错。
-   - 0.6-0.9:从关键词/标题强推得到,留一点余地。
-   - 0.3-0.6:仅从期刊/学科间接推断。
-   - < 0.3:基本是猜的,这种情况建议直接 uncertain。
+【2】 命中排除标准 → \`exclude\`
+   触发:标题/摘要/关键词里**有明确文字证据**(可以原文引述)命中任一排除标准
+   ⚠ 必填 matched_exclusion(直接抄用户给的排除标准),reason 给出文中证据
+   ⚠ 仅靠"摘要没提到"**不构成**命中排除标准(那是信息缺失,不是有反证)
 
-5. **只输出 JSON**,不要前后加解释、Markdown、代码围栏。
+【3】 文献类型明显不符 → \`exclude\`
+   触发:协议明示只要某类型(如只要 empirical / 只要 RCT),但本文标题明显是别的类型
+   常见信号(在标题里或文献类型字段里):
+     - "A systematic review of..." / "Literature review of..." → 是综述
+     - "Editorial:" / "Letter to..." / "Commentary on..." → 是社论/通讯
+     - "Conference proceedings of..." / 仅会议摘要(<150 字 abstract) → 是会议论文
+   ⚠ 当协议**未明示**只要哪种类型时,**不要**用此条剔(避免学科 bias)
+
+【4】 完全无概念重叠 → \`exclude\`
+   触发:标题 + 摘要 + 关键词三个字段里,**任何一个核心概念组**(用户消息会列出)
+        都**找不到任何一个词项或近义变体**
+   ⚠ 这是客观词形匹配(允许复数、过去式、连字符变体如 metacognition / metacognitive)
+   ⚠ 只要**任一**概念组有命中,就**不应**用此条剔(下一步走【5】)
+
+【5】 其余 → \`include\`
+   触发:至少有 1 个概念组的词项出现,且没命中排除标准,文献类型也没明显违例
+   ⚠ **不要因为"标题/摘要没明确说样本量 / 干预细节 / 研究方法 → 不能确认满足纳入标准 N"**
+     而推到 uncertain 或 exclude。这些细节留全文阶段确认。
+   ⚠ "可能相关但摘要没说清" → \`include\`(高 recall 原则)
+
+──────────────────────────────────────────────
+**输出字段(严格 JSON,字段名一字不差)**:
+{
+  "decision":   "include" | "exclude" | "uncertain",
+  "confidence": 0.0 到 1.0,
+  "reason":     "1-2 句中文,引证 title/abstract 里的具体文字。≤ 80 字",
+  "matched_inclusion":    ["命中的纳入标准原文(从用户标准抄,不改写)"],
+  "matched_exclusion":    ["命中的排除标准原文 — exclude 时必填"],
+  "matched_concepts":     ["命中的概念组名(用户消息里给的组名,如『AI 技术』)— include 时必填至少 1 个"],
+  "need_full_text_check": ["uncertain 时,需要看全文确认的字段名(如『样本量』『研究设计』)"]
+}
+
+**confidence 校准**(必须诚实):
+  decision = exclude:
+    0.9-1.0  有明确文字命中排除标准 / 标题明示是综述-社论等不符类型
+    0.7-0.9  完全无概念重叠(决策【4】)
+    < 0.7    其实是 uncertain 错标了,请改回 uncertain
+  decision = include:
+    0.7-0.9  多个概念组都命中 + 摘要主题明确相关
+    0.5-0.7  1 个概念组命中,主题大致相关,细节没法在摘要确认(典型情况,放心 include)
+    < 0.5    可能相关但勉强,仍 include,留全文阶段把关
+  decision = uncertain:
+    任何值 — 但只在【1】触发时才用,不要"模糊就 uncertain"
+──────────────────────────────────────────────
+
+**绝对底线**:
+1. 只用用户提供的字段(title / abstract / keywords / authors / year / journal),
+   **不查外部知识**,**不编造文中没出现的内容**
+2. exclude 时 matched_exclusion 不能为空(必须能引证)
+3. include 时 matched_concepts 不能为空(至少有 1 个概念组命中)
+4. uncertain 时 need_full_text_check 不能为空(告诉用户要看什么)
+5. **只输出 JSON**,前后不加任何文字 / Markdown / 代码围栏(\`\`\`)
 
 语言要求(**强制**):
-- reason 必须用**简体中文**;matched_inclusion / matched_exclusion 直接抄用户给的标准原文(中文就是中文,英文保留英文)。
-- need_full_text_check 用简体中文。
+- reason 必须用**简体中文**
+- matched_inclusion / matched_exclusion 直接抄用户给的标准原文(中文是中文,英文保留英文)
+- matched_concepts / need_full_text_check 用简体中文
 
 写作风格(reason / need_full_text_check):
-- **大白话**,不堆砌术语,不要"赋能 / 范式 / 解构 / 路径 / 机制 / 驱动 / 颗粒度"这类八股。
-- 一条理由 ≤ 30 字,直接陈述"摘要里说...,所以...";不要"基于...的考量"、"从...的视角"。
-- 一条 need_full_text_check ≤ 15 字,只点字段名,不展开。
+- **大白话**,不堆砌术语,不要"赋能 / 范式 / 解构 / 路径 / 机制 / 驱动 / 颗粒度"这类八股
+- 一条 reason ≤ 80 字,直接陈述"标题里提到 ...,所以..."
+- 一条 need_full_text_check ≤ 15 字,只点字段名
 `
 
 /**
  * 构造单条 record 的用户消息。
  *
  * @param {object} args
- * @param {object} args.protocol  approved & parsed protocol(research_questions / inclusion_criteria / exclusion_criteria 是数组)
+ * @param {object} args.protocol  approved & parsed protocol(research_questions / inclusion_criteria / exclusion_criteria / concept_groups 是数组)
  * @param {object} args.record    一条 records 行(title / abstract / keywords_list / authors_text / year / journal)
+ * @param {object} [args.projectInput]  可选:协议外的项目级信息(year_start / year_end / document_types / language_limits)
  */
-export function buildScreeningUserPrompt({ protocol, record }) {
+export function buildScreeningUserPrompt({ protocol, record, projectInput }) {
   const p = protocol || {}
   const r = record || {}
+  const pi = projectInput || {}
   const lines = []
 
-  // ===== 协议 =====
+  // ===== 协议核心 =====
   lines.push('请根据以下协议对单篇文献做初筛(只看 title + abstract + keywords)。')
   lines.push('')
   lines.push('## 研究问题')
@@ -75,22 +138,54 @@ export function buildScreeningUserPrompt({ protocol, record }) {
     lines.push('  (未指定)')
   }
 
+  // ===== 概念组(关键!客观词形 gate)=====
+  const cg = Array.isArray(p.concept_groups) ? p.concept_groups : []
+  if (cg.length) {
+    lines.push('')
+    lines.push('## 核心概念组(决策【4】用 — 完全无重叠才能 exclude)')
+    lines.push('每组内 OR(同义词),组间 AND(都要至少 1 个命中才算"主题相关")。')
+    lines.push('词形变体算命中:复数 / 时态 / 截词(\\*) / 连字符变体 都算。')
+    cg.forEach((g, i) => {
+      const name = g.name || `组 ${i + 1}`
+      const terms = Array.isArray(g.terms) ? g.terms : []
+      lines.push(`  - **${name}**: ${terms.slice(0, 30).join(' | ')}${terms.length > 30 ? ` ... (共 ${terms.length} 词)` : ''}`)
+    })
+  }
+
+  // ===== 纳入标准 =====
   lines.push('')
-  lines.push('## 纳入标准(必须全部满足)')
+  lines.push('## 纳入标准(参考用,**不要**因为标题/摘要没明说就剔)')
   const ic = Array.isArray(p.inclusion_criteria) ? p.inclusion_criteria : []
   if (ic.length) {
     ic.forEach((c, i) => lines.push(`  I${i + 1}. ${c}`))
+    lines.push('  ↑ 这些**留全文阶段验证**。本步只看是否完全无概念重叠或命中排除标准。')
   } else {
     lines.push('  (未指定 — 视为不限)')
   }
 
+  // ===== 排除标准 =====
   lines.push('')
-  lines.push('## 排除标准(命中任一即 exclude)')
+  lines.push('## 排除标准(决策【2】用 — 必须文中有明确证据才能命中)')
   const ec = Array.isArray(p.exclusion_criteria) ? p.exclusion_criteria : []
   if (ec.length) {
     ec.forEach((c, i) => lines.push(`  E${i + 1}. ${c}`))
   } else {
-    lines.push('  (未指定)')
+    lines.push('  (未指定 — 不触发决策【2】)')
+  }
+
+  // ===== 文献类型 / 年份 / 语言 (决策【3】用)=====
+  const dts = Array.isArray(pi.document_types) ? pi.document_types : []
+  if (dts.length) {
+    lines.push('')
+    lines.push(`## 协议允许的文献类型(决策【3】用): ${dts.join(' / ')}`)
+    lines.push('  标题里明显是其他类型(综述/社论/通讯/会议)才剔;标题没明示就不要用此条剔。')
+  }
+  const yStart = pi.year_start || pi.yearStart
+  const yEnd = pi.year_end || pi.yearEnd
+  if (yStart || yEnd) {
+    lines.push('')
+    lines.push(`## 协议年份范围: ${yStart || '(未指定起)'} – ${yEnd || '(未指定止)'}`)
+    lines.push('  (年份过滤通常在检索阶段就已经做了,这里仅供你参考。年份不在范围不必特意剔。)')
   }
 
   // ===== 待筛文献 =====
@@ -115,7 +210,9 @@ export function buildScreeningUserPrompt({ protocol, record }) {
   }
 
   lines.push('')
-  lines.push('请严格按 system message 的 JSON schema 输出。摘要缺失时必须 uncertain 并在 need_full_text_check 里列出需要确认的字段。')
+  lines.push('────────────────────────────────────')
+  lines.push('请严格按 system message 的决策树 + JSON schema 输出。')
+  lines.push('记住:title/abstract 阶段宽进严出。"可能相关但不能确认细节" → include(留全文阶段)。')
   return lines.join('\n')
 }
 
@@ -133,7 +230,7 @@ const VALID_DECISIONS = ['include', 'exclude', 'uncertain']
  *   - 字段同义词(rationale / explanation → reason; matched_in → matched_inclusion 等)
  *   - decision 不在白名单 → uncertain
  *   - confidence 不是 0..1 数字 → null
- *   - matched_inclusion/exclusion/need_full_text_check 非数组 → 空数组
+ *   - matched_inclusion/exclusion/concepts/need_full_text_check 非数组 → 空数组
  *
  * 返回结构:
  *   {
@@ -142,6 +239,7 @@ const VALID_DECISIONS = ['include', 'exclude', 'uncertain']
  *     reason: string,
  *     matched_inclusion: string[],
  *     matched_exclusion: string[],
+ *     matched_concepts:  string[],
  *     need_full_text_check: string[],
  *   }
  */
@@ -161,6 +259,7 @@ export function normalizeScreeningOutput(raw) {
     reason:               ['reason', 'rationale', 'explanation', 'justification', 'reasoning'],
     matched_inclusion:    ['matched_inclusion', 'matchedInclusion', 'matched_in', 'inclusion_matched', 'inclusion_hits'],
     matched_exclusion:    ['matched_exclusion', 'matchedExclusion', 'matched_ex', 'exclusion_matched', 'exclusion_hits'],
+    matched_concepts:     ['matched_concepts', 'matchedConcepts', 'concepts_matched', 'concept_hits', 'matched_concept_groups'],
     need_full_text_check: ['need_full_text_check', 'needFullTextCheck', 'full_text_check', 'requires_full_text', 'full_text_needed'],
   }
   const pick = (key) => {
@@ -203,12 +302,27 @@ export function normalizeScreeningOutput(raw) {
     ? v.filter((x) => x != null && String(x).trim()).map((x) => String(x).trim())
     : []
 
+  // === 防御性校正:把模型偶尔违反"决策树底线"的输出修回来 ===
+  // 用 normalize 阶段做客观校正,prompt 是软约束,这里是硬约束。
+  const matchedExclusion = arr(pick('matched_exclusion'))
+  const matchedConcepts  = arr(pick('matched_concepts'))
+
+  // 规则:exclude 必须有 matched_exclusion **或** matched_concepts 为空(决策【4】无重叠)
+  // 否则降级为 uncertain。
+  if (decision === 'exclude'
+      && matchedExclusion.length === 0
+      && matchedConcepts.length > 0) {
+    // 模型说 exclude 但既没排除证据又有概念命中 → 矛盾,改回 uncertain 让人工把关
+    decision = 'uncertain'
+  }
+
   return {
     decision,
     confidence,
     reason,
     matched_inclusion: arr(pick('matched_inclusion')),
-    matched_exclusion: arr(pick('matched_exclusion')),
+    matched_exclusion: matchedExclusion,
+    matched_concepts:  matchedConcepts,
     need_full_text_check: arr(pick('need_full_text_check')),
   }
 }
@@ -220,6 +334,7 @@ function emptyScreening() {
     reason: '',
     matched_inclusion: [],
     matched_exclusion: [],
+    matched_concepts:  [],
     need_full_text_check: [],
   }
 }

@@ -424,6 +424,9 @@
               <div class="mt-2 rounded-lg bg-slate-50/80 p-3 text-xs text-slate-700">
                 <p class="font-medium text-slate-500">AI 理由<% if (r.ai_model) { %> <span class="font-mono text-slate-400">· <%= r.ai_model %></span><% } %></p>
                 <p class="mt-1 leading-relaxed"><%= r.ai_reason %></p>
+                <% if (r.ai_matched_concepts && r.ai_matched_concepts.length) { %>
+                  <p class="mt-1 text-blue-700">命中概念:<%= r.ai_matched_concepts.join(' · ') %></p>
+                <% } %>
                 <% if (r.ai_matched_inclusion && r.ai_matched_inclusion.length) { %>
                   <p class="mt-1 text-emerald-700">命中纳入:<%= r.ai_matched_inclusion.join(' · ') %></p>
                 <% } %>

@@ -90,6 +90,14 @@ function runMigrations(db) {
     db.exec(`ALTER TABLE records ADD COLUMN language TEXT`)
   }
 
+  // M7.5: screening_decisions.ai_matched_concepts —— AI 初筛新版 prompt
+  //    要求 include 时必须命中至少 1 个概念组,这一列记录命中的组名,
+  //    用于:① UI 展示"为什么 include";② normalize 阶段做硬约束校验
+  //    (exclude 不能既无 matched_exclusion 又有 matched_concepts)。
+  if (!columnExists(db, 'screening_decisions', 'ai_matched_concepts')) {
+    db.exec(`ALTER TABLE screening_decisions ADD COLUMN ai_matched_concepts TEXT`)
+  }
+
   // M7:pending_iterations —— 跑完 diagnose 但用户还没决定 adopt/discard 的
   //    LLM 输出。之前放在 cookie-session 里,几 KB 的 JSON 把 Set-Cookie
   //    header 撑爆,Nginx proxy_buffer_size 8K 直接 502 Bad Gateway。
