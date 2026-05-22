@@ -652,11 +652,15 @@
       var fd = new FormData(form)
       // 显式带上 decision(因为 FormData(form) 不会自动包含 submit button 的 value)
       fd.set('decision', decisionValue)
+      // ⚠ 关键:server 装的是 express.urlencoded + express.json,**不解析 multipart**。
+      //    直接传 fd 会走 multipart → req.body 是 {} → 后端拒"决定值非法"。
+      //    用 URLSearchParams 包一层,Content-Type 自动 application/x-www-form-urlencoded。
+      var body = new URLSearchParams(fd)
       fetch(form.action, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-        body: fd,
+        body: body,
       })
         .then(function(r) { return r.json().catch(function() { return { ok: false, error: 'HTTP ' + r.status } }) })
         .then(function(d) {
