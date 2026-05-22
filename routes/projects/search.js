@@ -31,6 +31,7 @@ import {
 } from '../../services/prompts/search.js'
 import {
   RECOMMEND_SYSTEM,
+  buildRecommendSystem,
   buildRecommendPrompt,
   normalizeRecommendOutput,
 } from '../../services/prompts/search-recommend.js'
@@ -128,6 +129,7 @@ const QT_LABEL = {
   high_recall: '高召回',
   balanced: '平衡',
   high_precision: '高精确',
+  main: 'AI 优化主检索',
 }
 
 // ============================================================
@@ -143,14 +145,19 @@ router.get('/:id/search', (req, res) => {
   const approvedProtocol = getApprovedProtocol(db, project.id)
   const strategies = listStrategies(db, project.id)
 
-  // 按 (version, database) 分组,便于 EJS 渲染 tab
-  const latestVersion = strategies.length ? strategies[0].version : null
-  const latestBatch = latestVersion == null
-    ? []
-    : strategies.filter((s) => s.version === latestVersion)
-
   // 只为用户在项目里勾选的库准备 tab(IEEE / ACM 等不在 prompt 支持列表里,自动落到 ['wos','scopus','pubmed'] 兜底)
   const targetDatabases = resolveTargetDatabases(project.databases)
+
+  // **exploration 最新批**:只看非 main 的 query_type,版本号取这些里最高的。
+  // 这样即便 main 是更新的版本,下方的 tabs 仍然展示完整的 9 条 exploration。
+  const explorationStrategies = strategies.filter((s) => s.query_type !== 'main')
+  const latestVersion = explorationStrategies.length
+    ? explorationStrategies.reduce((m, s) => Math.max(m, s.version || 0), 0)
+    : null
+  const latestBatch = latestVersion == null
+    ? []
+    : explorationStrategies.filter((s) => s.version === latestVersion)
+
   const byDatabase = {}
   for (const k of targetDatabases) byDatabase[k] = []
   for (const s of latestBatch) {
@@ -176,45 +183,30 @@ router.get('/:id/search', (req, res) => {
     console.error('[search] getProjectProgress failed:', e.message)
   }
 
-  // 已回填命中数的条数(用于 UI 上"还差几条才能跑推荐"的提示)
-  const loggedCount = latestBatch.filter((s) => s.result_count != null).length
+  // exploration:已回填命中数的条数(用于 UI 上"还差几条才能优化主检索"的提示)
+  const explorationLogged = strategies.filter(
+    (s) => s.query_type !== 'main' && s.result_count != null
+      && targetDatabases.includes(s.database_name)
+  ).length
 
-  // ephemeral 推荐结果 — 仅当本次 redirect 来自 recommend-best 时存在
-  let recommendation = null
-  if (req.session && req.session.searchRecommendation
-      && req.session.searchRecommendation.projectId === project.id) {
-    const rec = req.session.searchRecommendation
-    // 把 strategy_id 拼成 view 用的完整对象
-    const byId = new Map(latestBatch.map((s) => [s.id, s]))
-    const decorate = (id) => {
-      const s = byId.get(id)
-      if (!s) return null
-      return {
-        id: s.id,
-        database_name: s.database_name,
-        query_type: s.query_type,
-        result_count: s.result_count,
-        rationale: s.rationale,
-        dbLabel: DB_LABEL[s.database_name] || s.database_name,
-        qtLabel: QT_LABEL[s.query_type] || s.query_type,
-      }
-    }
-    recommendation = {
-      primary: {
-        ...decorate(rec.data.primary_choice.strategy_id),
-        reason: rec.data.primary_choice.reason,
-      },
-      secondary: rec.data.secondary_choices
-        .map((sc) => {
-          const d = decorate(sc.strategy_id)
-          return d ? { ...d, role: sc.role, reason: sc.reason } : null
-        })
-        .filter(Boolean),
-      warnings: rec.data.warnings,
-      estimated_workload: rec.data.estimated_screening_workload,
-      durationMs: rec.durationMs,
-      model: rec.model,
-    }
+  // 最新一批 main(AI 优化主检索)— 在版本号最高的"含 main"那一批
+  const mainStrategies = strategies.filter((s) => s.query_type === 'main')
+  let latestMainVersion = null
+  let latestMainBatch = []
+  if (mainStrategies.length) {
+    latestMainVersion = mainStrategies.reduce((m, s) => Math.max(m, s.version || 0), 0)
+    latestMainBatch = mainStrategies
+      .filter((s) => s.version === latestMainVersion)
+      .slice()
+      .sort((a, b) => {
+        const ai = targetDatabases.indexOf(a.database_name)
+        const bi = targetDatabases.indexOf(b.database_name)
+        return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi)
+      })
+  }
+
+  // 兼容老 session(从旧版升级时如果还有 stale 数据,清掉即可)
+  if (req.session && req.session.searchRecommendation) {
     delete req.session.searchRecommendation
   }
 
@@ -222,13 +214,14 @@ router.get('/:id/search', (req, res) => {
     title: `检索式 · ${project.title}`,
     project,
     approvedProtocol,
-    strategies,            // 全量历史(版本切换 / 历史展示)
-    latestBatch,           // 最新一批
+    strategies,
+    latestBatch,
     latestVersion,
-    byDatabase,            // 仅最新一批分组
+    byDatabase,
     progress,
-    loggedCount,
-    recommendation,
+    loggedCount: explorationLogged,
+    latestMainBatch,
+    latestMainVersion,
     dbLabel: DB_LABEL,
     qtLabel: QT_LABEL,
     dbOrder: dbOrderForView,
@@ -494,17 +487,26 @@ router.post('/:id/search/recommend-best', async (req, res) => {
     return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
   }
 
-  const strategies = listStrategies(db, project.id)
-  const latestVersion = strategies.length ? strategies[0].version : null
-  const latestBatch = latestVersion == null
-    ? []
-    : strategies.filter((s) => s.version === latestVersion)
-  const logged = latestBatch.filter((s) => s.result_count != null)
+  // 必须有审批协议
+  const approved = getApprovedProtocol(db, project.id)
+  if (!approved) {
+    req.session.flash = { type: 'error', message: '请先审批研究协议,才能让 AI 优化主检索。' }
+    return res.redirect(`/projects/${project.id}/search`)
+  }
 
-  if (logged.length < 3) {
+  const targetDatabases = resolveTargetDatabases(project.databases)
+
+  // 拉所有 exploration(非 main)且已回填命中数的策略,作为优化反馈信号
+  const allStrategies = listStrategies(db, project.id)
+  const exploration = allStrategies.filter(
+    (s) => s.query_type !== 'main' && targetDatabases.includes(s.database_name)
+  )
+  const logged = exploration.filter((s) => s.result_count != null)
+
+  if (logged.length < 2) {
     req.session.flash = {
       type: 'error',
-      message: `至少需要 3 条检索式回填命中数,才能让 AI 推荐(当前 ${logged.length} 条)。`,
+      message: `至少需要 2 条 exploration 检索式回填命中数,AI 才能基于反馈优化主检索(当前 ${logged.length} 条)。`,
     }
     return res.redirect(`/projects/${project.id}/search`)
   }
@@ -513,12 +515,26 @@ router.post('/:id/search/recommend-best', async (req, res) => {
     eventType: 'search_recommend_requested',
     userId: req.user.id,
     projectId: project.id,
-    payload: { logged_count: logged.length, version: latestVersion },
+    payload: {
+      logged_count: logged.length,
+      target_databases: targetDatabases,
+    },
   })
 
+  const dynamicSystem = buildRecommendSystem({ targetDatabases })
   const userPrompt = buildRecommendPrompt({
     topic: project.topic,
-    strategies: logged.map((s) => ({
+    protocol: approved,
+    projectInput: {
+      year_start: project.year_start,
+      year_end: project.year_end,
+      document_types: project.document_types,
+      language_limits: project.language_limits,
+      discipline: project.discipline,
+      goal: project.goal,
+    },
+    targetDatabases,
+    previousStrategies: logged.map((s) => ({
       id: s.id,
       database_name: s.database_name,
       query_type: s.query_type,
@@ -534,22 +550,19 @@ router.post('/:id/search/recommend-best', async (req, res) => {
       userId: req.user.id,
       actionType: 'search_recommend',
       projectId: project.id,
-      system: RECOMMEND_SYSTEM,
+      system: dynamicSystem,
       prompt: userPrompt,
       expectJson: true,
-      // 'heavy' alias 在 search_recommend 这种非 STEP_SPECS 步骤下会 fallback
-      // 到 standard(=sonnet),所以这里直接给具体模型 id 锁旗舰。
-      // Anthropic 平台凭证 → opus-4-7;OpenAI → gpt-5.5(由 resolveModel
-      // 跨 provider 翻译)。
+      // 主检索质量直接影响后续筛选基线 → 锁旗舰,不走 alias
       model: 'claude-opus-4-7',
-      maxTokens: 2048,
-      timeoutMs: 180_000,
+      maxTokens: 4096,    // optimized_queries × N + rationale + filters,4K 给足
+      timeoutMs: 300_000, // 5 分钟:LLM 要消化前面所有命中数 + 重写检索式
     })
   } catch (e) {
     console.error('[search/recommend-best] runLlm threw:', e)
     req.session.flash = {
       type: 'error',
-      message: `AI 推荐失败:${(e?.message || String(e)).slice(0, 200)}`,
+      message: `AI 优化失败:${(e?.message || String(e)).slice(0, 200)}`,
     }
     return res.redirect(`/projects/${project.id}/search`)
   }
@@ -563,13 +576,16 @@ router.post('/:id/search/recommend-best', async (req, res) => {
     })
     req.session.flash = {
       type: 'error',
-      message: `AI 推荐失败:${result.status} — ${(result.error || '').slice(0, 200)}`,
+      message: `AI 优化失败:${result.status} — ${(result.error || '').slice(0, 200)}`,
     }
     return res.redirect(`/projects/${project.id}/search`)
   }
 
-  const validIds = new Set(logged.map((s) => s.id))
-  const normalized = normalizeRecommendOutput(result.data || null, validIds)
+  const knownStrategyIds = new Set(logged.map((s) => s.id))
+  const normalized = normalizeRecommendOutput(result.data || null, {
+    targetDatabases,
+    knownStrategyIds,
+  })
 
   if (!normalized.ok) {
     // 捕获实际的 raw 形状,便于排查 LLM 字段漂移
@@ -604,33 +620,75 @@ router.post('/:id/search/recommend-best', async (req, res) => {
     return res.redirect(`/projects/${project.id}/search`)
   }
 
-  // 存入 session,供 GET /search 渲染时 pop
-  req.session.searchRecommendation = {
-    projectId: project.id,
-    version: latestVersion,
-    data: normalized.data,
-    durationMs: result.durationMs,
-    model: result.model,
-    createdAt: Date.now(),
-  }
+  // 把优化主检索作为新 version 持久化进 search_strategies
+  // (query_type='main',与 exploration 共用同一张表,但用版本号 + 类型区分)
+  const { maxV } = db
+    .prepare('SELECT COALESCE(MAX(version), 0) AS maxV FROM search_strategies WHERE project_id = ?')
+    .get(project.id)
+  const mainVersion = maxV + 1
+
+  const insertMain = db.prepare(
+    `INSERT INTO search_strategies
+       (id, project_id, database_name, query_type, query_text, filters,
+        rationale, version, generated_by, model)
+     VALUES (?, ?, ?, 'main', ?, ?, ?, ?, 'ai', ?)`
+  )
+
+  const insertedIds = []
+  const tx = db.transaction(() => {
+    for (const q of normalized.data.optimized_queries) {
+      const strategyId = randomId('strat')
+      // rationale 里追加 based_on 信息,方便用户复盘 LLM 参考了哪些 exploration
+      let rationale = q.rationale || ''
+      if (Array.isArray(q.based_on_strategy_ids) && q.based_on_strategy_ids.length) {
+        rationale += (rationale ? '\n' : '') + `(参考 exploration: ${q.based_on_strategy_ids.join(', ')})`
+      }
+      if (q.expected_count_estimate != null) {
+        rationale += (rationale ? ' ' : '') + `· 预估命中 ${q.expected_count_estimate}`
+      }
+      insertMain.run(
+        strategyId,
+        project.id,
+        q.database,
+        q.query_text,
+        q.filters ? JSON.stringify(q.filters) : null,
+        rationale.slice(0, 800),
+        mainVersion,
+        result.model,
+      )
+      insertedIds.push(strategyId)
+    }
+    db.prepare(`UPDATE projects SET updated_at = datetime('now') WHERE id = ?`).run(project.id)
+  })
+  tx()
 
   audit(db, req, {
-    eventType: 'search_recommended',
+    eventType: 'search_main_optimized',
     userId: req.user.id,
     projectId: project.id,
     payload: {
-      version: latestVersion,
+      main_version: mainVersion,
       model: result.model,
       provider: result.provider,
       duration_ms: result.durationMs,
       logged_count: logged.length,
-      primary_strategy_id: normalized.data.primary_choice.strategy_id,
-      secondary_count: normalized.data.secondary_choices.length,
+      target_databases: targetDatabases,
+      generated_count: normalized.data.optimized_queries.length,
+      missing_databases: normalized.data.missing_databases || [],
       warnings_count: normalized.data.warnings.length,
-      estimated_workload: normalized.data.estimated_screening_workload,
     },
   })
 
+  const summary = normalized.data.optimized_queries
+    .map((q) => `${q.database.toUpperCase()}${q.expected_count_estimate != null ? ' (~'+q.expected_count_estimate+')' : ''}`)
+    .join(' · ')
+  const missingHint = (normalized.data.missing_databases || []).length
+    ? `(漏了 ${normalized.data.missing_databases.join(', ')},可重试)`
+    : ''
+  req.session.flash = {
+    type: 'success',
+    message: `已生成主检索 v${mainVersion}:${summary}${missingHint}`,
+  }
   res.redirect(`/projects/${project.id}/search`)
 })
 
@@ -653,7 +711,7 @@ router.get('/:id/search/export.md', (req, res) => {
     : strategies.filter((s) => s.version === latestVersion)
 
   // 按 db / qt 分组
-  const QT_ORDER = { high_recall: 0, balanced: 1, high_precision: 2 }
+  const QT_ORDER = { main: -1, high_recall: 0, balanced: 1, high_precision: 2 }
   const grouped = {}
   for (const s of latest) {
     if (!grouped[s.database_name]) grouped[s.database_name] = []

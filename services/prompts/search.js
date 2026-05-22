@@ -15,7 +15,9 @@
 
 // ---- 内部常量 ----
 const VALID_DATABASES = ['wos', 'scopus', 'pubmed']
-const VALID_QUERY_TYPES = ['high_recall', 'balanced', 'high_precision']
+//   'high_recall' / 'balanced' / 'high_precision' — exploration 三档(buildSearchSystem 出的)
+//   'main' — AI 主检索:基于命中数 + 协议优化合成的最终主检索(buildRecommendSystem 出的)
+const VALID_QUERY_TYPES = ['high_recall', 'balanced', 'high_precision', 'main']
 
 // 用户表单里"项目数据库"勾选项的显示名 → 内部 key 映射
 // 现在 prompt 只支持 wos / scopus / pubmed 三种语法;其他(IEEE/ACM/ERIC 等)

@@ -195,105 +195,107 @@
         <p class="text-xs text-slate-400">历史检索式版本:<%= olderVersions.map(v => 'v' + v).join(' · ') %>(导出 Markdown 仅包含最新版)</p>
       <% } %>
 
-      <!-- AI 推荐主检索 -->
+      <!-- AI 优化主检索 — 为每个用户勾选的库优化生成一条最终主检索 -->
       <%
-        const totalLatest = (latestBatch || []).length
         const loggedNum = (typeof loggedCount === 'number') ? loggedCount : 0
-        const canRecommend = loggedNum >= 3
+        const canRecommend = loggedNum >= 2
+        const targetDbs = (typeof targetDatabases !== 'undefined') ? (targetDatabases || []) : []
+        const mainBatch = (typeof latestMainBatch !== 'undefined') ? (latestMainBatch || []) : []
+        const mainV = (typeof latestMainVersion !== 'undefined') ? latestMainVersion : null
       %>
-      <section class="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 space-y-4">
+      <section class="rounded-2xl border border-indigo-300 bg-indigo-50/40 p-5 space-y-4">
         <header class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <h3 class="text-base font-semibold text-indigo-900">AI 推荐主检索</h3>
+            <h3 class="text-base font-semibold text-indigo-900">AI 优化主检索</h3>
             <p class="mt-1 text-xs text-indigo-800">
-              你跑完检索式、把命中数回填后,AI 会基于命中数 + 设计理由,推荐一条最值得当"主检索"的版本。
+              基于你已跑过的 exploration 检索式命中数 + 已审批协议,
+              为你勾选的 <strong><%= targetDbs.map(d => d.toUpperCase()).join(' / ') || '所有库' %></strong>
+              <strong>各重新合成 1 条优化后的主检索</strong>(不是从已有的里挑赢家)。
+              这是后续正式筛选用的 source-of-truth。
             </p>
             <p class="mt-1 text-xs text-indigo-700">
-              已回填命中数:<span class="font-medium"><%= loggedNum %></span> / <%= totalLatest %>
+              已回填 exploration 命中数:<span class="font-medium"><%= loggedNum %></span> 条
               <% if (!canRecommend) { %>
-                <span class="ml-2 text-amber-700">至少填 3 条才能跑推荐</span>
+                <span class="ml-2 text-amber-700">至少填 2 条,AI 才能基于反馈优化</span>
+              <% } %>
+              <% if (mainV != null) { %>
+                <span class="ml-2 text-slate-500">· 当前主检索:v<%= mainV %></span>
               <% } %>
             </p>
           </div>
           <form method="post" action="/projects/<%= project.id %>/search/recommend-best"
-                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='AI 思考中…';">
+                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='AI 优化中…(约 1-3 分钟)';">
             <button type="submit"
-                    <% if (!canRecommend) { %>disabled title="先填至少 3 条命中数"<% } %>
+                    <% if (!canRecommend) { %>disabled title="先填至少 2 条命中数"<% } %>
                     class="rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-500 disabled:bg-slate-300 disabled:cursor-not-allowed disabled:text-slate-500">
-              让 AI 推荐主检索
+              <%= mainV != null ? '重新优化主检索' : '让 AI 优化主检索' %>
             </button>
           </form>
         </header>
 
-        <% if (typeof recommendation !== 'undefined' && recommendation) { %>
+        <% if (mainBatch.length > 0) { %>
           <div class="space-y-3 border-t border-indigo-200 pt-4">
-            <!-- 主选 -->
-            <% if (recommendation.primary && recommendation.primary.id) { %>
-              <div class="rounded-xl border border-indigo-300 bg-white p-4">
-                <div class="flex items-center gap-2">
-                  <span class="rounded-full bg-indigo-600 px-2.5 py-0.5 text-xs font-medium text-white">主检索</span>
-                  <span class="text-sm font-medium text-slate-800">
-                    <%= recommendation.primary.dbLabel %> · <%= recommendation.primary.qtLabel %>
-                  </span>
-                  <% if (recommendation.primary.result_count != null) { %>
-                    <span class="text-xs text-slate-500">命中 <%= recommendation.primary.result_count %> 条</span>
-                  <% } %>
-                </div>
-                <% if (recommendation.primary.reason) { %>
-                  <p class="mt-2 text-sm text-slate-700"><%= recommendation.primary.reason %></p>
-                <% } %>
-              </div>
-            <% } else { %>
-              <p class="text-sm text-amber-700">AI 没能从候选里挑出主检索,请重新跑或检查命中数是否合理。</p>
-            <% } %>
+            <p class="text-xs font-medium text-indigo-900">v<%= mainV %> · <%= mainBatch.length %> 条优化主检索:</p>
 
-            <!-- 兜底 -->
-            <% if (recommendation.secondary && recommendation.secondary.length) { %>
-              <div class="space-y-2">
-                <p class="text-xs font-medium text-indigo-900">建议补跑(用于交叉验证 / 兜底):</p>
-                <% recommendation.secondary.forEach(sc => { %>
-                  <div class="rounded-lg border border-slate-200 bg-white p-3">
-                    <div class="flex items-center gap-2">
-                      <span class="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] text-slate-700"><%= sc.role || '兜底' %></span>
-                      <span class="text-sm text-slate-700"><%= sc.dbLabel %> · <%= sc.qtLabel %></span>
-                      <% if (sc.result_count != null) { %>
-                        <span class="text-xs text-slate-500">命中 <%= sc.result_count %> 条</span>
-                      <% } %>
-                    </div>
-                    <% if (sc.reason) { %>
-                      <p class="mt-1 text-xs text-slate-600"><%= sc.reason %></p>
-                    <% } %>
+            <% mainBatch.forEach((s) => { %>
+              <article class="rounded-xl border-2 border-indigo-300 bg-white p-4 space-y-3 shadow-sm">
+                <header class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-2">
+                    <span class="rounded-full bg-indigo-600 px-2.5 py-0.5 text-xs font-medium text-white"><%= dbLabel[s.database_name] || s.database_name %></span>
+                    <span class="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-800">主检索</span>
+                    <% if (s.model) { %><span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500"><%= s.model %></span><% } %>
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">v<%= s.version %></span>
                   </div>
-                <% }) %>
-              </div>
-            <% } %>
+                  <button type="button"
+                          class="copy-btn rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                          data-copy-target="qtext-<%= s.id %>">
+                    复制
+                  </button>
+                </header>
 
-            <!-- 工作量预估 -->
-            <% if (recommendation.estimated_workload != null) { %>
-              <p class="text-xs text-slate-600">
-                <span class="font-medium text-slate-700">预估筛选工作量:</span>
-                主检索 + 兜底去重后,大约要筛 <span class="font-semibold text-indigo-700"><%= recommendation.estimated_workload %></span> 条。
-              </p>
-            <% } %>
+                <% if (s.rationale) { %>
+                  <p class="text-xs text-slate-600 whitespace-pre-wrap"><span class="font-medium text-slate-700">优化思路:</span><%= s.rationale %></p>
+                <% } %>
 
-            <!-- 警告 -->
-            <% if (recommendation.warnings && recommendation.warnings.length) { %>
-              <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p class="text-xs font-medium text-amber-900">注意事项</p>
-                <ul class="mt-1 list-disc pl-5 text-xs text-amber-800 space-y-0.5">
-                  <% recommendation.warnings.forEach(w => { %>
-                    <li><%= w %></li>
-                  <% }) %>
-                </ul>
-              </div>
-            <% } %>
+                <textarea id="qtext-<%= s.id %>" readonly rows="6"
+                          class="block w-full rounded-md border border-indigo-200 bg-indigo-50/30 px-3 py-2 font-mono text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"><%= s.query_text %></textarea>
 
-            <p class="text-[11px] text-slate-400">
-              <% if (recommendation.model) { %><%= recommendation.model %> · <% } %>
-              <% if (recommendation.durationMs) { %><%= recommendation.durationMs %>ms · <% } %>
-              推荐结果不入库,刷新或返回会消失。
-            </p>
+                <% if (s.filters) { %>
+                  <div class="flex flex-wrap gap-2 text-xs text-slate-500">
+                    <% if (s.filters.year_range) { %><span class="rounded bg-slate-100 px-2 py-0.5">年份: <%= s.filters.year_range.join('-') %></span><% } %>
+                    <% if (s.filters.document_types) { %><span class="rounded bg-slate-100 px-2 py-0.5">类型: <%= s.filters.document_types.join('/') %></span><% } %>
+                    <% if (s.filters.language) { %><span class="rounded bg-slate-100 px-2 py-0.5">语言: <%= s.filters.language.join('/') %></span><% } %>
+                  </div>
+                <% } %>
+
+                <!-- 命中数 + 检索日期表单(主检索也要回填) -->
+                <form method="post" action="/projects/<%= project.id %>/search/<%= s.id %>/log"
+                      class="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end pt-2 border-t border-indigo-100">
+                  <div>
+                    <label class="text-xs text-slate-600" for="rc-<%= s.id %>">实际命中数</label>
+                    <input id="rc-<%= s.id %>" type="number" min="0" step="1" name="result_count"
+                           value="<%= s.result_count != null ? s.result_count : '' %>"
+                           placeholder="跑完再填"
+                           class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm">
+                  </div>
+                  <div>
+                    <label class="text-xs text-slate-600" for="sd-<%= s.id %>">检索日期</label>
+                    <input id="sd-<%= s.id %>" type="date" name="search_date"
+                           value="<%= s.search_date || '' %>"
+                           class="mt-1 block w-full rounded-md border-slate-300 px-2 py-1.5 text-sm">
+                  </div>
+                  <button type="submit"
+                          class="rounded-md bg-indigo-600 px-3 py-1.5 text-xs text-white hover:bg-indigo-500">
+                    保存记录
+                  </button>
+                </form>
+              </article>
+            <% }) %>
           </div>
+        <% } else if (canRecommend) { %>
+          <p class="text-xs text-indigo-700 border-t border-indigo-200 pt-3">
+            还没生成主检索。点击右上角按钮,AI 会基于你已跑过的命中数 + 协议,为每个目标库各合成一条。
+          </p>
         <% } %>
       </section>
     <% } %>
