@@ -47,7 +47,7 @@ const LIGHT_MODEL = {
   openai: process.env.OPENAI_MODEL_LIGHT || 'gpt-5.4-mini',
 }
 
-import { resolveStepModel } from './settings.js'
+import { resolveStepModel, resolveStepReasoning } from './settings.js'
 
 /**
  * 从模型字符串里提取语义。优先级:
@@ -346,8 +346,12 @@ export async function runLlm(db, opts) {
     }
   }
 
-  // 4. 解析模型
+  // 4. 解析模型 + 思考强度(后者会自动按 provider 翻译)
   const model = resolveModel(db, { model: modelHint, provider: cred.provider, actionType })
+  const reasoning = (() => {
+    try { return resolveStepReasoning(db, { actionType, provider: cred.provider }) }
+    catch { return null }
+  })()
 
   // 5. 路由到 provider 适配器
   const started = Date.now()
@@ -355,24 +359,24 @@ export async function runLlm(db, opts) {
   try {
     if (cred.provider === 'anthropic' && cred.auth_type === 'api_key') {
       providerResult = await withTimeout(
-        anthropicApi.sendMessage({ apiKey: decrypted.api_key, model, system, prompt, maxTokens }),
+        anthropicApi.sendMessage({ apiKey: decrypted.api_key, model, system, prompt, reasoning, maxTokens }),
         timeoutMs ?? 60_000,
       )
     } else if (cred.provider === 'anthropic' && cred.auth_type === 'oauth') {
       providerResult = await anthropicCli.sendMessage({
         homePath: decrypted.home_path,
-        model, system, prompt,
+        model, system, prompt, reasoning,
         timeoutMs: timeoutMs ?? 180_000,
       })
     } else if (cred.provider === 'openai' && cred.auth_type === 'api_key') {
       providerResult = await withTimeout(
-        openaiApi.sendMessage({ apiKey: decrypted.api_key, model, system, prompt, maxTokens }),
+        openaiApi.sendMessage({ apiKey: decrypted.api_key, model, system, prompt, reasoning, maxTokens }),
         timeoutMs ?? 60_000,
       )
     } else if (cred.provider === 'openai' && cred.auth_type === 'oauth') {
       providerResult = await openaiCli.sendMessage({
         homePath: decrypted.home_path,
-        model, system, prompt,
+        model, system, prompt, reasoning,
         timeoutMs: timeoutMs ?? 180_000,
       })
     } else {
@@ -433,6 +437,7 @@ export async function runLlm(db, opts) {
     text,
     data,
     model,
+    reasoning: reasoning || null,
     provider: cred.provider,
     authType: cred.auth_type,
     credentialId: cred.id,

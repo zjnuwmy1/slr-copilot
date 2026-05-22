@@ -4,9 +4,11 @@
   <div class="flex items-center justify-between">
     <div>
       <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin · Settings</p>
-      <h1 class="mt-1 text-2xl font-semibold tracking-tight">步骤模型配置</h1>
+      <h1 class="mt-1 text-2xl font-semibold tracking-tight">步骤模型 + 思考强度</h1>
       <p class="mt-1 text-sm text-slate-500">
-        配置每一步 LLM 调用使用的模型。空值 = 用步骤默认 tier(按用户已绑 provider 解析)。
+        每一步可独立设模型与思考强度。空 = 用步骤默认。
+        Claude 用 think / think hard / ultrathink 等关键词,Codex(GPT-5)用 minimal / low / medium / high。
+        当选的模型与平台凭证 provider 不一致时,思考强度会自动按等价规则翻译。
       </p>
     </div>
     <a href="/admin" class="text-sm text-slate-500 hover:text-slate-900">← 返回管理后台</a>
@@ -16,7 +18,7 @@
     <p class="text-xs font-medium uppercase text-slate-400">当前状态</p>
     <p class="mt-2 text-sm text-slate-700">
       已配置 <span class="font-semibold text-slate-900"><%= configuredCount %></span>
-      / <%= totalCount %> 个步骤,其余用默认。
+      / <%= totalCount %> 个步骤(其余用默认值)。
     </p>
   </div>
 
@@ -25,60 +27,86 @@
       <table class="min-w-full text-sm">
         <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase text-slate-500">
           <tr>
-            <th class="px-4 py-2">步骤</th>
-            <th class="px-4 py-2">说明 / 默认 tier</th>
-            <th class="px-4 py-2">使用的模型</th>
+            <th class="px-4 py-2" style="min-width: 200px;">步骤</th>
+            <th class="px-4 py-2" style="min-width: 280px;">使用的模型</th>
+            <th class="px-4 py-2" style="min-width: 220px;">思考强度</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
-          <% stepKeys.forEach((key) => { %>
-            <% const spec = stepSpecs[key] %>
-            <% const curVal = current[key] || '' %>
+          <% stepKeys.forEach((key) => {
+               const spec = stepSpecs[key]
+               const curModel = current[key] || ''
+               const curReasoning = currentReasoning[key] || ''
+               // 推断默认 provider(用于初始化 reasoning 下拉选项)
+               let inferredProvider = 'anthropic'
+               if (curModel) {
+                 if (availableModels.openai.some((m) => m.id === curModel)) inferredProvider = 'openai'
+                 else if (availableModels.anthropic.some((m) => m.id === curModel)) inferredProvider = 'anthropic'
+                 else if (['heavy','standard','light'].includes(curModel)) inferredProvider = 'anthropic'
+               }
+          %>
             <tr class="align-top">
               <td class="px-4 py-3">
                 <p class="font-semibold text-slate-800"><%= spec.label %></p>
-                <p class="mt-1 font-mono text-[10px] text-slate-400"><%= key %></p>
-              </td>
-              <td class="px-4 py-3 text-xs text-slate-600">
-                <p><%= spec.description %></p>
-                <p class="mt-1 text-slate-400">
-                  默认 tier:
-                  <span class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">
-                    <%= spec.defaultTier %>
-                  </span>
+                <p class="mt-1 text-xs text-slate-500"><%= spec.description %></p>
+                <p class="mt-2 text-[10px] text-slate-400">
+                  默认 tier:<span class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-700"><%= spec.defaultTier %></span>
+                  · 默认思考:<span class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-700"><%= spec.defaultReasoning %></span>
                 </p>
               </td>
               <td class="px-4 py-3">
                 <select
                   name="step_model.<%= key %>"
-                  class="w-full rounded-md border-slate-300 px-3 py-1.5 text-sm"
+                  class="step-model w-full rounded-md border-slate-300 px-3 py-1.5 text-sm"
+                  data-step="<%= key %>"
                 >
-                  <option value="" <%= curVal === '' ? 'selected' : '' %>>(空 — 用默认)</option>
+                  <option value="" <%= curModel === '' ? 'selected' : '' %>>(用默认)</option>
                   <optgroup label="── alias ──">
-                    <option value="heavy"    <%= curVal === 'heavy'    ? 'selected' : '' %>>heavy(= flagship)</option>
-                    <option value="standard" <%= curVal === 'standard' ? 'selected' : '' %>>standard</option>
-                    <option value="light"    <%= curVal === 'light'    ? 'selected' : '' %>>light</option>
+                    <option value="heavy"    data-provider="anthropic" <%= curModel === 'heavy'    ? 'selected' : '' %>>heavy(= flagship)</option>
+                    <option value="standard" data-provider="anthropic" <%= curModel === 'standard' ? 'selected' : '' %>>standard</option>
+                    <option value="light"    data-provider="anthropic" <%= curModel === 'light'    ? 'selected' : '' %>>light</option>
                   </optgroup>
-                  <optgroup label="── Anthropic ──">
+                  <optgroup label="── Anthropic (Claude) ──">
                     <% availableModels.anthropic.forEach((m) => { %>
-                      <option value="<%= m.id %>" <%= curVal === m.id ? 'selected' : '' %>>
+                      <option value="<%= m.id %>" data-provider="anthropic" <%= curModel === m.id ? 'selected' : '' %>>
                         <%= m.label %>
                       </option>
                     <% }) %>
                   </optgroup>
-                  <optgroup label="── OpenAI ──">
+                  <optgroup label="── OpenAI (Codex / GPT) ──">
                     <% availableModels.openai.forEach((m) => { %>
-                      <option value="<%= m.id %>" <%= curVal === m.id ? 'selected' : '' %>>
+                      <option value="<%= m.id %>" data-provider="openai" <%= curModel === m.id ? 'selected' : '' %>>
                         <%= m.label %>
                       </option>
                     <% }) %>
                   </optgroup>
                 </select>
-                <% if (curVal) { %>
-                  <p class="mt-1 font-mono text-[10px] text-emerald-600">当前:<%= curVal %></p>
-                <% } else { %>
-                  <p class="mt-1 text-[10px] text-slate-400">未配置 — 用默认 tier</p>
-                <% } %>
+              </td>
+              <td class="px-4 py-3">
+                <select
+                  name="step_reasoning.<%= key %>"
+                  class="step-reasoning w-full rounded-md border-slate-300 px-3 py-1.5 text-sm"
+                  data-step="<%= key %>"
+                  data-current="<%= curReasoning %>"
+                >
+                  <!-- 下面两组都渲染出来,JS 根据当前 provider 显示/隐藏 -->
+                  <option value="" <%= curReasoning === '' ? 'selected' : '' %>>(用默认)</option>
+                  <optgroup label="── Claude · think keywords ──" data-provider="anthropic">
+                    <% reasoningLevels.anthropic.forEach((r) => { %>
+                      <option value="<%= r.id %>" data-provider="anthropic" <%= curReasoning === r.id ? 'selected' : '' %>>
+                        <%= r.label %>
+                      </option>
+                    <% }) %>
+                  </optgroup>
+                  <optgroup label="── Codex · reasoning_effort ──" data-provider="openai">
+                    <% reasoningLevels.openai.forEach((r) => { %>
+                      <option value="<%= r.id %>" data-provider="openai" <%= curReasoning === r.id ? 'selected' : '' %>>
+                        <%= r.label %>
+                      </option>
+                    <% }) %>
+                  </optgroup>
+                </select>
+                <p class="mt-1 text-[10px] text-slate-400 step-reasoning-hint" data-step="<%= key %>"></p>
               </td>
             </tr>
           <% }) %>
@@ -89,12 +117,12 @@
     <div class="flex items-center justify-between">
       <button
         type="submit"
-        class="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+        class="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 transition"
       >
         保存所有
       </button>
       <p class="text-xs text-slate-400">
-        保存只对实际变化的字段写库与审计。
+        只对实际变化的字段写库与审计。
       </p>
     </div>
   </form>
@@ -102,24 +130,101 @@
   <form
     method="post"
     action="/admin/settings/reset"
-    onsubmit="return confirm('确定要重置所有步骤模型配置吗?所有步骤都会回到默认 tier。')"
+    onsubmit="return confirm('确定要重置所有步骤的模型和思考强度配置吗?所有步骤都会回到代码默认值。')"
     class="rounded-xl border border-red-200 bg-red-50/50 p-4"
   >
     <div class="flex items-center justify-between gap-4">
       <div>
         <p class="text-sm font-semibold text-red-800">重置全部</p>
         <p class="mt-1 text-xs text-red-700">
-          清空所有 <code class="font-mono">step_model.*</code> 配置,所有步骤回到代码默认 tier。
+          清空所有 <code class="font-mono">step_model.*</code> 与 <code class="font-mono">step_reasoning.*</code>,所有步骤回到代码默认。
         </p>
       </div>
       <button
         type="submit"
-        class="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100"
+        class="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 transition"
       >
         重置全部
       </button>
     </div>
   </form>
 </section>
+
+<script>
+(function () {
+  // 跨 provider 思考强度等价映射(和服务端 settings.js 保持一致)
+  const A2O = { off:'minimal', think:'minimal', think_hard:'low', think_harder:'medium', ultrathink:'high' };
+  const O2A = { minimal:'off', low:'think', medium:'think_hard', high:'ultrathink' };
+
+  function providerOfOption(optEl) {
+    return optEl ? (optEl.dataset.provider || 'anthropic') : 'anthropic';
+  }
+
+  function applyReasoningProvider(reasoningSelect, provider) {
+    // 切换 optgroup 可见性(用 disabled + hidden 双保险)
+    const groups = reasoningSelect.querySelectorAll('optgroup[data-provider]');
+    groups.forEach((g) => {
+      const match = g.dataset.provider === provider;
+      g.disabled = !match;
+      g.hidden = !match;
+      g.querySelectorAll('option').forEach((o) => {
+        o.disabled = !match;
+        o.hidden = !match;
+      });
+    });
+
+    // 如果当前选中的 option 不属于这个 provider,尝试翻译
+    const cur = reasoningSelect.value;
+    if (!cur) return;
+    const curOpt = reasoningSelect.options[reasoningSelect.selectedIndex];
+    const curProvider = providerOfOption(curOpt);
+    if (curProvider === provider) return;
+    // 翻译
+    const translated = provider === 'openai' ? (A2O[cur] || '') : (O2A[cur] || '');
+    if (translated) {
+      // 找到对应 provider 下匹配 value 的 option
+      const target = reasoningSelect.querySelector(`option[data-provider="${provider}"][value="${translated}"]`);
+      if (target) reasoningSelect.value = translated;
+    }
+  }
+
+  function updateHint(reasoningSelect, provider) {
+    const hint = document.querySelector(`.step-reasoning-hint[data-step="${reasoningSelect.dataset.step}"]`);
+    if (!hint) return;
+    const cur = reasoningSelect.value;
+    if (!cur) {
+      hint.textContent = '未配置 — 用步骤默认';
+      return;
+    }
+    if (provider === 'anthropic') {
+      hint.textContent = '将作为 Claude CLI/API 的思考预算(prompt 前缀关键词或 thinking.budget_tokens)';
+    } else {
+      hint.textContent = '将作为 Codex CLI 的 model_reasoning_effort / API 的 reasoning_effort';
+    }
+  }
+
+  function bindRow(modelSelect) {
+    const stepKey = modelSelect.dataset.step;
+    const reasoningSelect = document.querySelector(`.step-reasoning[data-step="${stepKey}"]`);
+    if (!reasoningSelect) return;
+
+    function refresh() {
+      const opt = modelSelect.options[modelSelect.selectedIndex];
+      const provider = providerOfOption(opt);
+      applyReasoningProvider(reasoningSelect, provider);
+      updateHint(reasoningSelect, provider);
+    }
+
+    modelSelect.addEventListener('change', refresh);
+    reasoningSelect.addEventListener('change', () => {
+      const opt = modelSelect.options[modelSelect.selectedIndex];
+      updateHint(reasoningSelect, providerOfOption(opt));
+    });
+    refresh();
+  }
+
+  document.querySelectorAll('.step-model').forEach(bindRow);
+})();
+</script>
 
 <%- include('../partials/footer') %>

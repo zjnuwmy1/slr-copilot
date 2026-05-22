@@ -92,28 +92,46 @@ export async function testApiKey(apiKey) {
   }
 }
 
+// reasoning id → extended-thinking 预算 tokens(0 = 关闭)
+const REASONING_TO_BUDGET = {
+  off: 0,
+  think: 2048,
+  think_hard: 4096,
+  think_harder: 8192,
+  ultrathink: 16384,
+}
+
 /**
- * 给汇总层 / LLM router 用。Phase 1 不直接调。
+ * 给汇总层 / LLM router 用。
  *
  * @param {object} args
  * @param {string} args.apiKey
  * @param {string} args.model
  * @param {string} [args.system]
  * @param {string} args.prompt
+ * @param {string} [args.reasoning] — off | think | think_hard | think_harder | ultrathink
  * @param {number} [args.maxTokens]
  * @returns {Promise<{ text: string, usage: { input_tokens: number, output_tokens: number } }>}
  */
-export async function sendMessage({ apiKey, model, system, prompt, maxTokens = 1024 }) {
+export async function sendMessage({ apiKey, model, system, prompt, reasoning, maxTokens = 1024 }) {
   if (!apiKey) throw new Error('sendMessage: apiKey required')
   if (!model) throw new Error('sendMessage: model required')
   if (!prompt) throw new Error('sendMessage: prompt required')
 
+  // extended thinking 仅在 budget > 0 时启用;启用后 max_tokens 必须 > budget + 缓冲
+  const budget = REASONING_TO_BUDGET[String(reasoning || '').toLowerCase()] || 0
+  const effectiveMax = budget > 0 ? Math.max(maxTokens, budget + 4096) : maxTokens
+
   const body = {
     model,
-    max_tokens: maxTokens,
+    max_tokens: effectiveMax,
     messages: [{ role: 'user', content: prompt }],
   }
   if (system) body.system = system
+  if (budget > 0) {
+    body.thinking = { type: 'enabled', budget_tokens: budget }
+    body.temperature = 1  // Anthropic 文档要求:thinking 必须搭配 temperature=1
+  }
 
   const res = await fetch(`${API_BASE}/v1/messages`, {
     method: 'POST',

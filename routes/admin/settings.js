@@ -16,7 +16,10 @@ import {
   STEP_SPECS,
   STEP_KEYS,
   AVAILABLE_MODELS,
+  REASONING_LEVELS_BY_PROVIDER,
+  ALL_REASONING_IDS,
   getAllStepModels,
+  getAllStepReasonings,
   getSetting,
   setSetting,
 } from '../../services/settings.js'
@@ -31,6 +34,14 @@ const VALID_ALIASES = new Set(['heavy', 'flagship', 'standard', 'light'])
 const ALL_MODEL_IDS = new Set(
   Object.values(AVAILABLE_MODELS).flat().map((m) => m.id)
 )
+
+// 是否合法的 reasoning id(空 = 用默认)
+function isValidReasoning(v) {
+  if (v === '' || v == null) return true
+  const s = String(v).trim()
+  if (s === '') return true
+  return ALL_REASONING_IDS.has(s)
+}
 
 function flash(req, type, message) {
   if (!req.session) return
@@ -53,16 +64,23 @@ function isValidValue(v) {
 
 router.get('/', (req, res) => {
   const db = req.app.locals.db
-  const current = getAllStepModels(db)  // { protocol_gen: 'xxx' | '', ... }
+  const current = getAllStepModels(db)                  // model
+  const currentReasoning = getAllStepReasonings(db)     // reasoning
 
-  const configuredCount = STEP_KEYS.filter((k) => current[k] && String(current[k]).trim()).length
+  const configuredCount = STEP_KEYS.filter(
+    (k) =>
+      (current[k] && String(current[k]).trim()) ||
+      (currentReasoning[k] && String(currentReasoning[k]).trim())
+  ).length
 
   res.render('admin/settings', {
     title: '步骤模型配置',
     stepKeys: STEP_KEYS,
     stepSpecs: STEP_SPECS,
     availableModels: AVAILABLE_MODELS,
+    reasoningLevels: REASONING_LEVELS_BY_PROVIDER,
     current,
+    currentReasoning,
     configuredCount,
     totalCount: STEP_KEYS.length,
   })
@@ -76,33 +94,52 @@ router.post('/', (req, res) => {
   const db = req.app.locals.db
   const body = req.body || {}
 
-  // 1. 收集 step_model.<key> 字段
-  const incoming = {}  // { key -> value(已 trim) }
+  // 1. 收集 step_model.<key> 和 step_reasoning.<key> 字段
+  const incomingModel = {}      // { stepKey -> trimmed value }
+  const incomingReasoning = {}
   for (const field of Object.keys(body)) {
-    if (!field.startsWith('step_model.')) continue
-    const key = field.slice('step_model.'.length)
-    if (!STEP_KEYS.includes(key)) {
-      flash(req, 'error', `非法步骤:${key}`)
-      return res.redirect('/admin/settings')
+    if (field.startsWith('step_model.')) {
+      const key = field.slice('step_model.'.length)
+      if (!STEP_KEYS.includes(key)) {
+        flash(req, 'error', `非法步骤:${key}`)
+        return res.redirect('/admin/settings')
+      }
+      const value = (body[field] == null ? '' : String(body[field])).trim()
+      if (!isValidValue(value)) {
+        flash(req, 'error', `非法模型值:${key} = ${value}`)
+        return res.redirect('/admin/settings')
+      }
+      incomingModel[key] = value
+    } else if (field.startsWith('step_reasoning.')) {
+      const key = field.slice('step_reasoning.'.length)
+      if (!STEP_KEYS.includes(key)) {
+        flash(req, 'error', `非法步骤(reasoning):${key}`)
+        return res.redirect('/admin/settings')
+      }
+      const value = (body[field] == null ? '' : String(body[field])).trim()
+      if (!isValidReasoning(value)) {
+        flash(req, 'error', `非法思考强度:${key} = ${value}`)
+        return res.redirect('/admin/settings')
+      }
+      incomingReasoning[key] = value
     }
-    const raw = body[field]
-    const value = (raw == null ? '' : String(raw)).trim()
-    if (!isValidValue(value)) {
-      flash(req, 'error', `非法模型值:${key} = ${value}`)
-      return res.redirect('/admin/settings')
-    }
-    incoming[key] = value
   }
 
-  // 2. diff 出真正变化
-  const changes = []  // { key, old_value, new_value }
+  // 2. diff 出真正变化(model + reasoning 一起算)
+  const changes = []  // { kind, key, old_value, new_value }
   for (const key of STEP_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(incoming, key)) continue
-    const settingKey = `step_model.${key}`
-    const oldRaw = getSetting(db, settingKey) || ''
-    const newVal = incoming[key]
-    if (oldRaw === newVal) continue
-    changes.push({ key, old_value: oldRaw || null, new_value: newVal || null })
+    if (Object.prototype.hasOwnProperty.call(incomingModel, key)) {
+      const settingKey = `step_model.${key}`
+      const oldRaw = getSetting(db, settingKey) || ''
+      const newVal = incomingModel[key]
+      if (oldRaw !== newVal) changes.push({ kind: 'model', key, settingKey, old_value: oldRaw || null, new_value: newVal || null })
+    }
+    if (Object.prototype.hasOwnProperty.call(incomingReasoning, key)) {
+      const settingKey = `step_reasoning.${key}`
+      const oldRaw = getSetting(db, settingKey) || ''
+      const newVal = incomingReasoning[key]
+      if (oldRaw !== newVal) changes.push({ kind: 'reasoning', key, settingKey, old_value: oldRaw || null, new_value: newVal || null })
+    }
   }
 
   if (changes.length === 0) {
@@ -114,12 +151,11 @@ router.post('/', (req, res) => {
   try {
     const tx = db.transaction(() => {
       for (const ch of changes) {
-        const settingKey = `step_model.${ch.key}`
         if (ch.new_value == null || ch.new_value === '') {
-          db.prepare('DELETE FROM system_settings WHERE key = ?').run(settingKey)
+          db.prepare('DELETE FROM system_settings WHERE key = ?').run(ch.settingKey)
         } else {
           setSetting(db, {
-            key: settingKey,
+            key: ch.settingKey,
             value: ch.new_value,
             updatedByUserId: req.user.id,
           })
@@ -140,7 +176,9 @@ router.post('/', (req, res) => {
     payload: { changes },
   })
 
-  flash(req, 'success', `已保存 ${changes.length} 项变化`)
+  const modelChanges = changes.filter((c) => c.kind === 'model').length
+  const reasonChanges = changes.filter((c) => c.kind === 'reasoning').length
+  flash(req, 'success', `已保存:${modelChanges} 项模型 · ${reasonChanges} 项思考强度`)
   res.redirect('/admin/settings')
 })
 
@@ -151,10 +189,15 @@ router.post('/', (req, res) => {
 router.post('/reset', (req, res) => {
   const db = req.app.locals.db
 
-  const before = getAllStepModels(db)
-  const removedKeys = STEP_KEYS.filter((k) => before[k] && String(before[k]).trim())
+  const beforeModel = getAllStepModels(db)
+  const beforeReason = getAllStepReasonings(db)
+  const removedSteps = STEP_KEYS.filter(
+    (k) =>
+      (beforeModel[k] && String(beforeModel[k]).trim()) ||
+      (beforeReason[k] && String(beforeReason[k]).trim())
+  )
 
-  if (removedKeys.length === 0) {
+  if (removedSteps.length === 0) {
     flash(req, 'success', '所有步骤已经是默认值,无需重置')
     return res.redirect('/admin/settings')
   }
@@ -163,6 +206,7 @@ router.post('/reset', (req, res) => {
     const tx = db.transaction(() => {
       for (const key of STEP_KEYS) {
         db.prepare('DELETE FROM system_settings WHERE key = ?').run(`step_model.${key}`)
+        db.prepare('DELETE FROM system_settings WHERE key = ?').run(`step_reasoning.${key}`)
       }
     })
     tx()
@@ -177,11 +221,15 @@ router.post('/reset', (req, res) => {
     userId: req.user.id,
     actorUserId: req.user.id,
     payload: {
-      cleared: removedKeys.map((k) => ({ key: k, old_value: before[k] })),
+      cleared: removedSteps.map((k) => ({
+        key: k,
+        old_model: beforeModel[k] || null,
+        old_reasoning: beforeReason[k] || null,
+      })),
     },
   })
 
-  flash(req, 'success', `已重置 ${removedKeys.length} 项,全部回到默认`)
+  flash(req, 'success', `已重置 ${removedSteps.length} 项,全部回到默认`)
   res.redirect('/admin/settings')
 })
 

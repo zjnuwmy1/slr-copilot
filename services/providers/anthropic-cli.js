@@ -41,11 +41,38 @@ const DISALLOWED_TOOLS = [
 ].join(',')
 
 /**
+ * Claude CLI 的 extended-thinking 关键词。把这些词放到 prompt 头部,
+ * CLI 会自动启用对应预算的 thinking。
+ *   off          → 不加前缀,模型完全不思考
+ *   think        → 'think' 关键词
+ *   think_hard   → 'think hard'
+ *   think_harder → 'think harder'
+ *   ultrathink   → 'ultrathink'
+ *
+ * 不认识的值当成 'off' 处理。
+ */
+const REASONING_TO_CLI_KEYWORD = {
+  off: '',
+  think: 'think',
+  think_hard: 'think hard',
+  think_harder: 'think harder',
+  ultrathink: 'ultrathink',
+}
+
+function withReasoningPrefix(prompt, reasoning) {
+  const kw = REASONING_TO_CLI_KEYWORD[String(reasoning || '').toLowerCase()]
+  if (!kw) return prompt
+  // Claude 文档里推荐放在 prompt 开头,后面跟实际任务
+  return `${kw}.\n\n${prompt}`
+}
+
+/**
  * @param {object} args
  * @param {string} args.homePath  — 用户 OAuth 凭证所在的 HOME(下面应有 .claude/)
  * @param {string} args.model
  * @param {string} [args.system]
  * @param {string} args.prompt
+ * @param {string} [args.reasoning] — off | think | think_hard | think_harder | ultrathink
  * @param {number} [args.timeoutMs]
  * @returns {Promise<{ text: string, latencyMs: number, raw?: object }>}
  */
@@ -54,15 +81,18 @@ export async function sendMessage({
   model,
   system,
   prompt,
+  reasoning,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }) {
   if (!homePath) throw new Error('anthropic-cli.sendMessage: homePath required')
   if (!model) throw new Error('anthropic-cli.sendMessage: model required')
   if (!prompt) throw new Error('anthropic-cli.sendMessage: prompt required')
 
+  const effectivePrompt = withReasoningPrefix(prompt, reasoning)
+
   const args = [
     '-p',
-    prompt,
+    effectivePrompt,
     '--output-format',
     'json',
     '--model',

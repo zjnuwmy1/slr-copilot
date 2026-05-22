@@ -52,31 +52,37 @@ export const STEP_SPECS = {
     label: '协议生成 (Protocol)',
     description: '生成研究问题 + 纳排标准 + 概念组',
     defaultTier: 'standard',
+    defaultReasoning: 'medium',
   },
   search_strategy: {
     label: '检索式生成 (Search)',
     description: 'WoS / Scopus / PubMed × 3 版检索式',
     defaultTier: 'standard',
+    defaultReasoning: 'medium',
   },
   screening: {
     label: '标题摘要初筛 (Screening)',
     description: '快速判断纳入/排除/待定 — 用便宜模型',
     defaultTier: 'light',
+    defaultReasoning: 'minimal',
   },
   extraction: {
     label: '全文结构化抽取 (Extraction)',
     description: '深度阅读 PDF 抽 finding / 限制 / 方法 — 用强模型',
     defaultTier: 'flagship',
+    defaultReasoning: 'high',
   },
   synthesis: {
     label: '主题聚类 + Evidence Matrix (Synthesis)',
     description: '跨论文综合 — 用强模型',
     defaultTier: 'flagship',
+    defaultReasoning: 'high',
   },
   drafting: {
     label: '综述章节写作 (Drafting)',
     description: 'Introduction / Methods / Results / Discussion 写作',
     defaultTier: 'standard',
+    defaultReasoning: 'medium',
   },
 }
 
@@ -179,4 +185,102 @@ export function getAllStepModels(db) {
     out[action] = getSetting(db, `step_model.${action}`) || ''  // 空 = 用默认
   }
   return out
+}
+
+// ============================================================
+// 推理强度(thinking / reasoning_effort)
+//
+// Claude 用 "think keywords"(把关键词放进 prompt 头部就触发 extended thinking,
+//   或调 API 时用 thinking: { type:'enabled', budget_tokens })
+// Codex (GPT-5 系列)用 reasoning_effort: minimal / low / medium / high
+//
+// 我们存的是 provider-neutral 字符串(其实就是 Claude 那 5 档 + Codex 那 4 档去重),
+// 在适配器里翻译成具体值。Admin UI 显示时按当前选的模型 provider 动态切换可选项。
+// ============================================================
+
+export const REASONING_LEVELS_BY_PROVIDER = {
+  anthropic: [
+    { id: 'off',          label: '不思考(最快)',                cliKeyword: '',            budgetTokens: 0 },
+    { id: 'think',        label: '思考 · think',                  cliKeyword: 'think',       budgetTokens: 2048 },
+    { id: 'think_hard',   label: '深度思考 · think hard',          cliKeyword: 'think hard',  budgetTokens: 4096 },
+    { id: 'think_harder', label: '更深度思考 · think harder',     cliKeyword: 'think harder',budgetTokens: 8192 },
+    { id: 'ultrathink',   label: '极致思考 · ultrathink(最慢)', cliKeyword: 'ultrathink',  budgetTokens: 16384 },
+  ],
+  openai: [
+    { id: 'minimal', label: '最低 · minimal(最快)',     effort: 'minimal' },
+    { id: 'low',     label: '低 · low',                    effort: 'low' },
+    { id: 'medium',  label: '中 · medium(推荐)',         effort: 'medium' },
+    { id: 'high',    label: '高 · high(最慢/最深入)',    effort: 'high' },
+  ],
+}
+
+// 所有合法 reasoning id(扁平,用于校验)
+export const ALL_REASONING_IDS = new Set([
+  ...REASONING_LEVELS_BY_PROVIDER.anthropic.map((r) => r.id),
+  ...REASONING_LEVELS_BY_PROVIDER.openai.map((r) => r.id),
+])
+
+/**
+ * 跨 provider 翻译:admin 配置时基于 step_model 的 provider 选了一个 reasoning,
+ * 但运行时 LLM 调用走的可能是另一个 provider 的平台凭证。这里给个语义对等映射。
+ */
+const ANTHROPIC_TO_OPENAI = {
+  off: 'minimal', think: 'minimal',
+  think_hard: 'low',
+  think_harder: 'medium',
+  ultrathink: 'high',
+}
+const OPENAI_TO_ANTHROPIC = {
+  minimal: 'off',
+  low: 'think',
+  medium: 'think_hard',
+  high: 'ultrathink',
+}
+
+export function mapReasoningToProvider(level, provider) {
+  if (!level) return null
+  const l = String(level).trim().toLowerCase()
+  if (!l) return null
+  const set = REASONING_LEVELS_BY_PROVIDER[provider] || []
+  if (set.some((r) => r.id === l)) return l  // 已是目标 provider 的合法值
+  if (provider === 'openai' && ANTHROPIC_TO_OPENAI[l]) return ANTHROPIC_TO_OPENAI[l]
+  if (provider === 'anthropic' && OPENAI_TO_ANTHROPIC[l]) return OPENAI_TO_ANTHROPIC[l]
+  return null
+}
+
+/**
+ * 解析某 step 应该用的 reasoning(已翻译到指定 provider)。
+ *   1) settings.step_reasoning.<actionType> → 跨 provider 翻译
+ *   2) 否则用 STEP_SPECS[actionType].defaultReasoning → 翻译
+ *   3) 找不到 → 该 provider 的 "medium" 等价
+ *   4) actionType 不在 STEP_SPECS → 返回 null(让 provider 用自家默认)
+ */
+export function resolveStepReasoning(db, { actionType, provider }) {
+  const settingKey = `step_reasoning.${actionType}`
+  const configured = getSetting(db, settingKey)
+  if (configured) {
+    const m = mapReasoningToProvider(configured, provider)
+    if (m) return m
+  }
+  const fallback = STEP_SPECS[actionType]?.defaultReasoning
+  if (fallback) {
+    const m = mapReasoningToProvider(fallback, provider)
+    if (m) return m
+  }
+  return mapReasoningToProvider('medium', provider) || null
+}
+
+export function getAllStepReasonings(db) {
+  const out = {}
+  for (const action of STEP_KEYS) {
+    out[action] = getSetting(db, `step_reasoning.${action}`) || ''
+  }
+  return out
+}
+
+/** 拿某 reasoning id 在某 provider 下的元信息(label / budgetTokens / effort 等)。 */
+export function getReasoningMeta(level, provider) {
+  if (!level) return null
+  const list = REASONING_LEVELS_BY_PROVIDER[provider] || []
+  return list.find((r) => r.id === level) || null
 }

@@ -81,18 +81,20 @@ export async function testApiKey(apiKey) {
   }
 }
 
+// GPT-5 系列接受的 reasoning_effort 取值
+const OPENAI_VALID_EFFORTS = new Set(['minimal', 'low', 'medium', 'high'])
+
 /**
- * Phase 1 暂不调,给汇总层用。
- *
  * @param {object} args
  * @param {string} args.apiKey
  * @param {string} args.model
  * @param {string} [args.system]
  * @param {string} args.prompt
+ * @param {string} [args.reasoning] — minimal | low | medium | high
  * @param {number} [args.maxTokens]
  * @returns {Promise<{ text: string, usage: { input_tokens: number, output_tokens: number } }>}
  */
-export async function sendMessage({ apiKey, model, system, prompt, maxTokens = 1024 }) {
+export async function sendMessage({ apiKey, model, system, prompt, reasoning, maxTokens = 1024 }) {
   if (!apiKey) throw new Error('sendMessage: apiKey required')
   if (!model) throw new Error('sendMessage: model required')
   if (!prompt) throw new Error('sendMessage: prompt required')
@@ -101,17 +103,23 @@ export async function sendMessage({ apiKey, model, system, prompt, maxTokens = 1
   if (system) messages.push({ role: 'system', content: system })
   messages.push({ role: 'user', content: prompt })
 
+  const body = {
+    model,
+    messages,
+    max_tokens: maxTokens,
+  }
+  const effort = String(reasoning || '').toLowerCase()
+  if (OPENAI_VALID_EFFORTS.has(effort)) {
+    body.reasoning_effort = effort
+  }
+
   const res = await fetch(`${API_BASE}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      max_tokens: maxTokens,
-    }),
+    body: JSON.stringify(body),
   })
 
   if (!res.ok) {

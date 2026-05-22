@@ -34,11 +34,20 @@ import os from 'node:os'
 const DEFAULT_TIMEOUT_MS = 3 * 60 * 1000
 const BIN = () => process.env.CODEX_BIN || 'codex'
 
+// codex 接受的 reasoning_effort 取值
+const OPENAI_VALID_EFFORTS = new Set(['minimal', 'low', 'medium', 'high'])
+
 /**
  * 内部:构造 codex exec args。导出供单测使用。
+ *
+ * @param {object} a
+ * @param {string} a.model
+ * @param {string} a.fullPrompt
+ * @param {string} a.outFile
+ * @param {string} [a.reasoningEffort] — minimal | low | medium | high
  */
-export function buildExecArgs({ model, fullPrompt, outFile }) {
-  return [
+export function buildExecArgs({ model, fullPrompt, outFile, reasoningEffort }) {
+  const args = [
     'exec',
     '--json',
     '--skip-git-repo-check',
@@ -46,8 +55,12 @@ export function buildExecArgs({ model, fullPrompt, outFile }) {
     '-m', model,
     '-o', outFile,
     '-c', 'sandbox_permissions=["disk-full-read-access"]',
-    fullPrompt,
   ]
+  if (reasoningEffort && OPENAI_VALID_EFFORTS.has(reasoningEffort)) {
+    args.push('-c', `model_reasoning_effort="${reasoningEffort}"`)
+  }
+  args.push(fullPrompt)
+  return args
 }
 
 /**
@@ -64,6 +77,7 @@ export async function sendMessage({
   model,
   system,
   prompt,
+  reasoning,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }) {
   if (!homePath) throw new Error('openai-cli.sendMessage: homePath required')
@@ -79,8 +93,12 @@ export async function sendMessage({
     `codex_out_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.txt`
   )
 
-  // 3) args
-  const args = buildExecArgs({ model, fullPrompt, outFile })
+  // 3) args(可选注入 reasoning_effort)
+  const reasoningEffort = String(reasoning || '').toLowerCase()
+  const args = buildExecArgs({
+    model, fullPrompt, outFile,
+    reasoningEffort: OPENAI_VALID_EFFORTS.has(reasoningEffort) ? reasoningEffort : null,
+  })
 
   // 4) env:HOME 隔离
   const env = {
