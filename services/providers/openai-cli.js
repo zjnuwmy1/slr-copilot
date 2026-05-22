@@ -55,6 +55,19 @@ export function buildExecArgs({ model, fullPrompt, outFile, reasoningEffort }) {
     '-m', model,
     '-o', outFile,
     '-c', 'sandbox_permissions=["disk-full-read-access"]',
+    // 关掉 codex 默认开的"工具"feature。
+    // 原因:gpt-5.x 与 reasoning.effort='minimal' 配合时,API 不允许任何工具调用,
+    // 但 codex 0.132.0 默认会带 image_generation + tool_search(=web_search)+
+    // computer_use + browser_use 等。我们的 prompt 只是要 JSON 输出,完全不需要工具 —
+    // 关掉它们既避免 minimal 冲突,又减少不必要的服务端开销。
+    // 单元化用 --disable <feature>(等价于 -c features.<name>=false)
+    '--disable', 'image_generation',
+    '--disable', 'tool_search',
+    '--disable', 'computer_use',
+    '--disable', 'browser_use',
+    '--disable', 'browser_use_external',
+    '--disable', 'in_app_browser',
+    '--disable', 'multi_agent',
   ]
   if (reasoningEffort && OPENAI_VALID_EFFORTS.has(reasoningEffort)) {
     args.push('-c', `model_reasoning_effort="${reasoningEffort}"`)
@@ -94,7 +107,14 @@ export async function sendMessage({
   )
 
   // 3) args(可选注入 reasoning_effort)
-  const reasoningEffort = String(reasoning || '').toLowerCase()
+  // 防御:gpt-5.x + reasoning.effort='minimal' + 任何工具 = 400 invalid_request_error。
+  // 我们已经 --disable 了 image_generation / tool_search / browser_use 等,
+  // 但万一 codex 未来又默认开新工具,minimal 还是会炸。所以双保险:
+  // 看到 minimal 就 bump 到 low(对 screening 影响极小,gpt-5.5 low 一样快)。
+  let reasoningEffort = String(reasoning || '').toLowerCase()
+  if (reasoningEffort === 'minimal') {
+    reasoningEffort = 'low'
+  }
   const args = buildExecArgs({
     model, fullPrompt, outFile,
     reasoningEffort: OPENAI_VALID_EFFORTS.has(reasoningEffort) ? reasoningEffort : null,
