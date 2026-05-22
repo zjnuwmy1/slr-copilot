@@ -108,12 +108,79 @@ export function getProjectProgress(db, projectId) {
     stepStatus.search = { status: 'in_progress', summary: `${searchStats.total} 条检索式,未记录命中数` }
   }
 
-  // ---- 3-8. 占位 ----
+  // ---- 3. Screening 真实状态 ----
+  //   - 没 records  → not_started
+  //   - 有 records 但人工决定未覆盖 → in_progress
+  //   - 全部 records(去重后)都有人工决定 → done
   for (const key of ['screening', 'extraction', 'rob', 'synthesis', 'certainty', 'report']) {
     stepStatus[key] = { status: 'not_started', summary: '尚未开始' }
   }
+  try {
+    const recRow = db.prepare(
+      `SELECT COUNT(*) AS total FROM records
+       WHERE project_id = ? AND duplicate_of_record_id IS NULL`
+    ).get(projectId)
+    const totalRecords = recRow.total || 0
+    if (totalRecords > 0) {
+      const sdRow = db.prepare(
+        `SELECT
+           SUM(CASE WHEN COALESCE(sd.ai_suggestion, 'not_run') != 'not_run' THEN 1 ELSE 0 END) AS ai_done,
+           SUM(CASE WHEN COALESCE(sd.human_decision, 'not_decided') != 'not_decided' THEN 1 ELSE 0 END) AS hu_done
+         FROM records r
+         LEFT JOIN screening_decisions sd ON sd.record_id = r.id AND sd.stage = 'title_abstract'
+         WHERE r.project_id = ? AND r.duplicate_of_record_id IS NULL`
+      ).get(projectId)
+      const aiDone = sdRow.ai_done || 0
+      const humanDone = sdRow.hu_done || 0
+      if (humanDone >= totalRecords) {
+        stepStatus.screening = { status: 'done', summary: `${humanDone}/${totalRecords} 已人工决定` }
+      } else if (aiDone > 0 || humanDone > 0) {
+        stepStatus.screening = {
+          status: 'in_progress',
+          summary: `AI 跑了 ${aiDone}/${totalRecords},人工决定 ${humanDone}/${totalRecords}`,
+        }
+      } else {
+        stepStatus.screening = { status: 'in_progress', summary: `已导入 ${totalRecords} 篇,等待 AI/人工筛选` }
+      }
+    }
+  } catch (e) { /* keep not_started */ }
 
-  // certainty 真实状态:有 grade_assessments 即视为 done(Phase 6.5 GRADE)
+  // ---- 4. Extraction ----
+  //   有 extractions 行就视为 in_progress;all 纳入 records 都有 extraction → done
+  try {
+    const extRow = db.prepare(`SELECT COUNT(*) AS c FROM extractions WHERE project_id = ?`).get(projectId)
+    const extCount = extRow.c || 0
+    if (extCount > 0) {
+      // 计算 "已纳入待抽取的论文数"(human_decision = include)
+      const incRow = db.prepare(
+        `SELECT COUNT(*) AS c FROM screening_decisions
+         WHERE project_id = ? AND stage = 'title_abstract' AND human_decision = 'include'`
+      ).get(projectId)
+      const includeCount = incRow.c || 0
+      if (includeCount > 0 && extCount >= includeCount) {
+        stepStatus.extraction = { status: 'done', summary: `${extCount}/${includeCount} 篇已抽取` }
+      } else {
+        stepStatus.extraction = { status: 'in_progress', summary: `已抽取 ${extCount} 篇` }
+      }
+    }
+  } catch (e) { /* keep not_started */ }
+
+  // ---- 5. RoB(risk of bias):有 grade_assessments 即视为开始(没单独表)----
+  //   这步实际并入 GRADE 流程,暂不强校验
+
+  // ---- 6. Synthesis(主题聚类 + evidence matrix)----
+  try {
+    const thRow = db.prepare(`SELECT COUNT(*) AS c FROM themes WHERE project_id = ?`).get(projectId)
+    const epRow = db.prepare(`SELECT COUNT(*) AS c FROM evidence_points WHERE project_id = ?`).get(projectId)
+    if ((thRow.c || 0) > 0 || (epRow.c || 0) > 0) {
+      stepStatus.synthesis = {
+        status: (thRow.c || 0) > 0 ? 'in_progress' : 'in_progress',
+        summary: `${thRow.c || 0} 个主题,${epRow.c || 0} 个证据点`,
+      }
+    }
+  } catch (e) { /* keep not_started */ }
+
+  // ---- 7. Certainty (GRADE) ----
   try {
     const g = db
       .prepare('SELECT COUNT(*) AS c FROM grade_assessments WHERE project_id = ?')
@@ -122,6 +189,17 @@ export function getProjectProgress(db, projectId) {
       stepStatus.certainty = { status: 'done', summary: `${g.c} 个 outcome 已 GRADE 评级` }
     }
   } catch {}
+
+  // ---- 8. Report (drafting) ----
+  try {
+    const dsRow = db.prepare(`SELECT COUNT(*) AS c FROM draft_sections WHERE project_id = ?`).get(projectId)
+    if ((dsRow.c || 0) > 0) {
+      stepStatus.report = {
+        status: dsRow.c >= 5 ? 'done' : 'in_progress',  // 假设 5+ 个章节算完整
+        summary: `${dsRow.c} 个章节已生成`,
+      }
+    }
+  } catch (e) { /* keep not_started */ }
 
   // 简单的"锁"规则:协议未审批前后续不能开始
   if (stepStatus.protocol.status !== 'done') {

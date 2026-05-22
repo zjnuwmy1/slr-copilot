@@ -31,7 +31,14 @@ router.get('/', (req, res) => {
   const users = db.prepare('SELECT id, email FROM users WHERE is_active = 1').all()
   const userUsage = users.map((u) => {
     const s = getUserStorage(db, u.id)
-    return { id: u.id, email: u.email, bytes: s.total_bytes, project_count: s.project_count, projects_bytes: s.projects_bytes, oauth_bytes: s.oauth_home_bytes }
+    return {
+      id: u.id, email: u.email,
+      bytes: s.total_bytes,
+      project_count: s.project_count,
+      projects_bytes: s.projects_bytes,
+      oauth_bytes: s.oauth_home_bytes,
+      data_rows: s.data_rows_total || { records: 0, screening: 0, extractions: 0, themes: 0, draft_sections: 0 },
+    }
   }).sort((a, b) => b.bytes - a.bytes).slice(0, 10)
 
   // 项目 Top:全平台按占用排前 15(扫盘,百级项目可接受)

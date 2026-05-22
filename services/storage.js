@@ -167,10 +167,19 @@ export function getUserStorage(db, userId) {
   const projects = db.prepare('SELECT id, title FROM projects WHERE user_id = ?').all(userId)
   let projTotal = 0
   const perProject = []
+  // 聚合用户全部项目的 DB 行计数(CSV 导入项目文件系统占用 = 0,但 DB 里其实有数据;
+  //   不展示会让 admin 误以为"项目数据 0B = 啥都没有",其实有 156 篇 records)
+  const dataRowsTotal = {
+    records: 0, attachments: 0, screening: 0, extractions: 0,
+    themes: 0, grade: 0, draft_sections: 0,
+  }
   for (const p of projects) {
     const s = getProjectStorage(db, p.id)
     projTotal += s.total_bytes
     perProject.push({ id: p.id, title: p.title, ...s })
+    for (const k of Object.keys(dataRowsTotal)) {
+      dataRowsTotal[k] += s.counts[k] || 0
+    }
   }
 
   // 用户的 OAuth HOME
@@ -184,6 +193,8 @@ export function getUserStorage(db, userId) {
     oauth_home_files: homeUsage.files,
     project_count: projects.length,
     per_project: perProject.sort((a, b) => b.total_bytes - a.total_bytes),
+    // 新增:用户 DB 数据行汇总,UI 显示用
+    data_rows_total: dataRowsTotal,
   }
 }
 

@@ -184,9 +184,10 @@ router.post('/register', async (req, res) => {
 
   // 在事务里:插 user + 标记 invite,如果 invite 已经被并发使用就回滚
   const tx = db.transaction(() => {
+    // 新用户默认 economy 预设(超管可在 /admin/users 后台改;用户自己也能去 /account/preferences 改)
     db.prepare(
-      `INSERT INTO users (id, email, display_name, password_hash, role, is_active, invite_code_used)
-       VALUES (?, ?, ?, ?, ?, 1, ?)`
+      `INSERT INTO users (id, email, display_name, password_hash, role, is_active, invite_code_used, step_model_preset)
+       VALUES (?, ?, ?, ?, ?, 1, ?, 'economy')`
     ).run(id, email, display_name || email.split('@')[0], hash, role, invite_code)
 
     const upd = db
