@@ -92,29 +92,91 @@ export function buildRecommendPrompt({ topic, strategies }) {
 }
 
 /**
- * 把 LLM JSON 剥一层 envelope。常见的 LLM 喜欢套一个外壳:
- *   { result: { primary_choice: {...} } }
- *   { data: { primary_choice: {...} } }
- *   { output: {...} } / { recommendation: {...} } / { response: {...} }
+ * 在任意深度的对象树里递归查找带有"primary 类字段"的子对象。
+ * BFS 优先,最大深度 6,防止环。
  *
- * 如果当前对象已经有"知道的"顶层字段(primary / primary_choice / best / choice),
- * 不剥;否则尝试在常见 envelope key 下寻找。
+ * 命中的字段名(任一即可,大小写不敏感):
+ *   primary_choice / primary / best / recommended / choice / recommendation /
+ *   chosen / pick / selected / top_choice / mainChoice
  */
-function unwrapEnvelope(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw
-  const keys = Object.keys(raw)
-  const HAS_TOP = (obj) => {
-    const k = Object.keys(obj || {})
-    return k.some((x) => /^(primary_choice|primary|best|recommended|choice|recommendation)$/i.test(x))
-  }
-  if (HAS_TOP(raw)) return raw
-  for (const k of keys) {
-    if (/^(result|data|output|response|recommendation|answer)$/i.test(k)) {
-      const v = raw[k]
-      if (v && typeof v === 'object' && !Array.isArray(v) && HAS_TOP(v)) return v
+const PRIMARY_KEY_RE = /^(primary[_-]?choice|primary|best|recommended|choice|recommendation|chosen|pick|selected|top[_-]?choice|main[_-]?choice)$/i
+
+function findPrimaryContainer(root) {
+  if (!root || typeof root !== 'object') return null
+  const visited = new Set()
+  const queue = [{ node: root, depth: 0 }]
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()
+    if (!node || typeof node !== 'object') continue
+    if (visited.has(node)) continue
+    visited.add(node)
+    if (depth > 6) continue
+
+    // 对象:看自己是否含 primary-like key,否则把每个 value 入队
+    if (!Array.isArray(node)) {
+      for (const k of Object.keys(node)) {
+        if (PRIMARY_KEY_RE.test(k)) {
+          // 这个 node 自己就是 container
+          return node
+        }
+      }
+      for (const v of Object.values(node)) {
+        if (v && typeof v === 'object') queue.push({ node: v, depth: depth + 1 })
+      }
+    } else {
+      // 数组:每个元素入队(LLM 偶尔会 wrap 成 [{primary_choice: ...}])
+      for (const v of node) {
+        if (v && typeof v === 'object') queue.push({ node: v, depth: depth + 1 })
+      }
     }
   }
-  return raw
+  return null
+}
+
+/** 从 container 里取出 primary 对象(支持上面所有别名) */
+function pickPrimaryFrom(container) {
+  if (!container || typeof container !== 'object') return null
+  for (const k of Object.keys(container)) {
+    if (PRIMARY_KEY_RE.test(k)) {
+      let v = container[k]
+      // 数组形态:取第一个
+      if (Array.isArray(v) && v.length > 0) v = v[0]
+      if (v && typeof v === 'object' && !Array.isArray(v)) return v
+      // 退化:k 直接是字符串 id(例如 { best: 'str_xxx' })
+      if (typeof v === 'string' && v.trim()) {
+        return { strategy_id: v.trim() }
+      }
+    }
+  }
+  return null
+}
+
+/** 在任意位置找 secondary 数组 */
+const SECONDARY_KEY_RE = /^(secondary[_-]?choices|secondaries|candidates|alternates?|alternatives|backups?|fallbacks?|others?)$/i
+function findSecondaryArray(root) {
+  if (!root || typeof root !== 'object') return null
+  const visited = new Set()
+  const queue = [{ node: root, depth: 0 }]
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()
+    if (!node || typeof node !== 'object') continue
+    if (visited.has(node)) continue
+    visited.add(node)
+    if (depth > 6) continue
+    if (!Array.isArray(node)) {
+      for (const k of Object.keys(node)) {
+        if (SECONDARY_KEY_RE.test(k) && Array.isArray(node[k])) return node[k]
+      }
+      for (const v of Object.values(node)) {
+        if (v && typeof v === 'object') queue.push({ node: v, depth: depth + 1 })
+      }
+    } else {
+      for (const v of node) {
+        if (v && typeof v === 'object') queue.push({ node: v, depth: depth + 1 })
+      }
+    }
+  }
+  return null
 }
 
 // 接受 strategy_id 的多个别名;返回 trimmed 字符串或 ''
@@ -125,6 +187,41 @@ function readStrategyId(obj) {
     if (typeof c === 'string' && c.trim()) return c.trim()
   }
   return ''
+}
+
+// 接受 reason 的多个别名:reason / explanation / rationale / why / justification / note(s)
+function readReason(obj) {
+  if (!obj || typeof obj !== 'object') return ''
+  const cands = [obj.reason, obj.explanation, obj.rationale, obj.why, obj.justification, obj.note, obj.notes, obj.comment]
+  for (const c of cands) {
+    if (typeof c === 'string' && c.trim()) return c.trim().slice(0, 240)
+  }
+  return ''
+}
+
+// 在任意深度找第一个含 strategy_id 的节点(BFS,最大深度 6)
+function findFirstNodeWithStrategyId(root) {
+  if (!root || typeof root !== 'object') return null
+  const visited = new Set()
+  const queue = [{ node: root, depth: 0 }]
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()
+    if (!node || typeof node !== 'object') continue
+    if (visited.has(node)) continue
+    visited.add(node)
+    if (depth > 6) continue
+    if (!Array.isArray(node)) {
+      if (readStrategyId(node)) return node
+      for (const v of Object.values(node)) {
+        if (v && typeof v === 'object') queue.push({ node: v, depth: depth + 1 })
+      }
+    } else {
+      for (const v of node) {
+        if (v && typeof v === 'object') queue.push({ node: v, depth: depth + 1 })
+      }
+    }
+  }
+  return null
 }
 
 // 在候选 ids 集合里"模糊匹配":精确 → 大小写不敏感 → 含子串
@@ -160,35 +257,48 @@ export function normalizeRecommendOutput(raw, validIds) {
     return { ok: false, error: 'LLM 返回不是有效 JSON 对象' }
   }
   const ids = validIds instanceof Set ? validIds : new Set(Array.isArray(validIds) ? validIds : [])
-  raw = unwrapEnvelope(raw)
 
-  // primary —— 尝试所有可能的字段名
-  let p =
-    raw.primary_choice ??
-    raw.primary ??
-    raw.best ??
-    raw.recommended ??
-    raw.choice ??
-    raw.recommendation ??
-    null
-  // 有些 LLM 把它当成数组(放第一条)
-  if (Array.isArray(p)) p = p[0] ?? null
+  // 1) 递归找到含 primary-like key 的 container
+  const container = findPrimaryContainer(raw)
+  let p = container ? pickPrimaryFrom(container) : null
 
-  // 如果还没找到,但有 secondary_choices,就 promote 第一条
+  // 2) 兜底:如果 raw 顶层是数组,且第一项含 strategy_id,直接当 primary
+  if (!p && Array.isArray(raw) && raw.length > 0 && readStrategyId(raw[0])) {
+    p = raw[0]
+  }
+
+  // 3) 兜底:如果整棵树里有任何节点直接含 strategy_id(LLM 干脆没用 primary
+  //    包装,只输出一条 {strategy_id, reason}),也接受
+  if (!p || typeof p !== 'object') {
+    p = findFirstNodeWithStrategyId(raw)
+  }
+
+  // 4) 兜底:promote 第一条 secondary
   let promotedFromSecondary = false
   if (!p || typeof p !== 'object') {
-    const sec = raw.secondary_choices || raw.secondaries || raw.candidates
-    if (Array.isArray(sec) && sec.length > 0 && typeof sec[0] === 'object') {
-      p = sec[0]
+    const secArr = findSecondaryArray(raw)
+    if (Array.isArray(secArr) && secArr.length > 0 && typeof secArr[0] === 'object') {
+      p = secArr[0]
       promotedFromSecondary = true
     }
   }
 
   if (!p || typeof p !== 'object') {
-    return { ok: false, error: 'AI 返回里没找到 primary_choice / best / recommended 字段' }
+    return { ok: false, error: 'AI 返回里没找到 primary_choice / best / recommended 字段(也找不到任何含 strategy_id 的节点)' }
   }
 
-  const pidRaw = readStrategyId(p)
+  // 如果取到的 primary 对象自身没有 strategy_id(双层 wrapping,例如
+  // {recommendation:{best:{strategy_id:...}}} — 外层 'recommendation' 匹配了
+  // PRIMARY_KEY_RE,内层 'best' 也匹配,我们取到的是中间那层),
+  // 在它内部再递归找一次。
+  let pidRaw = readStrategyId(p)
+  if (!pidRaw) {
+    const innerNode = findFirstNodeWithStrategyId(p)
+    if (innerNode) {
+      p = innerNode
+      pidRaw = readStrategyId(p)
+    }
+  }
   if (!pidRaw) {
     return { ok: false, error: 'AI 推荐结果缺少 strategy_id(也试过 id / strategyId 都没有)' }
   }
@@ -199,16 +309,13 @@ export function normalizeRecommendOutput(raw, validIds) {
       error: `AI 给的 strategy_id "${pidRaw.slice(0, 60)}" 不在本次候选列表里(可能是模型编造)`,
     }
   }
-  const preason = typeof p.reason === 'string'
-    ? p.reason.trim().slice(0, 240)
-    : (typeof p.explanation === 'string' ? p.explanation.trim().slice(0, 240) : '')
+  const preason = readReason(p)
 
   // secondary
   const secondary = []
-  const secRaw = raw.secondary_choices || raw.secondaries || raw.candidates || []
+  const secRaw = findSecondaryArray(raw) || []
   if (Array.isArray(secRaw)) {
     for (let i = 0; i < secRaw.length; i++) {
-      // 如果上面 promote 过,跳过第 0 条(它是 primary)
       if (promotedFromSecondary && i === 0) continue
       const s = secRaw[i]
       if (!s || typeof s !== 'object') continue
@@ -218,9 +325,7 @@ export function normalizeRecommendOutput(raw, validIds) {
       if (!sid) continue
       if (sid === pid) continue
       const role = typeof s.role === 'string' ? s.role.trim().slice(0, 40) : ''
-      const reason = typeof s.reason === 'string'
-        ? s.reason.trim().slice(0, 200)
-        : (typeof s.explanation === 'string' ? s.explanation.trim().slice(0, 200) : '')
+      const reason = readReason(s).slice(0, 200)
       secondary.push({ strategy_id: sid, role, reason })
       if (secondary.length >= 3) break
     }

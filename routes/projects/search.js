@@ -537,9 +537,13 @@ router.post('/:id/search/recommend-best', async (req, res) => {
       system: RECOMMEND_SYSTEM,
       prompt: userPrompt,
       expectJson: true,
-      model: 'heavy',     // 之前用 standard 偶尔会出 envelope 包装 / 字段命名漂移
-      maxTokens: 2048,    // 1024 在 secondary_choices > 2 条时偶尔截断,2K 更稳
-      timeoutMs: 120_000,
+      // 'heavy' alias 在 search_recommend 这种非 STEP_SPECS 步骤下会 fallback
+      // 到 standard(=sonnet),所以这里直接给具体模型 id 锁旗舰。
+      // Anthropic 平台凭证 → opus-4-7;OpenAI → gpt-5.5(由 resolveModel
+      // 跨 provider 翻译)。
+      model: 'claude-opus-4-7',
+      maxTokens: 2048,
+      timeoutMs: 180_000,
     })
   } catch (e) {
     console.error('[search/recommend-best] runLlm threw:', e)
@@ -568,6 +572,17 @@ router.post('/:id/search/recommend-best', async (req, res) => {
   const normalized = normalizeRecommendOutput(result.data || null, validIds)
 
   if (!normalized.ok) {
+    // 捕获实际的 raw 形状,便于排查 LLM 字段漂移
+    let rawShape = null
+    try {
+      if (result.data && typeof result.data === 'object') {
+        rawShape = {
+          top_keys: Object.keys(result.data).slice(0, 20),
+          // 把 raw 序列化截断保存(脱敏过的 ID 已经在 prompt 里,不算敏感)
+          raw_truncated: JSON.stringify(result.data).slice(0, 1000),
+        }
+      }
+    } catch { /* ignore */ }
     audit(db, req, {
       eventType: 'search_recommend_failed',
       userId: req.user.id,
@@ -577,6 +592,9 @@ router.post('/:id/search/recommend-best', async (req, res) => {
         error: normalized.error,
         had_json: !!result.data,
         model: result.model,
+        raw_shape: rawShape,
+        // 也把 LLM 原始文本前 800 字捕进来,看是不是包了 markdown / 解释
+        raw_text_head: typeof result.text === 'string' ? result.text.slice(0, 800) : null,
       },
     })
     req.session.flash = {
