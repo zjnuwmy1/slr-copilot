@@ -1,3 +1,5 @@
+import { canonicalDocType, canonicalLanguage, partitionByCanonical } from './_taxonomy.js'
+
 /**
  * AI 主检索优化(原"推荐最佳") —— 完全重新设计。
  *
@@ -271,6 +273,8 @@ export function buildRecommendPrompt({
   if (Array.isArray(pi.document_types) && pi.document_types.length) {
     lines.push('')
     lines.push(`**文献类型限定(必须逐字写进每条 query_text + concept_set.document_types,并显式 NOT 排除未列出的类型)**:`)
+    lines.push(`> ⚠ \`concept_set.document_types\` 字段请**逐字使用下面"允许"列表里给出的字符串**(如 "Journal Article"),`)
+    lines.push(`> 而不是数据库特有的简写(WoS "Article" / Scopus "ar")—— 简写只在 query_text 的 DT=/DOCTYPE() 子句里出现。`)
     pi.document_types.forEach((t) => lines.push(`  - 允许: ${t}`))
     const allowedLower = pi.document_types.map((t) => String(t).toLowerCase())
     const mustExclude = [
@@ -609,21 +613,21 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
       }
     }
     // document_types 私加协议外类型?
+    // 用 canonical 比对 —— 协议 "Journal Article" / WoS "Article" / Scopus "ar" 都归一到 canonical=article,
+    // 视为同一类型,不剔除也不报警。只有 canonical 真不一致(例如协议只允许 Article 但 AI 加了 Review)才剔。
     if (Array.isArray(protocolDocumentTypes) && protocolDocumentTypes.length && Array.isArray(conceptSet.document_types)) {
-      const allowedSet = new Set(protocolDocumentTypes.map((s) => String(s).toLowerCase()))
-      const extra = conceptSet.document_types.filter((t) => !allowedSet.has(String(t).toLowerCase()))
-      if (extra.length) {
-        warnings.unshift(`⚠ AI 在 document_types 加了协议外的:${extra.join(', ')} — 已自动剔除。`)
-        conceptSet.document_types = conceptSet.document_types.filter((t) => allowedSet.has(String(t).toLowerCase()))
+      const { kept, removed } = partitionByCanonical(conceptSet.document_types, protocolDocumentTypes, canonicalDocType)
+      if (removed.length) {
+        warnings.unshift(`⚠ AI 在 document_types 加了协议外的:${removed.join(', ')} — 已自动剔除。`)
+        conceptSet.document_types = kept
       }
     }
-    // language 私加协议外语言?
+    // language 私加协议外语言?同样走 canonical 比对(English / en / 英语 → english)
     if (Array.isArray(protocolLanguages) && protocolLanguages.length && Array.isArray(conceptSet.language)) {
-      const allowedSet = new Set(protocolLanguages.map((s) => String(s).toLowerCase()))
-      const extra = conceptSet.language.filter((t) => !allowedSet.has(String(t).toLowerCase()))
-      if (extra.length) {
-        warnings.unshift(`⚠ AI 在 language 加了协议外的:${extra.join(', ')} — 已自动剔除。`)
-        conceptSet.language = conceptSet.language.filter((t) => allowedSet.has(String(t).toLowerCase()))
+      const { kept, removed } = partitionByCanonical(conceptSet.language, protocolLanguages, canonicalLanguage)
+      if (removed.length) {
+        warnings.unshift(`⚠ AI 在 language 加了协议外的:${removed.join(', ')} — 已自动剔除。`)
+        conceptSet.language = kept
       }
     } else if ((!Array.isArray(protocolLanguages) || protocolLanguages.length === 0) && Array.isArray(conceptSet.language) && conceptSet.language.length) {
       warnings.unshift(`⚠ 协议未指定语言,但 AI 私加了 ${conceptSet.language.join(', ')} — 已清空。`)
