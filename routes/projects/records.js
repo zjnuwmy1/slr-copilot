@@ -146,6 +146,15 @@ function shapeRecord(row) {
     has_doi: !!(row.doi && String(row.doi).trim()),
     has_notes: !!(row.notes && String(row.notes).trim()),
     is_duplicate: !!row.duplicate_of_record_id,
+    // 筛选状态(从 LEFT JOIN screening_decisions 来,可能为 null)
+    ai_suggestion:  row.ai_suggestion  || 'not_run',
+    ai_reason:      row.ai_reason      || null,
+    ai_confidence:  row.ai_confidence  != null ? row.ai_confidence : null,
+    ai_model:       row.ai_model       || null,
+    human_decision: row.human_decision || 'not_decided',
+    human_reason:   row.human_reason   || null,
+    ai_matched_inclusion: parseJsonArrayField(row.ai_matched_inclusion),
+    ai_matched_exclusion: parseJsonArrayField(row.ai_matched_exclusion),
   }
 }
 
@@ -230,8 +239,21 @@ function buildListQuery(projectId, filters, page) {
   const listSql = `
     SELECT r.*,
       (SELECT COUNT(*) FROM attachments WHERE record_id = r.id AND attachment_kind = 'pdf') AS pdf_count,
-      (SELECT COUNT(*) FROM attachments WHERE record_id = r.id) AS total_attachments
+      (SELECT COUNT(*) FROM attachments WHERE record_id = r.id) AS total_attachments,
+      sd.id              AS sd_id,
+      sd.ai_suggestion   AS ai_suggestion,
+      sd.ai_reason       AS ai_reason,
+      sd.ai_confidence   AS ai_confidence,
+      sd.ai_model        AS ai_model,
+      sd.ai_matched_inclusion AS ai_matched_inclusion,
+      sd.ai_matched_exclusion AS ai_matched_exclusion,
+      sd.human_decision  AS human_decision,
+      sd.human_reason    AS human_reason,
+      sd.ai_ran_at       AS ai_ran_at,
+      sd.decided_at      AS decided_at
     FROM records r
+    LEFT JOIN screening_decisions sd
+      ON sd.record_id = r.id AND sd.stage = 'title_abstract'
     WHERE ${whereSql}
     ORDER BY (r.year IS NULL), r.year DESC, r.title
     LIMIT ? OFFSET ?
@@ -267,6 +289,57 @@ function getStats(db, projectId) {
     duplicates: row.duplicates || 0,
     missing_abstract: row.missing_abstract || 0,
   }
+}
+
+/**
+ * 筛选统计:AI 已建议 / 人工已决定 / 等等。只统计**非重复**条目,
+ * 因为重复条目本来就不进 PRISMA flow,不需要逐条 AI。
+ */
+function getScreeningStats(db, projectId) {
+  const row = db
+    .prepare(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN COALESCE(sd.ai_suggestion, 'not_run') != 'not_run' THEN 1 ELSE 0 END) AS ai_done,
+         SUM(CASE WHEN sd.ai_suggestion = 'include'   THEN 1 ELSE 0 END) AS ai_include,
+         SUM(CASE WHEN sd.ai_suggestion = 'exclude'   THEN 1 ELSE 0 END) AS ai_exclude,
+         SUM(CASE WHEN sd.ai_suggestion = 'uncertain' THEN 1 ELSE 0 END) AS ai_uncertain,
+         SUM(CASE WHEN COALESCE(sd.human_decision, 'not_decided') != 'not_decided' THEN 1 ELSE 0 END) AS human_done,
+         SUM(CASE WHEN sd.human_decision = 'include'   THEN 1 ELSE 0 END) AS human_include,
+         SUM(CASE WHEN sd.human_decision = 'exclude'   THEN 1 ELSE 0 END) AS human_exclude,
+         SUM(CASE WHEN sd.human_decision = 'uncertain' THEN 1 ELSE 0 END) AS human_uncertain
+       FROM records r
+       LEFT JOIN screening_decisions sd
+         ON sd.record_id = r.id AND sd.stage = 'title_abstract'
+       WHERE r.project_id = ? AND r.duplicate_of_record_id IS NULL`
+    )
+    .get(projectId) || {}
+  const total = row.total || 0
+  const ai_done = row.ai_done || 0
+  const human_done = row.human_done || 0
+  return {
+    total,
+    ai_done,
+    ai_pending: Math.max(0, total - ai_done),
+    ai_include:   row.ai_include   || 0,
+    ai_exclude:   row.ai_exclude   || 0,
+    ai_uncertain: row.ai_uncertain || 0,
+    human_done,
+    human_pending: Math.max(0, total - human_done),
+    human_include:   row.human_include   || 0,
+    human_exclude:   row.human_exclude   || 0,
+    human_uncertain: row.human_uncertain || 0,
+  }
+}
+
+function getApprovedProtocolMeta(db, projectId) {
+  return db
+    .prepare(
+      `SELECT version, approved_by_user FROM protocols
+       WHERE project_id = ? AND approved_by_user = 1
+       ORDER BY version DESC LIMIT 1`
+    )
+    .get(projectId) || null
 }
 
 // 构造翻页 URL,保留过滤参数
@@ -523,6 +596,8 @@ router.get('/:id/records', (req, res) => {
 
   const rows = db.prepare(listSql).all(...safeParams).map(shapeRecord)
   const stats = getStats(db, project.id)
+  const screeningStats = getScreeningStats(db, project.id)
+  const approvedProtocol = getApprovedProtocolMeta(db, project.id)
 
   let progress = null
   try {
@@ -546,6 +621,8 @@ router.get('/:id/records', (req, res) => {
     stepLabel: '3. 筛选(Screening)',
     records: rows,
     stats,
+    screeningStats,
+    approvedProtocol,
     filters,
     rawQuery: req.query,
     page,

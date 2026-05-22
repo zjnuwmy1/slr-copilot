@@ -14,6 +14,33 @@
 
   const hasAnyFilter = !!(q || yearFrom || yearTo || onlyPdf || onlyDoi || !hideDup)
   const recordsBase = `/projects/${project.id}/records`
+  const screeningBase = `/projects/${project.id}/screening`
+  // 当前完整 URL(给 AI 表单的 redirect_to,保留 page / filters)
+  const currentUrl = (typeof rawQuery === 'object' && rawQuery)
+    ? (function(){ const qs = new URLSearchParams(rawQuery).toString(); return qs ? `${recordsBase}?${qs}` : recordsBase })()
+    : recordsBase
+
+  const scrStats = (typeof screeningStats === 'object' && screeningStats) ? screeningStats : { total: 0, ai_done: 0, ai_pending: 0, human_done: 0, human_pending: 0, ai_include: 0, ai_exclude: 0, ai_uncertain: 0, human_include: 0, human_exclude: 0, human_uncertain: 0 }
+  const protoOk = !!(typeof approvedProtocol === 'object' && approvedProtocol)
+  const protoV = protoOk ? approvedProtocol.version : null
+
+  // 徽章 helpers(沿用 screening.ejs 的配色)
+  function aiBadge(s) {
+    return ({
+      include:   ['bg-emerald-100 text-emerald-700', '建议纳入'],
+      exclude:   ['bg-rose-100 text-rose-700',       '建议排除'],
+      uncertain: ['bg-amber-100 text-amber-800',     '不确定'],
+      not_run:   ['bg-slate-100 text-slate-500',     '未跑'],
+    })[s] || ['bg-slate-100 text-slate-500', s]
+  }
+  function humanBadge(s) {
+    return ({
+      include:     ['bg-emerald-600 text-white',   '纳入'],
+      exclude:     ['bg-rose-600 text-white',      '排除'],
+      uncertain:   ['bg-amber-500 text-white',     '不确定'],
+      not_decided: ['bg-slate-200 text-slate-600', '未决定'],
+    })[s] || ['bg-slate-200 text-slate-600', s]
+  }
 %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
@@ -97,6 +124,97 @@
         <p class="mt-1 text-2xl font-semibold text-amber-900"><%= stats.missing_abstract %></p>
       </div>
     </div>
+
+    <!-- ============================================================ -->
+    <!-- AI 逐篇初筛 — 基于已审批协议的纳入/排除标准                   -->
+    <!-- ============================================================ -->
+    <section class="rounded-2xl border-2 border-blue-200 bg-blue-50/40 p-5 space-y-4">
+      <header class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0">
+          <h3 class="text-base font-semibold text-blue-900">🤖 AI 逐篇判断纳入 / 排除</h3>
+          <p class="mt-1 text-sm text-blue-800">
+            AI 读每篇的<strong>标题 + 摘要</strong>,按你审批的<strong>纳入/排除标准</strong>给出
+            <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700">纳入</span>
+            <span class="rounded bg-rose-100 px-1.5 py-0.5 text-xs text-rose-700">排除</span>
+            <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">不确定</span> 建议。
+            你做最终人工决定 — 这一步过滤掉大部分不相关的,后面只对纳入的细读全文。
+          </p>
+        </div>
+        <% if (protoOk) { %>
+          <span class="flex-none rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
+            协议 v<%= protoV %> 已审批
+          </span>
+        <% } else { %>
+          <a href="/projects/<%= project.id %>"
+             class="flex-none rounded-full bg-amber-500 px-3 py-1 text-xs font-medium text-white hover:bg-amber-400">
+            ⚠ 先审批协议 →
+          </a>
+        <% } %>
+      </header>
+
+      <!-- 4 个统计 -->
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="rounded-xl border border-blue-100 bg-white p-3">
+          <p class="text-[11px] font-medium uppercase tracking-wider text-blue-700">AI 已建议</p>
+          <p class="mt-1 text-xl font-semibold text-blue-900"><%= scrStats.ai_done %> / <%= scrStats.total %></p>
+          <p class="mt-0.5 text-[11px] text-blue-700/80">
+            纳 <%= scrStats.ai_include %> · 排 <%= scrStats.ai_exclude %> · 疑 <%= scrStats.ai_uncertain %>
+          </p>
+        </div>
+        <div class="rounded-xl border border-amber-100 bg-white p-3">
+          <p class="text-[11px] font-medium uppercase tracking-wider text-amber-700">待跑 AI</p>
+          <p class="mt-1 text-xl font-semibold text-amber-900"><%= scrStats.ai_pending %></p>
+          <p class="mt-0.5 text-[11px] text-amber-700/80">点右侧批量运行</p>
+        </div>
+        <div class="rounded-xl border border-emerald-100 bg-white p-3">
+          <p class="text-[11px] font-medium uppercase tracking-wider text-emerald-700">人工已决</p>
+          <p class="mt-1 text-xl font-semibold text-emerald-900"><%= scrStats.human_done %> / <%= scrStats.total %></p>
+          <p class="mt-0.5 text-[11px] text-emerald-700/80">
+            纳 <%= scrStats.human_include %> · 排 <%= scrStats.human_exclude %> · 疑 <%= scrStats.human_uncertain %>
+          </p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-3">
+          <p class="text-[11px] font-medium uppercase tracking-wider text-slate-500">待决定</p>
+          <p class="mt-1 text-xl font-semibold text-slate-700"><%= scrStats.human_pending %></p>
+          <p class="mt-0.5 text-[11px] text-slate-500">还需要你判断</p>
+        </div>
+      </div>
+
+      <!-- 批量按钮 + 详细页跳转 -->
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <% if (protoOk) { %>
+          <form method="post" action="<%= screeningBase %>/run-batch"
+                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='启动中…';">
+            <input type="hidden" name="redirect_to" value="<%= currentUrl %>" />
+            <button type="submit"
+                    class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:bg-slate-300 disabled:cursor-wait">
+              <% if (scrStats.ai_pending === 0) { %>
+                ✓ 全部已跑 AI(可单条重跑)
+              <% } else { %>
+                对未跑的 <%= scrStats.ai_pending %> 条运行 AI(约 <%= Math.max(1, Math.ceil(scrStats.ai_pending * 18 / 60)) %> 分钟)
+              <% } %>
+            </button>
+          </form>
+        <% } else { %>
+          <span class="text-sm text-amber-700">⚠ 协议未审批,无法跑 AI</span>
+        <% } %>
+        <a href="<%= screeningBase %>" class="text-xs text-blue-700 underline hover:text-blue-900">
+          打开筛选专用页 ↗(过滤 / 详细 AI 理由 / CSV 导出)
+        </a>
+      </div>
+
+      <!-- 进度条(运行中显示,JS 轮询填值)-->
+      <div id="batch-progress" class="hidden">
+        <div class="flex items-center justify-between text-xs text-slate-500">
+          <span id="bp-status">运行中</span>
+          <span id="bp-counts">0/0</span>
+        </div>
+        <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+          <div id="bp-bar" class="h-full bg-blue-500 transition-all duration-300" style="width:0%"></div>
+        </div>
+        <p id="bp-current" class="mt-1 truncate text-[11px] text-slate-400"></p>
+      </div>
+    </section>
 
     <!-- 过滤工具栏 -->
     <form method="get" action="<%= recordsBase %>" class="rounded-2xl border border-slate-200 bg-white p-4">
@@ -212,11 +330,16 @@
               <th class="px-3 py-3 text-left">年</th>
               <th class="px-3 py-3 text-left">期刊</th>
               <th class="px-3 py-3 text-left">标记</th>
+              <th class="px-3 py-3 text-left w-44">AI 建议</th>
+              <th class="px-3 py-3 text-left w-56">你的决定</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
-            <% records.forEach(r => { %>
-              <tr class="hover:bg-slate-50/50">
+            <% records.forEach(r => {
+                 const [aiCls, aiLabel]   = aiBadge(r.ai_suggestion)
+                 const [huCls, huLabel]   = humanBadge(r.human_decision)
+            %>
+              <tr id="row-<%= r.id %>" class="hover:bg-slate-50/50 <%= r.human_decision === 'include' ? 'bg-emerald-50/30' : r.human_decision === 'exclude' ? 'bg-rose-50/20' : '' %>">
                 <td class="px-3 py-3 align-top">
                   <input type="checkbox" data-rec-cb value="<%= r.id %>" class="rounded border-slate-300" />
                 </td>
@@ -284,6 +407,68 @@
                     <% } %>
                   </div>
                 </td>
+
+                <!-- AI 建议列 -->
+                <td class="px-3 py-3 align-top">
+                  <div class="space-y-1.5">
+                    <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium <%= aiCls %>">
+                      <%= aiLabel %>
+                      <% if (r.ai_confidence != null) { %>
+                        <span class="rounded bg-white/60 px-1 py-0 text-[9px] font-mono" title="置信度"><%= Number(r.ai_confidence).toFixed(2) %></span>
+                      <% } %>
+                    </span>
+                    <% if (r.ai_reason) { %>
+                      <details class="text-[11px] text-slate-600">
+                        <summary class="cursor-pointer text-slate-500 hover:text-slate-800">AI 理由</summary>
+                        <p class="mt-1 leading-relaxed rounded bg-slate-50/80 px-2 py-1.5"><%= r.ai_reason %></p>
+                        <% if ((r.ai_matched_inclusion || []).length) { %>
+                          <p class="mt-1 text-emerald-700">命中纳入:<%= r.ai_matched_inclusion.join(' · ') %></p>
+                        <% } %>
+                        <% if ((r.ai_matched_exclusion || []).length) { %>
+                          <p class="mt-0.5 text-rose-700">命中排除:<%= r.ai_matched_exclusion.join(' · ') %></p>
+                        <% } %>
+                      </details>
+                    <% } %>
+                    <% if (protoOk) { %>
+                      <form method="post" action="<%= screeningBase %>/run-one/<%= r.id %>"
+                            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='跑 AI 中…';">
+                        <input type="hidden" name="redirect_to" value="<%= currentUrl %>" />
+                        <button type="submit"
+                                class="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60">
+                          <%= r.ai_suggestion === 'not_run' ? '让 AI 建议' : '重跑 AI' %>
+                        </button>
+                      </form>
+                    <% } else { %>
+                      <span class="text-[11px] text-slate-400">协议未审批</span>
+                    <% } %>
+                  </div>
+                </td>
+
+                <!-- 你的决定列 -->
+                <td class="px-3 py-3 align-top">
+                  <form method="post" action="<%= screeningBase %>/decide/<%= r.id %>"
+                        class="space-y-1.5">
+                    <input type="hidden" name="redirect_to" value="<%= currentUrl %>" />
+                    <div class="flex flex-wrap gap-1">
+                      <% ['include', 'exclude', 'uncertain'].forEach(v => {
+                           const [cls, label] = humanBadge(v)
+                           const checked = r.human_decision === v
+                      %>
+                        <label class="inline-flex items-center gap-1 rounded border <%= checked ? 'border-blue-500 ring-1 ring-blue-300' : 'border-slate-300' %> px-1.5 py-0.5 text-[11px] cursor-pointer hover:bg-slate-50">
+                          <input type="radio" name="decision" value="<%= v %>" <%= checked ? 'checked' : '' %> class="h-3 w-3" />
+                          <%= label %>
+                        </label>
+                      <% }) %>
+                    </div>
+                    <input type="text" name="reason" maxlength="2000"
+                           value="<%= escAttr(r.human_reason) %>"
+                           placeholder="备注(可选)"
+                           class="block w-full rounded border border-slate-300 px-2 py-0.5 text-[11px] focus:border-slate-500 focus:outline-none" />
+                    <button type="submit" class="w-full rounded-md bg-slate-900 px-2 py-0.5 text-[11px] text-white hover:bg-slate-700">
+                      保存决定
+                    </button>
+                  </form>
+                </td>
               </tr>
             <% }) %>
           </tbody>
@@ -330,5 +515,57 @@
     <% } %>
   </section>
 </div>
+
+<script>
+(function() {
+  // ============================================================
+  // 批量 AI 初筛进度轮询
+  // 页面加载时探一次 /screening/progress.json,如果在跑则启动 3s 轮询
+  // 跑完后短延迟刷新页面,把 records 表里的 AI 建议同步过来
+  // ============================================================
+  var pjId = <%- JSON.stringify(project.id) %>;
+  var box     = document.getElementById('batch-progress');
+  var bar     = document.getElementById('bp-bar');
+  var status  = document.getElementById('bp-status');
+  var counts  = document.getElementById('bp-counts');
+  var current = document.getElementById('bp-current');
+  if (!box) return;
+
+  function applyState(p) {
+    if (!p || !p.total) {
+      box.classList.add('hidden');
+      return false;
+    }
+    box.classList.remove('hidden');
+    var pct = p.pct || 0;
+    bar.style.width = pct + '%';
+    status.textContent = p.running ? '运行中(' + pct + '%)' : '已完成';
+    counts.textContent = p.done + '/' + p.total + (p.errors ? ' · 错 ' + p.errors : '');
+    current.textContent = p.current_title ? '正在处理:' + p.current_title : '';
+    return !!p.running;
+  }
+
+  var poll = function() {
+    fetch('/projects/' + encodeURIComponent(pjId) + '/screening/progress.json', { credentials: 'same-origin' })
+      .then(function(r) { return r.json() })
+      .then(function(p) {
+        var stillRunning = applyState(p);
+        if (stillRunning) {
+          setTimeout(poll, 3000);
+        } else if (p && p.total) {
+          // 跑完了:2 秒后刷新当前页(保留 query / 滚动)
+          setTimeout(function() { window.location.reload(); }, 2000);
+        }
+      })
+      .catch(function() {
+        // 出错就 8s 后再试一次
+        setTimeout(poll, 8000);
+      });
+  };
+
+  // 首次探测,如果已经有任务在跑(可能用户刚启动批量后刷新页面)
+  poll();
+})();
+</script>
 
 <%- include('../../partials/footer') %>

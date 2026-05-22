@@ -33,6 +33,18 @@ const router = express.Router({ mergeParams: true })
 // 工具
 // ============================================================
 
+// 把 POST body 里的 redirect_to 落到一个**严格在本项目下**的安全 URL,
+// 防 open redirect:必须以 `/projects/${projectId}/` 开头(同 origin、同项目)。
+// 不合法时回退到 fallback。
+function safeRedirectTo(req, projectId, fallback) {
+  const raw = String((req.body && req.body.redirect_to) || '').trim()
+  if (!raw) return fallback
+  // 简单白名单:必须以 /projects/{projectId}/ 开头,且不能含 newline / 协议头
+  if (raw.includes('\n') || raw.includes('\r')) return fallback
+  if (raw.startsWith(`/projects/${projectId}/`)) return raw.slice(0, 500)
+  return fallback
+}
+
 function parseJsonArrayField(v) {
   if (!v) return []
   try {
@@ -383,12 +395,14 @@ router.post('/:id/screening/run-one/:recordId', async (req, res) => {
     return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
   }
   const protocol = getApprovedProtocol(db, project.id)
+  const screeningUrl = `/projects/${project.id}/screening`
+  const redirectUrl = safeRedirectTo(req, project.id, screeningUrl)
   if (!protocol) {
     req.session.flash = {
       type: 'error',
       message: '请先在第 1 步生成并审批研究协议(没有纳排标准无法判断)。',
     }
-    return res.redirect(`/projects/${project.id}/screening`)
+    return res.redirect(redirectUrl)
   }
   const record = getRecordInProject(db, project.id, req.params.recordId)
   if (!record) {
@@ -414,7 +428,9 @@ router.post('/:id/screening/run-one/:recordId', async (req, res) => {
       message: `AI 调用失败:${r.status || ''} ${r.error || ''}`.slice(0, 240),
     }
   }
-  res.redirect(`/projects/${project.id}/screening`)
+  // 加锚点定位到当前 record(records 列表页和 screening 页都用 row-<recordId> 作为 id)
+  const anchor = `#row-${record.id}`
+  res.redirect(redirectUrl + anchor)
 })
 
 // ============================================================
@@ -429,12 +445,14 @@ router.post('/:id/screening/run-batch', (req, res) => {
     return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
   }
   const protocol = getApprovedProtocol(db, project.id)
+  const screeningUrl = `/projects/${project.id}/screening`
+  const redirectUrl = safeRedirectTo(req, project.id, screeningUrl)
   if (!protocol) {
     req.session.flash = {
       type: 'error',
       message: '请先在第 1 步生成并审批研究协议(没有纳排标准无法判断)。',
     }
-    return res.redirect(`/projects/${project.id}/screening`)
+    return res.redirect(redirectUrl)
   }
 
   // 已有任务在跑:不允许重入
@@ -443,7 +461,7 @@ router.post('/:id/screening/run-batch', (req, res) => {
       type: 'error',
       message: '已有批量任务在跑,请等它跑完再启动新一批(或刷新页面查看进度)。',
     }
-    return res.redirect(`/projects/${project.id}/screening`)
+    return res.redirect(redirectUrl)
   }
 
   // 找出 ai_suggestion = 'not_run' 或者还没建 screening_decisions 行的 records
@@ -462,7 +480,7 @@ router.post('/:id/screening/run-batch', (req, res) => {
 
   if (targets.length === 0) {
     req.session.flash = { type: 'success', message: '没有未跑的条目,AI 初筛已全部完成。' }
-    return res.redirect(`/projects/${project.id}/screening`)
+    return res.redirect(redirectUrl)
   }
 
   runningBatches.add(project.id)
@@ -488,7 +506,7 @@ router.post('/:id/screening/run-batch', (req, res) => {
     type: 'success',
     message: `已启动批量 AI 初筛:${targets.length} 条。请保持页面打开,进度会实时刷新(关闭页面 / 进程重启会丢进度)。`,
   }
-  res.redirect(`/projects/${project.id}/screening`)
+  res.redirect(redirectUrl)
 
   // 在响应后跑(setImmediate 让 res.end 真正发出去)
   setImmediate(async () => {
@@ -576,10 +594,13 @@ router.post('/:id/screening/decide/:recordId', (req, res) => {
     return res.status(404).render('error', { title: 'Not Found', message: '文献条目不存在或不属于本项目' })
   }
 
+  const screeningUrl = `/projects/${project.id}/screening`
+  const redirectUrl = safeRedirectTo(req, project.id, screeningUrl)
+
   const decision = String(req.body.decision || '').trim()
   if (!SCREENING_DECISIONS.includes(decision)) {
     req.session.flash = { type: 'error', message: '决定值非法' }
-    return res.redirect(`/projects/${project.id}/screening`)
+    return res.redirect(redirectUrl)
   }
   const reason = String(req.body.reason || '').slice(0, 2000).trim() || null
 
@@ -606,7 +627,7 @@ router.post('/:id/screening/decide/:recordId', (req, res) => {
 
   req.session.flash = { type: 'success', message: `已记录人工决定:${decision}` }
   // 跳回 + 锚点定位到当前 record
-  res.redirect(`/projects/${project.id}/screening#row-${record.id}`)
+  res.redirect(redirectUrl + `#row-${record.id}`)
 })
 
 // ============================================================
