@@ -184,11 +184,17 @@ router.get('/:id/search', (req, res) => {
     console.error('[search] getProjectProgress failed:', e.message)
   }
 
-  // exploration:已回填命中数的条数(用于 UI 上"还差几条才能优化主检索"的提示)
-  const explorationLogged = strategies.filter(
-    (s) => s.query_type !== 'main' && s.result_count != null
-      && targetDatabases.includes(s.database_name)
-  ).length
+  // ---- AI 优化主检索的输入信号 ----
+  // 只看**最新一批 exploration**(latestVersion) ∩ 用户当前勾选的库。
+  // 旧版本的命中数即便回填了也不算 —— 旧检索式本身已被新版替代,信号会污染优化。
+  // gate:这批里**每个 (db, query_type) 槽位**都必须回填,任一空缺则不允许优化。
+  const recommendInputBatch = latestBatch.filter((s) => targetDatabases.includes(s.database_name))
+  const recommendInputTotal = recommendInputBatch.length
+  const recommendInputLogged = recommendInputBatch.filter((s) => s.result_count != null).length
+  const recommendInputMissing = recommendInputBatch
+    .filter((s) => s.result_count == null)
+    .map((s) => ({ database: s.database_name, query_type: s.query_type }))
+  const canRecommendBest = recommendInputTotal > 0 && recommendInputMissing.length === 0
 
   // 最新一批 main(AI 优化主检索)— 在版本号最高的"含 main"那一批
   const mainStrategies = strategies.filter((s) => s.query_type === 'main')
@@ -229,7 +235,10 @@ router.get('/:id/search', (req, res) => {
     latestVersion,
     byDatabase,
     progress,
-    loggedCount: explorationLogged,
+    loggedCount: recommendInputLogged,
+    requiredCount: recommendInputTotal,
+    missingSlots: recommendInputMissing,
+    canRecommendBest,
     latestMainBatch,
     latestMainVersion,
     lockState,
@@ -536,20 +545,47 @@ router.post('/:id/search/recommend-best', async (req, res) => {
 
   const targetDatabases = resolveTargetDatabases(project.databases)
 
-  // 拉所有 exploration(非 main)且已回填命中数的策略,作为优化反馈信号
+  // 反馈信号:**只取最新一批 exploration**(latestVersion) ∩ targetDatabases。
+  // 旧版本检索式已被新版替代,其命中数是历史污染,绝不能再喂给 LLM。
   const allStrategies = listStrategies(db, project.id)
-  const exploration = allStrategies.filter(
+  const explorationAll = allStrategies.filter(
     (s) => s.query_type !== 'main' && targetDatabases.includes(s.database_name)
   )
-  const logged = exploration.filter((s) => s.result_count != null)
-
-  if (logged.length < 2) {
+  if (explorationAll.length === 0) {
     req.session.flash = {
       type: 'error',
-      message: `至少需要 2 条 exploration 检索式回填命中数,AI 才能基于反馈优化主检索(当前 ${logged.length} 条)。`,
+      message: '尚未生成任何 exploration 检索式。请先点上方"让 Claude 生成检索式"。',
     }
     return res.redirect(`/projects/${project.id}/search`)
   }
+  const latestExpVersion = explorationAll.reduce((m, s) => Math.max(m, s.version || 0), 0)
+  const latestExpBatch = explorationAll.filter((s) => s.version === latestExpVersion)
+
+  // Gate:**每个目标库 × 每个 query_type** 都必须回填命中数。
+  // 任一槽位空缺 → 拒绝,精确告知缺哪些,避免用户瞎猜。
+  const missingSlots = latestExpBatch
+    .filter((s) => s.result_count == null)
+    .map((s) => ({ database: s.database_name, query_type: s.query_type }))
+  // 库本身整库不在最新批里(理论上不会,因为同批生成)
+  const dbsInBatch = new Set(latestExpBatch.map((s) => s.database_name))
+  for (const dbName of targetDatabases) {
+    if (!dbsInBatch.has(dbName)) {
+      missingSlots.push({ database: dbName, query_type: '*' })
+    }
+  }
+  if (missingSlots.length > 0) {
+    const parts = missingSlots
+      .map((m) => `${DB_LABEL[m.database] || m.database}·${QT_LABEL[m.query_type] || m.query_type}`)
+      .join('、')
+    req.session.flash = {
+      type: 'error',
+      message: `请先把最新一批 exploration(v${latestExpVersion})里**每个库的高召回 / 平衡 / 高精确 3 条命中数都回填**,才能优化主检索。当前还缺:${parts}。`,
+    }
+    return res.redirect(`/projects/${project.id}/search`)
+  }
+
+  // 此时 latestExpBatch 一定每条都有 result_count;直接作为优化反馈信号
+  const logged = latestExpBatch
 
   // 用户期望命中数(form: target_min_hits / target_max_hits / target_note)—— 可选
   const parsePosInt = (v) => {
@@ -581,6 +617,7 @@ router.post('/:id/search/recommend-best', async (req, res) => {
     projectId: project.id,
     payload: {
       logged_count: logged.length,
+      exploration_version: latestExpVersion,   // ← 关键:记录实际喂给 LLM 的是哪一批
       target_databases: targetDatabases,
       user_target_hits: userTargetHits,
     },
