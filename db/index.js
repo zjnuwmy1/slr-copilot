@@ -41,6 +41,12 @@ function runMigrations(db) {
   if (!columnExists(db, 'projects', 'search_locked_at')) {
     db.exec(`ALTER TABLE projects ADD COLUMN search_locked_at TEXT`)
   }
+  // M4:projects.search_concept_set_json —— 所有库共用的"概念规格"
+  //    (concept_groups + year_range + document_types + excluded_document_types
+  //     + language)。每库的 query_text 都是这套规格的语法渲染。
+  if (!columnExists(db, 'projects', 'search_concept_set_json')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN search_concept_set_json TEXT`)
+  }
 
   // M3:final_search_records —— 每个项目 × 每个目标库的"最终用了什么检索式"快照
   db.exec(`

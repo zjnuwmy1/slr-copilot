@@ -123,6 +123,16 @@ export function buildSearchSystem({ targetDatabases }) {
 请根据用户提供的已审批协议(概念组 + 研究问题 + 纳排标准 + 时间范围 + 文献类型限定 + 语言限定),
 为**用户实际勾选的数据库**(本次:${dbList})生成可直接粘贴执行的检索式。
 
+⚠ **方法学硬性要求(SLR 跨库一致性)**:
+   同一个 query_type 版本(high_recall / balanced / high_precision)的**全部库 query_text 必须共享同一套**:
+     - 同样的概念组 + 同样的同义词扩展
+     - 同样的年份范围
+     - 同样的文献类型允许 / 排除列表
+     - 同样的语言限定
+   **唯一允许的差异是每个库的字段标签和语法**(TS= vs TITLE-ABS-KEY vs [MeSH Terms]、PY= vs PUBYEAR vs [Date - Publication])。
+   如果你想给 high_recall 加一个同义词,你必须**同时**给该 query_type 下的全部库都加上,不能只加在某一个库里。
+   如果某概念组在 PubMed 有 MeSH 词、其他库没有 MeSH,只允许加 MeSH 行 — 自由词部分必须严格一致。
+
 工作准则:
 
 1. 输出**严格 JSON**,字段如下:
@@ -131,11 +141,16 @@ export function buildSearchSystem({ targetDatabases }) {
        "概念组名 1": ["补充同义词/缩写/词形变体(英文)"],
        "概念组名 2": ["..."]
      },
+     "shared_concept_sets": {
+       "high_recall":    { "concept_groups": [...], "year_range": [s,e], "document_types": [...], "excluded_document_types": [...], "language": [...] },
+       "balanced":       { "concept_groups": [...], "year_range": [s,e], "document_types": [...], "excluded_document_types": [...], "language": [...] },
+       "high_precision": { "concept_groups": [...], "year_range": [s,e], "document_types": [...], "excluded_document_types": [...], "language": [...] }
+     },
      "strategies": [
        { "database": "wos"|"scopus"|"pubmed",
          "query_type": "high_recall"|"balanced"|"high_precision",
-         "query_text": "<可直接粘贴执行的完整检索式 — 必含年份 + 文献类型 + 语言过滤>",
-         "rationale": "<1-3 句中文:为什么这样写、覆盖范围、潜在漏召因素>",
+         "query_text": "<同 shared_concept_sets[query_type] 的渲染,只差语法>",
+         "rationale": "<1-3 句中文:覆盖范围、潜在漏召因素>",
          "filters": { "year_range": [起,止], "document_types": [...], "language": [...] }
        }
      ],
@@ -143,11 +158,13 @@ export function buildSearchSystem({ targetDatabases }) {
    }
 
 2. **strategies 必须正好 ${totalCount} 条**:
-   - 数据库 = [${dbList}](本次用户只勾选了这些库,**不要**额外为没勾选的库生成);
+   - 数据库 = [${dbList}](本次用户只勾选了这些库);
    - 顺序 = ${orderedExpect};
-   - 每个 (database, query_type) 组合只一条,不重复、不缺失。
+   - 每个 (database, query_type) 组合只一条。
+   - 对于同一个 query_type,所有库的 query_text 必须由 \`shared_concept_sets[query_type]\` 渲染而来,
+     **概念组、年份、文献类型、语言完全一致**,仅语法不同。
 
-3. **每条 query_text 必须包含以下 4 类过滤,缺一不可**:
+3. **每条 query_text 必须包含以下 4 类过滤,缺一不可**(全部来自该 query_type 的 shared_concept_sets):
    a. 概念组的逻辑组合(组内 OR,组间 AND)
    b. 协议给的年份范围(用对应库的原生语法,见下)
    c. 协议允许的文献类型,**并显式排除协议未勾选的类型**(尤其会议论文 / 摘要 / 社论 / 通讯)
@@ -303,9 +320,54 @@ export function buildSearchUserPrompt({ protocol, projectInput, targetDatabases 
  *   - database / query_type 不在白名单 → 该条剔除
  *   - 同 (database, query_type) 重复 → 仅保留第一个
  */
+function normalizeConceptSet(obj) {
+  if (!obj || typeof obj !== 'object') return null
+  const out = {}
+  // concept_groups: [{ name, terms: [] }] OR { name: [...terms] }
+  let cg = []
+  if (Array.isArray(obj.concept_groups)) {
+    for (const g of obj.concept_groups) {
+      if (!g || typeof g !== 'object') continue
+      const name = typeof g.name === 'string' ? g.name.trim() : ''
+      const terms = Array.isArray(g.terms)
+        ? g.terms.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim())
+        : []
+      if (name && terms.length) cg.push({ name, terms })
+    }
+  } else if (obj.concept_groups && typeof obj.concept_groups === 'object') {
+    for (const [name, terms] of Object.entries(obj.concept_groups)) {
+      if (!Array.isArray(terms)) continue
+      const t = terms.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim())
+      if (name.trim() && t.length) cg.push({ name: name.trim(), terms: t })
+    }
+  }
+  if (cg.length) out.concept_groups = cg
+
+  if (Array.isArray(obj.year_range)) {
+    const yr = obj.year_range.filter((y) => typeof y === 'number' && Number.isFinite(y)).slice(0, 2)
+    if (yr.length === 2) out.year_range = yr
+  }
+  for (const k of ['document_types', 'excluded_document_types', 'language']) {
+    if (Array.isArray(obj[k])) {
+      const v = obj[k].filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim())
+      if (v.length) out[k] = v
+    }
+  }
+  return Object.keys(out).length ? out : null
+}
+
 export function normalizeSearchOutput(raw) {
-  const empty = { expanded_terms: {}, strategies: [], warnings: [] }
+  const empty = { expanded_terms: {}, shared_concept_sets: {}, strategies: [], warnings: [] }
   if (!raw || typeof raw !== 'object') return empty
+
+  // shared_concept_sets:每个 query_type 一套(跨库共享)
+  const sharedConceptSets = {}
+  if (raw.shared_concept_sets && typeof raw.shared_concept_sets === 'object') {
+    for (const qt of VALID_QUERY_TYPES) {
+      const cs = normalizeConceptSet(raw.shared_concept_sets[qt])
+      if (cs) sharedConceptSets[qt] = cs
+    }
+  }
 
   // expanded_terms
   const expanded = {}
@@ -373,8 +435,11 @@ export function normalizeSearchOutput(raw) {
     ? raw.warnings.filter((w) => typeof w === 'string' && w.trim()).map((w) => w.trim())
     : []
 
-  return { expanded_terms: expanded, strategies, warnings }
+  return { expanded_terms: expanded, shared_concept_sets: sharedConceptSets, strategies, warnings }
 }
+
+// Also export concept-set normalizer for the recommend prompt to share
+export { normalizeConceptSet }
 
 // 导出常量给路由层判断"够不够生成成功"
 export const SEARCH_DATABASES = VALID_DATABASES

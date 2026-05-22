@@ -235,7 +235,10 @@
 
         <% if (mainBatch.length > 0) { %>
           <div class="space-y-3 border-t border-indigo-200 pt-4">
-            <p class="text-xs font-medium text-indigo-900">v<%= mainV %> · <%= mainBatch.length %> 条优化主检索:</p>
+            <p class="text-xs font-medium text-indigo-900">
+              v<%= mainV %> · <%= mainBatch.length %> 条优化主检索
+              <span class="ml-1 text-indigo-600">— 同一套概念规格在 <%= mainBatch.length %> 个库的不同语法渲染</span>
+            </p>
 
             <% mainBatch.forEach((s) => { %>
               <article class="rounded-xl border-2 border-indigo-300 bg-white p-4 space-y-3 shadow-sm">
@@ -298,6 +301,61 @@
           </p>
         <% } %>
       </section>
+
+      <!-- ============ 共享概念规格(跨库一致性 source-of-truth) ============ -->
+      <% const cs = (typeof conceptSet !== 'undefined') ? conceptSet : null %>
+      <% if (cs) { %>
+        <section class="rounded-2xl border border-blue-200 bg-blue-50/40 p-5">
+          <div class="flex items-center gap-2">
+            <h3 class="text-base font-semibold text-blue-900">共享概念规格</h3>
+            <span class="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-700">跨库一致 · 仅语法不同</span>
+          </div>
+          <p class="mt-1 text-xs text-blue-800">
+            下面这套词、年份、文献类型、语言在 <strong>所有目标库</strong> 中保持一致 ——
+            每个库的 query_text 只是这套规格在不同检索语法下的渲染。
+            扩词 / 改年份 / 改文献类型时,会同步在所有库里改。
+          </p>
+          <div class="mt-3 grid gap-3 sm:grid-cols-2">
+            <% if (Array.isArray(cs.concept_groups) && cs.concept_groups.length) { %>
+              <div class="sm:col-span-2 rounded-lg border border-blue-100 bg-white p-3">
+                <p class="text-xs font-medium text-slate-700">概念组(组内 OR · 组间 AND)</p>
+                <ul class="mt-2 space-y-1">
+                  <% cs.concept_groups.forEach((g, i) => { %>
+                    <li class="text-xs">
+                      <span class="font-medium text-slate-800"><%= i + 1 %>. <%= g.name %>:</span>
+                      <span class="text-slate-600"><%= (g.terms || []).join(' | ') %></span>
+                    </li>
+                  <% }) %>
+                </ul>
+              </div>
+            <% } %>
+            <% if (Array.isArray(cs.year_range) && cs.year_range.length === 2) { %>
+              <div class="rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs">
+                <p class="font-medium text-slate-700">年份范围</p>
+                <p class="mt-1 text-slate-600"><%= cs.year_range[0] %> – <%= cs.year_range[1] %></p>
+              </div>
+            <% } %>
+            <% if (Array.isArray(cs.language) && cs.language.length) { %>
+              <div class="rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs">
+                <p class="font-medium text-slate-700">语言</p>
+                <p class="mt-1 text-slate-600"><%= cs.language.join(' / ') %></p>
+              </div>
+            <% } %>
+            <% if (Array.isArray(cs.document_types) && cs.document_types.length) { %>
+              <div class="rounded-lg border border-blue-100 bg-white px-3 py-2 text-xs">
+                <p class="font-medium text-slate-700">允许文献类型</p>
+                <p class="mt-1 text-slate-600"><%= cs.document_types.join(' / ') %></p>
+              </div>
+            <% } %>
+            <% if (Array.isArray(cs.excluded_document_types) && cs.excluded_document_types.length) { %>
+              <div class="rounded-lg border border-rose-100 bg-rose-50/50 px-3 py-2 text-xs">
+                <p class="font-medium text-rose-700">排除文献类型(query_text 里 NOT 出去)</p>
+                <p class="mt-1 text-rose-600"><%= cs.excluded_document_types.join(' / ') %></p>
+              </div>
+            <% } %>
+          </div>
+        </section>
+      <% } %>
 
       <!-- ============ 锁定最终方案 ============ -->
       <%

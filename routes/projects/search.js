@@ -213,6 +213,12 @@ router.get('/:id/search', (req, res) => {
 
   // 锁定状态(用户即将上传 CSV 前的最终方案落盘)
   const lockState = getLockState(db, project)
+  // 共享概念规格(跨库一致性的 source-of-truth)
+  let conceptSet = null
+  if (project.search_concept_set_json) {
+    try { conceptSet = JSON.parse(project.search_concept_set_json) }
+    catch { conceptSet = null }
+  }
 
   res.render('projects/search', {
     title: `检索式 · ${project.title}`,
@@ -227,6 +233,7 @@ router.get('/:id/search', (req, res) => {
     latestMainBatch,
     latestMainVersion,
     lockState,
+    conceptSet,
     dbLabel: DB_LABEL,
     qtLabel: QT_LABEL,
     dbOrder: dbOrderForView,
@@ -375,6 +382,14 @@ router.post('/:id/search/generate', async (req, res) => {
       db.prepare(`UPDATE projects SET status = 'searching', updated_at = datetime('now') WHERE id = ?`).run(project.id)
     } else {
       db.prepare(`UPDATE projects SET updated_at = datetime('now') WHERE id = ?`).run(project.id)
+    }
+    // 存共享 concept_set —— exploration 用 balanced 版本作为"headline"规格
+    // (后续 AI 优化主检索时会覆盖为优化后的 concept_set)
+    const sharedSets = normalized.shared_concept_sets || {}
+    const headline = sharedSets.balanced || sharedSets.high_recall || sharedSets.high_precision
+    if (headline) {
+      db.prepare(`UPDATE projects SET search_concept_set_json = ? WHERE id = ?`)
+        .run(JSON.stringify(headline), project.id)
     }
   })
   tx()
@@ -663,7 +678,14 @@ router.post('/:id/search/recommend-best', async (req, res) => {
       )
       insertedIds.push(strategyId)
     }
-    db.prepare(`UPDATE projects SET updated_at = datetime('now') WHERE id = ?`).run(project.id)
+    // 持久化共享 concept_set 到 projects.search_concept_set_json
+    // 这是跨库一致性的 source-of-truth,后续 lock UI / export.md / PRISMA 报告都引用它
+    if (normalized.data.concept_set) {
+      db.prepare(`UPDATE projects SET search_concept_set_json = ?, updated_at = datetime('now') WHERE id = ?`)
+        .run(JSON.stringify(normalized.data.concept_set), project.id)
+    } else {
+      db.prepare(`UPDATE projects SET updated_at = datetime('now') WHERE id = ?`).run(project.id)
+    }
   })
   tx()
 

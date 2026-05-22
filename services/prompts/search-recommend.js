@@ -37,6 +37,8 @@
  *   - based_on_strategy_ids 不强求 — 优化可以参考任意条,LLM 自己判断
  */
 
+import { normalizeConceptSet } from './search.js'
+
 const DB_LABEL = {
   wos: 'Web of Science',
   scopus: 'Scopus',
@@ -62,20 +64,35 @@ export function buildRecommendSystem({ targetDatabases }) {
   return `你是 SLR 检索式优化专家。
 
 任务:基于"已审批协议 + 用户跑过的 exploration 检索式命中数",
-为本项目用户勾选的 ${N} 个库(${dbList})**各重新生成 1 条优化后的主检索**。
-主检索是正式拿去筛选用的、覆盖最合理的版本 —— 不是从已有 exploration 里挑赢家,
-而是 **新合成** 一条:吸收命中数过多/过少的教训,严格按协议过滤。
+为本项目用户勾选的 ${N} 个库(${dbList})合成主检索。
+
+⚠ **方法学硬性要求(SLR 跨库一致性)**:
+   主检索是 **一套共享的概念规格**(\`concept_set\`),在 ${N} 个库里用各自的语法分别**渲染**一遍。
+   - 概念组(包括同义词扩展)、年份范围、允许的文献类型、排除的文献类型、语言 ——
+     **这五样必须在所有库里完全一致**,不允许 Scopus 有 "deep learning" 但 PubMed 改成 "deep learning OR DL"。
+   - 当你想优化(加同义词 / 加排除项 / 收紧字段)时,**先优化 \`concept_set\`**,
+     然后**所有库**用新的 concept_set 重新渲染一遍 query_text。
+   - 唯一允许的差异 = 数据库语法标签(TS= / TITLE-ABS-KEY / [MeSH Terms]、PY= / PUBYEAR / [Date - Publication] 等)。
 
 **输出格式 — 严格 JSON,字段名一字不差**(不要包在 result/data/output 任何 envelope 里,直接顶层输出):
 {
+  "concept_set": {
+    "concept_groups": [
+      { "name": "AI 技术", "terms": ["deep learning", "neural network*", ...] },
+      { "name": "医学影像", "terms": ["medical imag*", "radiolog*", ...] }
+    ],
+    "year_range": [起, 止],
+    "document_types": ["Article", "Review"],
+    "excluded_document_types": ["Conference Paper", "Editorial", "Letter"],
+    "language": ["English"]
+  },
   "optimized_queries": [
     {
       "database": "<必须是 ${dbs.map((k) => `'${k}'`).join(' / ')} 之一>",
-      "query_text": "<可直接粘贴执行的完整检索式 — 必含概念组 + 年份 + 文献类型(含 NOT 排除)+ 语言>",
-      "rationale": "≤80 字中文 — 这条相比 exploration 改了什么,为什么更好",
+      "query_text": "<concept_set 在该库语法下的完整渲染 — 必含概念组 + 年份 + 文献类型(含 NOT 排除)+ 语言>",
+      "rationale": "≤80 字中文 — concept_set 比 exploration 改了什么,为什么更好",
       "based_on_strategy_ids": ["<引用了哪几条已跑过的 strategy id,可空数组>"],
-      "expected_count_estimate": <整数 — 你预估命中数,SLR sweet spot 是 100-2000>,
-      "filters": { "year_range": [起,止], "document_types": [...], "language": [...] }
+      "expected_count_estimate": <整数 — 你预估该库命中数,SLR sweet spot 是 100-2000>
     }
   ],
   "overall_rationale": "1-2 句中文 — 整体优化思路",
@@ -83,23 +100,18 @@ export function buildRecommendSystem({ targetDatabases }) {
 }
 
 **绝对规则**:
-1. \`optimized_queries\` **数组长度必须等于 ${N}**,且每个库各出现一次(不能重复、不能缺漏)。
-2. database 字段只能是这几个值:${dbs.map((k) => `'${k}'`).join(', ')}。
-3. query_text 必须包含以下 4 类过滤,缺一不可(参考下面"语法块"):
-   a) 概念组的逻辑组合(组内 OR,组间 AND)
-   b) **协议给的年份范围**,用各库原生语法
-   c) **协议允许的文献类型 + 显式 NOT 排除未勾选的**(尤其会议论文 / 摘要 / 社论 / 通讯)
-   d) **协议指定的语言**(若有)
-4. rationale 必须解释"基于哪些 exploration 命中数 + 协议规则做了什么调整"。
-   不要"基于...考量"八股开头,要具体:"Scopus high_recall 3200 太宽,去掉外层同义词;
-   保留 balanced 的标题字段限定 → 预估 ~800"。
-5. **绝对不要** 把任何 exploration 的 strategy_id 直接当成主检索抄过来 —
-   主检索是 *新合成* 的 query_text,只是吸收前面命中数的反馈。
-6. **基于反馈优化**:
-   - 命中数 < 30 的版本 → 太窄,补同义词 / 放宽截词
-   - 命中数 > 5000 的版本 → 太宽,加标题字段限定 / 严格 AND / 减少同义词
-   - 100-2000 的版本 → 接近 sweet spot,主检索向这个方向靠
-7. **只输出 JSON**,不要前后加解释、Markdown、代码围栏(\`\`\`)。
+1. \`concept_set\` 是顶层必填字段,**全部 \`optimized_queries\` 共用一套**。
+2. \`optimized_queries\` **数组长度必须等于 ${N}**,每个库各出现一次。
+3. **${N} 条 query_text 的概念词、年份、文献类型允许/排除列表、语言必须完全一致** —
+   只允许字段标签和语法不同。请自己在头脑里逐条对照检查后再输出。
+4. database 字段只能是:${dbs.map((k) => `'${k}'`).join(', ')}。
+5. 优化方向(全部体现在 concept_set 里,然后同步渲染到所有库):
+   - 命中数 < 30 → concept_set 加同义词 / 放宽截词
+   - 命中数 > 5000 → concept_set 删过宽的同义词 / 加严格的标题字段限定
+   - 100-2000 → 接近 sweet spot,小幅微调
+6. rationale 解释 concept_set 相比 exploration 的具体改动(加了哪个同义词、去了哪个,引用了哪条命中数)。
+7. **绝对不要** 直接复制 exploration 的 query_text — 主检索是基于 concept_set 重新渲染。
+8. **只输出 JSON**,不要前后加解释、Markdown、代码围栏(\`\`\`)。
 
 **各库语法块**(查询里必须正确使用):
 
@@ -447,6 +459,21 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
     return { ok: false, error: '解析后 optimized_queries 为空(database 字段可能漂移到了未支持的库)' }
   }
 
+  // 共享 concept_set —— SLR 跨库一致性的 source-of-truth
+  const conceptSet = (() => {
+    if (raw.concept_set && typeof raw.concept_set === 'object') {
+      return normalizeConceptSet(raw.concept_set)
+    }
+    // alias 兜底
+    for (const k of ['shared_concept_set', 'spec', 'search_spec', 'shared_spec']) {
+      if (raw[k] && typeof raw[k] === 'object') {
+        const n = normalizeConceptSet(raw[k])
+        if (n) return n
+      }
+    }
+    return null
+  })()
+
   // 覆盖率提示(不当成错误,只在 warnings 里加一条)
   const missingDbs = dbs.filter((d) => !seenDb.has(d))
 
@@ -469,9 +496,15 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
     warnings.unshift(`AI 漏了这些库的主检索:${missingDbs.join(', ')}(可重试)`)
   }
 
+  // 若 LLM 没给 concept_set,在 warnings 里加一条提醒(不阻断 — 兼容老输出)
+  if (!conceptSet) {
+    warnings.push('AI 未输出 concept_set 顶层字段;跨库一致性无法机器校验(可重试以拿到 concept_set)')
+  }
+
   return {
     ok: true,
     data: {
+      concept_set: conceptSet,
       optimized_queries: out,
       overall_rationale: overall,
       warnings,
