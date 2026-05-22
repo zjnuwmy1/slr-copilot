@@ -95,11 +95,15 @@
       <label for="confirm_phrase" class="block text-sm font-medium text-slate-800">
         在下方框里逐字输入大写 <code class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-rose-700">CLEAR</code> 以确认:
       </label>
+      <!-- 实时把输入归一化为大写字母(剥空白/小写/数字),让显示=实际值;
+           pattern 仍校验 CLEAR 防客户端绕过,但 oninput 已让用户怎么打都对。 -->
       <input type="text" name="confirm_phrase" id="confirm_phrase" required
-             autocomplete="off" autocapitalize="characters"
+             autocomplete="off" autocapitalize="characters" spellcheck="false"
              placeholder="输入 CLEAR"
+             oninput="this.value=this.value.toUpperCase().replace(/[^A-Z]/g,'')"
              pattern="CLEAR"
-             class="mt-2 block w-full rounded-lg border-2 border-rose-300 px-3 py-2 text-base font-mono uppercase focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-200" />
+             title="请逐字输入大写 CLEAR(系统会自动帮你转大写)"
+             class="mt-2 block w-full rounded-lg border-2 border-rose-300 px-3 py-2 text-base font-mono focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-200" />
       <p class="mt-1 text-xs text-slate-500">这是防误操作的二次确认,必须严格匹配。</p>
     </div>
 

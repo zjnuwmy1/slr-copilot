@@ -411,7 +411,8 @@ router.post('/:id/protocol/:protocolId/approve', (req, res) => {
     .get(project.id, row.id)
   const needsReset = !!previousApproved && hasDerivedData(db, project.id)
   const confirmed = String(req.body.confirm_clear || '').toLowerCase() === 'yes'
-  const confirmPhrase = String(req.body.confirm_phrase || '').trim()
+  // 大小写不敏感 + 去空白:防止 paste / 输入法 / 移动键盘等绕过前端 oninput 上传小写
+  const confirmPhrase = String(req.body.confirm_phrase || '').trim().toUpperCase()
 
   // 需要清空但用户还没确认 → 渲染确认页
   if (needsReset && !confirmed) {

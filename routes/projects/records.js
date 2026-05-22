@@ -772,7 +772,8 @@ router.post('/:id/records/clear-pool', (req, res) => {
   }
 
   const confirmed = String(req.body.confirm_clear || '').toLowerCase() === 'yes'
-  const confirmPhrase = String(req.body.confirm_phrase || '').trim()
+  // 大小写不敏感 + 去空白:防止 paste / 输入法 / 移动键盘等绕过前端 oninput 上传小写
+  const confirmPhrase = String(req.body.confirm_phrase || '').trim().toUpperCase()
   if (!confirmed || confirmPhrase !== 'CLEAR') {
     req.session.flash = {
       type: 'error',
