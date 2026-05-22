@@ -551,7 +551,7 @@ router.get('/:id/report/export.md', (req, res) => {
   parts.push(renderPrismaMermaid(prismaCounts).trim())
   parts.push('```')
   parts.push('')
-  parts.push(renderPrismaTextSummary(prismaCounts))
+  parts.push(renderPrismaTextSummary(prismaCounts, { lang: 'en' }))
   parts.push('')
 
   // Results

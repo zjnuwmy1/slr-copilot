@@ -245,12 +245,17 @@ function dbLabel(tag) {
 }
 
 /**
- * 渲染纯文本版 PRISMA flow(导出 Markdown 时用,作为 Mermaid 的 fallback)
+ * 渲染纯文本版 PRISMA flow(用作 Mermaid 的 fallback / 工作页摘要)。
+ *
+ * @param {object} counts
+ * @param {object} [opts]
+ * @param {'zh' | 'en'} [opts.lang='zh']  导出最终论文用 'en';UI 摘要默认 'zh'
  */
-export function renderPrismaTextSummary(counts) {
+export function renderPrismaTextSummary(counts, { lang = 'zh' } = {}) {
   const c = counts || emptyFlow()
-  const lines = ['## PRISMA Flow', '']
-  lines.push('| 阶段 | 计数 |')
+  const L = lang === 'en' ? PRISMA_LABELS_EN : PRISMA_LABELS_ZH
+  const lines = [`## ${L.heading}`, '']
+  lines.push(`| ${L.col_stage} | ${L.col_count} |`)
   lines.push('| --- | --- |')
 
   const idParts = []
@@ -259,12 +264,37 @@ export function renderPrismaTextSummary(counts) {
       if (typeof n === 'number' && n > 0) idParts.push(`${dbLabel(k)}=${n}`)
     }
   }
-  lines.push(`| 检索命中(去重前) | ${c.records_identified_total}${idParts.length ? '(' + idParts.join(', ') + ')' : ''} |`)
-  lines.push(`| 去重移除 | ${c.duplicates_removed} |`)
-  lines.push(`| 待筛选(去重后) | ${c.records_screened} |`)
-  lines.push(`| 标题/摘要排除 | ${c.excluded_title_abstract} |`)
-  lines.push(`| 全文评估 | ${c.full_text_assessed} |`)
-  lines.push(`| 全文排除 | ${c.full_text_excluded} |`)
-  lines.push(`| **最终纳入** | **${c.studies_included}** |`)
+  lines.push(`| ${L.identified} | ${c.records_identified_total}${idParts.length ? '(' + idParts.join(', ') + ')' : ''} |`)
+  lines.push(`| ${L.duplicates} | ${c.duplicates_removed} |`)
+  lines.push(`| ${L.screened} | ${c.records_screened} |`)
+  lines.push(`| ${L.excluded_ta} | ${c.excluded_title_abstract} |`)
+  lines.push(`| ${L.full_text} | ${c.full_text_assessed} |`)
+  lines.push(`| ${L.excluded_ft} | ${c.full_text_excluded} |`)
+  lines.push(`| **${L.included}** | **${c.studies_included}** |`)
   return lines.join('\n')
+}
+
+const PRISMA_LABELS_ZH = {
+  heading:     'PRISMA Flow',
+  col_stage:   '阶段',
+  col_count:   '计数',
+  identified:  '检索命中(去重前)',
+  duplicates:  '去重移除',
+  screened:    '待筛选(去重后)',
+  excluded_ta: '标题/摘要排除',
+  full_text:   '全文评估',
+  excluded_ft: '全文排除',
+  included:    '最终纳入',
+}
+const PRISMA_LABELS_EN = {
+  heading:     'PRISMA Flow',
+  col_stage:   'Stage',
+  col_count:   'Count',
+  identified:  'Records identified',
+  duplicates:  'Duplicates removed',
+  screened:    'Records screened (after duplicates)',
+  excluded_ta: 'Excluded by title/abstract',
+  full_text:   'Full-text articles assessed',
+  excluded_ft: 'Full-text excluded',
+  included:    'Studies included',
 }

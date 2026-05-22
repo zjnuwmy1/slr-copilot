@@ -226,8 +226,17 @@ export function buildSoFRows(db, projectId) {
   }))
 }
 
+// 英文 certainty 标签 — 仅用于最终论文导出(export.md)
+const CERTAINTY_LABELS_EN = {
+  high:     'High ⊕⊕⊕⊕',
+  moderate: 'Moderate ⊕⊕⊕○',
+  low:      'Low ⊕⊕○○',
+  very_low: 'Very Low ⊕○○○',
+}
+
 /**
- * Markdown SoF 表 — 给 report.js 的 export.md 拼附录用
+ * Markdown SoF 表 — 用在 report.js 的 export.md。
+ * 最终论文必须英文,所以这里所有 label 都用英文。
  */
 export function renderSoFMarkdown(db, projectId) {
   const rows = buildSoFRows(db, projectId)
@@ -238,14 +247,14 @@ export function renderSoFMarkdown(db, projectId) {
   lines.push('| Outcome | Studies | Participants | Effect | Certainty | Importance |')
   lines.push('|---|---:|---:|---|---|---|')
   for (const r of rows) {
-    const c = CERTAINTY_LABELS[r.certainty] || r.certainty
+    const c = CERTAINTY_LABELS_EN[r.certainty] || r.certainty
     lines.push(
       `| ${escapePipe(r.outcome)} | ${r.num_studies ?? '—'} | ${r.num_participants ?? '—'} | ${escapePipe(r.effect_size)} | ${c} | ${r.importance || '—'} |`
     )
   }
   lines.push('')
-  // 域明细子表
-  lines.push('### GRADE 下调维度明细')
+  // GRADE downgrade domains sub-table
+  lines.push('### GRADE Downgrade Domains')
   lines.push('')
   lines.push('| Outcome | RoB | Inconsistency | Indirectness | Imprecision | Pub. bias |')
   lines.push('|---|---|---|---|---|---|')
