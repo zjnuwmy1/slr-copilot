@@ -1,99 +1,205 @@
 /**
- * Search strategy generation — 把"已审批的 protocol"翻译成 WoS / Scopus / PubMed 三库
- * 三个版本(高召回 / 平衡 / 高精确)共 9 条可执行检索式。
+ * Search strategy generation — 把"已审批的 protocol + 项目设定"翻译成
+ * 多个数据库 × 3 个版本(high_recall / balanced / high_precision)的可执行检索式。
  *
- * 输出严格 JSON,字段见 OUTPUT_SCHEMA。
+ * 关键约束:
+ *  - 只针对 *用户在项目里勾选的* 数据库生成(原 design 文档 / 后续工程版本),
+ *    不再硬编码 wos+scopus+pubmed 三库;
+ *  - 严格按协议的时间范围、文献类型、语言写进 query_text;
+ *  - 排除文档类型必须显式 NOT 掉(尤其是用户未勾选"Conference Paper"时
+ *    必须排除 conference / proceedings / editorial / letter 等);
+ *  - rationale / warnings 用简体中文,query_text / expanded_terms 用英文学术规范。
  *
- * 落地自用户设计文档 Prompt 2(LLM 在 protocol approved 之后被调用一次)。
+ * 输出严格 JSON,见 OUTPUT_SCHEMA。落地自用户设计文档 Prompt 2。
  */
 
-export const SEARCH_SYSTEM = `你是系统性文献综述(SLR)方法学专家与英文学术图书馆员,精通 Web of Science、Scopus、PubMed 三大库的检索语法。
-请根据用户提供的已审批协议(概念组 + 研究问题 + 纳排标准),生成可直接粘贴执行的检索式。
+// ---- 内部常量 ----
+const VALID_DATABASES = ['wos', 'scopus', 'pubmed']
+const VALID_QUERY_TYPES = ['high_recall', 'balanced', 'high_precision']
+
+// 用户表单里"项目数据库"勾选项的显示名 → 内部 key 映射
+// 现在 prompt 只支持 wos / scopus / pubmed 三种语法;其他(IEEE/ACM/ERIC 等)
+// 暂时映射成 null(忽略)。
+const DB_NAME_TO_KEY = {
+  'web of science': 'wos',
+  'wos': 'wos',
+  'scopus': 'scopus',
+  'pubmed': 'pubmed',
+  'pub med': 'pubmed',
+}
+
+/**
+ * 把项目 databases 数组(可能是 "Web of Science"/"Scopus"/"PubMed"/"IEEE" 等)
+ * 映射成 prompt 支持的内部 key 数组('wos' / 'scopus' / 'pubmed')。
+ *
+ * - 没勾任何已知库 / 全是 IEEE 等不支持的 → 返回 ['wos','scopus','pubmed'](保守默认)
+ * - 已知库去重保留勾选顺序
+ */
+export function resolveTargetDatabases(projectDatabases) {
+  if (!Array.isArray(projectDatabases) || projectDatabases.length === 0) {
+    return ['wos', 'scopus', 'pubmed']
+  }
+  const out = []
+  const seen = new Set()
+  for (const raw of projectDatabases) {
+    if (typeof raw !== 'string') continue
+    const key = DB_NAME_TO_KEY[raw.trim().toLowerCase()]
+    if (!key) continue
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(key)
+  }
+  if (out.length === 0) return ['wos', 'scopus', 'pubmed']
+  return out
+}
+
+export function buildSearchSystem({ targetDatabases }) {
+  const dbs = (Array.isArray(targetDatabases) && targetDatabases.length)
+    ? targetDatabases.filter((d) => VALID_DATABASES.includes(d))
+    : ['wos', 'scopus', 'pubmed']
+
+  const totalCount = dbs.length * 3
+
+  // 各库语法块(只在 target 内的库才贴示例,减少 LLM 噪音 + 减 token)
+  const syntaxBlocks = []
+
+  if (dbs.includes('wos')) {
+    syntaxBlocks.push(`   **Web of Science (wos)**
+   - 字段标签:TS=(主题,默认覆盖 title/abstract/keywords)、TI=(仅标题)、AK=(作者关键词)、AB=(摘要)、PY=(年份)、DT=(文献类型)
+   - 概念组用 \`OR\` 在括号内并列,概念组之间用 \`AND\` 连接
+   - 词组用双引号(\`"deep learning"\`),关闭词形还原
+   - 截词 \`*\`(中间或末尾),邻近 \`NEAR/5\`
+   - 年份:\`AND PY=(YEAR_START-YEAR_END)\`(必须把协议给定的年份范围写进去)
+   - 文献类型(必带):\`AND DT=("Article" OR "Review")\` —— 只放协议允许的;
+     若协议**未**勾选 "Conference Paper",必须**不**写 \`"Proceedings Paper"\` 也不写
+     \`"Meeting Abstract"\`,可显式 \`NOT DT=("Proceedings Paper" OR "Meeting Abstract" OR "Editorial Material" OR "Letter")\` 加固。
+   - 语言:\`AND LA=("English")\`(或协议指定语言列表)。
+   - 范例:
+     \`TS=(("deep learning" OR "neural network*") AND ("medical imag*" OR "radiolog*"))
+       AND PY=(2019-2026) AND DT=("Article" OR "Review")
+       NOT DT=("Proceedings Paper" OR "Meeting Abstract") AND LA=("English")\``)
+  }
+
+  if (dbs.includes('scopus')) {
+    syntaxBlocks.push(`   **Scopus (scopus)**
+   - 字段标签:TITLE-ABS-KEY(综合)、TITLE、ABS、KEY、AUTHKEY、PUBYEAR、DOCTYPE、LANGUAGE
+   - 概念组用 \`OR\` 在括号内并列,概念组之间用 \`AND\`
+   - 词组用双引号,截词 \`*\`,邻近 \`W/5\`(window)或 \`PRE/5\`(precede)
+   - **年份必须写进 query_text**:\`AND PUBYEAR > (YEAR_START - 1) AND PUBYEAR < (YEAR_END + 1)\`
+     —— Scopus PUBYEAR 是严格开区间,所以两边各 ±1。例如协议年份 2019-2026 → \`AND PUBYEAR > 2018 AND PUBYEAR < 2027\`。
+   - **文献类型必带**(只用协议允许的):
+     \`AND ( DOCTYPE("ar") OR DOCTYPE("re") )\` (ar=article, re=review)
+     若协议**未**勾选 "Conference Paper":显式排除 \`AND NOT DOCTYPE("cp") AND NOT DOCTYPE("cr") AND NOT DOCTYPE("ed") AND NOT DOCTYPE("le")\`
+     (cp=conference paper, cr=conference review, ed=editorial, le=letter)。
+   - 语言:\`AND LANGUAGE("English")\`(或协议指定的语言)。
+   - **完整范例**(请严格按此结构出题,务必把以上 4 段过滤都写进 query_text):
+     \`TITLE-ABS-KEY(("deep learning" OR "neural network*") AND ("medical imag*" OR "radiolog*"))
+       AND PUBYEAR > 2018 AND PUBYEAR < 2027
+       AND ( DOCTYPE("ar") OR DOCTYPE("re") )
+       AND NOT DOCTYPE("cp") AND NOT DOCTYPE("cr") AND NOT DOCTYPE("ed") AND NOT DOCTYPE("le")
+       AND LANGUAGE("English")\``)
+  }
+
+  if (dbs.includes('pubmed')) {
+    syntaxBlocks.push(`   **PubMed (pubmed)**
+   - 字段标签:[MeSH Terms](受控词)、[Title/Abstract](自由词)、[Title]、[Date - Publication]、[Publication Type]、[Language]
+   - 概念组里"MeSH 主题词 OR 自由词"组合,例如 \`("Deep Learning"[MeSH Terms] OR "deep learning"[Title/Abstract])\`
+   - 概念组之间用 \`AND\` 连接
+   - 截词 \`*\`(只能末尾,前缀必须 ≥ 4 字符)
+   - **日期范围必须写**:\`AND ("YEAR_START/01/01"[Date - Publication] : "YEAR_END/12/31"[Date - Publication])\`
+     —— 如协议未指定 end,用 \`"3000"[Date - Publication]\`。
+   - **文献类型必带**:\`AND ("Journal Article"[Publication Type])\`;
+     若协议**未**勾选 "Conference Paper",显式排除会议 / 社论 / 通讯:
+     \`NOT ("Editorial"[Publication Type] OR "Comment"[Publication Type] OR "Letter"[Publication Type] OR "Congress"[Publication Type])\`。
+   - 语言:\`AND ("english"[Language])\`(或协议指定语言)。`)
+  }
+
+  const dbList = dbs.map((k) => k.toUpperCase()).join(' / ')
+  const orderedExpect = dbs.map((d) => `${d}×3`).join(' → ')
+
+  return `你是系统性文献综述(SLR)方法学专家与英文学术图书馆员,精通 Web of Science、Scopus、PubMed 的检索语法。
+请根据用户提供的已审批协议(概念组 + 研究问题 + 纳排标准 + 时间范围 + 文献类型限定 + 语言限定),
+为**用户实际勾选的数据库**(本次:${dbList})生成可直接粘贴执行的检索式。
 
 工作准则:
 
-1. 输出**严格 JSON**,字段如下(顺序可变,缺失字段用 null 或空数组):
+1. 输出**严格 JSON**,字段如下:
    {
      "expanded_terms": {
-       "概念组名 1": ["补充同义词/缩写/词形变体"],
+       "概念组名 1": ["补充同义词/缩写/词形变体(英文)"],
        "概念组名 2": ["..."]
      },
      "strategies": [
        { "database": "wos"|"scopus"|"pubmed",
          "query_type": "high_recall"|"balanced"|"high_precision",
-         "query_text": "<可直接粘贴执行的完整检索式>",
-         "rationale": "<1-3 句话:为什么这样写、覆盖范围、潜在漏召因素>",
+         "query_text": "<可直接粘贴执行的完整检索式 — 必含年份 + 文献类型 + 语言过滤>",
+         "rationale": "<1-3 句中文:为什么这样写、覆盖范围、潜在漏召因素>",
          "filters": { "year_range": [起,止], "document_types": [...], "language": [...] }
        }
      ],
-     "warnings": ["如:Scopus 高精确版可能漏掉灰色文献,建议补 Google Scholar"]
+     "warnings": ["..."]
    }
 
-2. **strategies 必须 9 条**:3 个数据库 × 3 个版本,顺序为
-   wos×3 → scopus×3 → pubmed×3,版本顺序为 high_recall → balanced → high_precision。
-   每个组合都必须有,不要省略,不要重复。
+2. **strategies 必须正好 ${totalCount} 条**:
+   - 数据库 = [${dbList}](本次用户只勾选了这些库,**不要**额外为没勾选的库生成);
+   - 顺序 = ${orderedExpect};
+   - 每个 (database, query_type) 组合只一条,不重复、不缺失。
 
-3. 高召回(high_recall):同义词全开、加大量截词、放宽时间和文献类型;预期命中数量 > 平衡版 3-10 倍。
-   平衡(balanced):核心同义词 + 概念组间 AND 严格交叉、时间限定、文献类型限定;预期为推荐执行版本。
-   高精确(high_precision):只保留最核心术语 + 标题/关键词字段限定 + 严格的同义词;预期是平衡版的 1/3 - 1/2。
+3. **每条 query_text 必须包含以下 4 类过滤,缺一不可**:
+   a. 概念组的逻辑组合(组内 OR,组间 AND)
+   b. 协议给的年份范围(用对应库的原生语法,见下)
+   c. 协议允许的文献类型,**并显式排除协议未勾选的类型**(尤其会议论文 / 摘要 / 社论 / 通讯)
+   d. 协议指定的语言(若有)
 
-4. **三库语法**(严格遵守,否则用户粘进去会报错):
+4. 版本语义:
+   - **high_recall**:同义词全开 + 截词 + 在概念组之间适度放宽(但 b/c/d 过滤仍必须严格按协议);预期命中数 = 平衡版 × 3-10
+   - **balanced**:核心同义词 + 概念组间 AND 严格交叉;推荐执行版本
+   - **high_precision**:只保留最核心术语 + 标题/关键词字段限定;预期 = 平衡版 × 1/3 - 1/2
 
-   **Web of Science (wos)**
-   - 字段标签:TS=(主题,默认覆盖 title/abstract/keywords)、TI=(仅标题)、AK=(作者关键词)、AB=(摘要)、PY=(年份)、DT=(文献类型)
-   - 概念组用 \`OR\` 在括号内并列,概念组之间用 \`AND\` 连接
-   - 词组用双引号包(如 \`"deep learning"\`),关闭词形还原
-   - 截词用 \`*\`(中间或末尾),邻近用 \`NEAR/5\`
-   - 年份:\`PY=(2019-2026)\`,文献类型:\`DT=("Article" OR "Review")\`
-   - 范例:\`TS=(("deep learning" OR "neural network*") AND ("medical imag*" OR "radiolog*")) AND PY=(2019-2026) AND DT=("Article")\`
+5. **各库语法块**(严格遵守,否则用户粘进去会报错):
 
-   **Scopus (scopus)**
-   - 字段标签:TITLE-ABS-KEY(综合)、TITLE、ABS、KEY、AUTHKEY、PUBYEAR、DOCTYPE、LANGUAGE
-   - 概念组用 \`OR\` 在括号内并列,概念组之间用 \`AND\`
-   - 词组用双引号(\`"\`),截词 \`*\`,邻近 \`W/5\`(window)或 \`PRE/5\`(precede)
-   - 年份用 \`AND PUBYEAR > 2018 AND PUBYEAR < 2027\`(两边开区间,边界 ±1)
-   - 文献类型:\`AND DOCTYPE("ar") OR DOCTYPE("re")\`(ar=article, re=review)
-   - 范例:\`TITLE-ABS-KEY(("deep learning" OR "neural network*") AND ("medical imag*" OR "radiolog*")) AND PUBYEAR > 2018 AND PUBYEAR < 2027 AND DOCTYPE("ar")\`
+${syntaxBlocks.join('\n\n')}
 
-   **PubMed (pubmed)**
-   - 字段标签:[MeSH Terms](受控词)、[Title/Abstract](自由词)、[Title]、[Date - Publication]、[Publication Type]、[Language]
-   - 概念组里"MeSH 主题词 OR 自由词"组合,例如 \`("Deep Learning"[MeSH Terms] OR "deep learning"[Title/Abstract])\`
-   - 概念组之间用 \`AND\` 连接
-   - 截词 \`*\`(只能在末尾,且必须 ≥ 4 个前缀字符)
-   - 日期范围:\`AND ("2019/01/01"[Date - Publication] : "3000"[Date - Publication])\`(用 3000 作 open-ended)
-   - 文献类型:\`AND ("Journal Article"[Publication Type])\`,排除社论:\`NOT ("Editorial"[Publication Type] OR "Comment"[Publication Type])\`
-   - 范例:\`(("Deep Learning"[MeSH Terms] OR "deep learning"[Title/Abstract] OR "neural network*"[Title/Abstract]) AND ("Diagnostic Imaging"[MeSH Terms] OR "medical imag*"[Title/Abstract])) AND ("2019/01/01"[Date - Publication] : "3000"[Date - Publication]) AND "Journal Article"[Publication Type]\`
+6. **expanded_terms**:为每个原始概念组补充英文同义词 / 缩写 / 词形变体(每组追加 3-8 个),供用户在 UI 上参考。原始术语不必重复。
 
-5. **expanded_terms**:为每个原始概念组补充 LLM 想到的英文同义词 / 缩写 / 词形变体(每组追加 3-8 个),供用户在 UI 上参考。原始术语不必重复。
+7. **warnings**:列出 0-3 条提醒。
 
-6. **warnings**:列出 0-3 条提醒,如"PubMed 高召回可能命中数万条,建议先在 Scopus 试跑"、"未限定语言可能引入大量非英文文献"等。
-
-7. **只输出 JSON**,不要前后加解释、Markdown、代码围栏。
+8. **只输出 JSON**,不要前后加解释、Markdown、代码围栏。
 
 语言要求(**强制**,不论用户输入用什么语言):
-- **rationale 和 warnings 必须用简体中文**输出。即使用户输入或协议里有英文,这两个字段也要翻译成中文。
-- **唯一例外**:query_text、expanded_terms、filters 里的值必须保持**英文学术规范**(MeSH / Scopus 字段名等),
-  因为这些是直接粘到 WoS / Scopus / PubMed 跑英文论文检索的,不能中文化。
+- **rationale 和 warnings 必须用简体中文**输出。
+- **唯一例外**:query_text / expanded_terms / filters 里的值必须保持**英文学术规范**(MeSH / Scopus 字段名等),
+  因为这些是直接粘到检索平台跑英文论文检索的,不能中文化。
 
 写作风格(中文字段都要遵守):
 - **大白话**,不要"赋能 / 范式 / 解构 / 路径 / 机制 / 驱动 / 颗粒度"这类八股套话。
 - 一句话能说清的不绕长句;一条 rationale ≤ 60 字、一条 warning ≤ 80 字。
-- 直接陈述"这样写覆盖什么、漏什么、为什么",不要"基于...的考量"、"从...的视角"开头。
+- 直接陈述"这样写覆盖什么、漏什么、为什么"。
 `
+}
+
+// 老的导出名保留,默认按全 3 库渲染(兼容性兜底,实际调用方应改用 buildSearchSystem)
+export const SEARCH_SYSTEM = buildSearchSystem({ targetDatabases: ['wos', 'scopus', 'pubmed'] })
 
 /**
  * 构造用户消息 — 把 approved protocol 拼成 LLM 的输入。
  *
  * @param {object} args
- * @param {object} args.protocol      normalized protocol(已 parse 过的对象)
- * @param {object} args.projectInput  项目级补充信息(topic / year_start / year_end / databases / language_limits / document_types)
+ * @param {object} args.protocol         normalized protocol(已 parse 过的对象)
+ * @param {object} args.projectInput     项目级补充信息(topic / year_start / year_end / databases / language_limits / document_types)
+ * @param {string[]} [args.targetDatabases]  本次实际要生成的库 key 列表(已用 resolveTargetDatabases 处理过)
  */
-export function buildSearchUserPrompt({ protocol, projectInput }) {
+export function buildSearchUserPrompt({ protocol, projectInput, targetDatabases }) {
   const p = protocol || {}
   const pi = projectInput || {}
+  const dbs = (Array.isArray(targetDatabases) && targetDatabases.length)
+    ? targetDatabases.filter((d) => VALID_DATABASES.includes(d))
+    : resolveTargetDatabases(pi.databases)
+
+  const totalCount = dbs.length * 3
 
   const lines = [
-    '请基于以下已审批协议生成 WoS / Scopus / PubMed 三库 × 三版本检索式:',
+    `请基于以下已审批协议生成 **${dbs.map((k) => k.toUpperCase()).join(' / ')}** 共 ${dbs.length} 个库 × 3 个版本 = ${totalCount} 条检索式:`,
     '',
     `项目主题: ${pi.topic || '(未填)'}`,
   ]
@@ -103,21 +209,46 @@ export function buildSearchUserPrompt({ protocol, projectInput }) {
   const yStart = pi.year_start || pi.yearStart
   const yEnd = pi.year_end || pi.yearEnd
   if (yStart || yEnd) {
-    lines.push(`时间范围: ${yStart || '不限'} - ${yEnd || '不限'}(请把这个范围作为 filters.year_range 的默认值,并直接写进 query_text)`)
+    lines.push(
+      `**时间范围(必须写进每条 query_text)**: ${yStart || '(协议未指定起始)'} - ${yEnd || '(协议未指定结束,Pubmed 用 3000)'}`
+    )
   } else {
-    lines.push('时间范围: 用户未指定,请默认近 8 年(当前 - 7 到当前)')
+    lines.push(
+      '时间范围: 协议未指定 — 请默认近 8 年(当前 - 7 到当前),并显式写进 query_text。'
+    )
   }
+
+  // 文献类型 — 关键
   if (Array.isArray(pi.document_types) && pi.document_types.length) {
-    lines.push(`文献类型限定: ${pi.document_types.join(', ')}`)
+    lines.push('')
+    lines.push(`**文献类型限定(必须写进每条 query_text,且必须显式排除未列出的类型)**:`)
+    pi.document_types.forEach((t) => lines.push(`  - 允许: ${t}`))
+    // 显式提醒:这些常见类型若不在允许列表里就要 NOT 出去
+    const allowedLower = pi.document_types.map((t) => String(t).toLowerCase())
+    const mustExclude = [
+      ['Conference Paper', ['conference paper', 'conference proceedings', 'proceedings paper']],
+      ['Editorial', ['editorial', 'editorial material']],
+      ['Letter / Comment', ['letter', 'comment', 'correspondence']],
+      ['Meeting Abstract', ['meeting abstract']],
+    ]
+    for (const [label, aliases] of mustExclude) {
+      const isAllowed = aliases.some((a) => allowedLower.some((al) => al.includes(a)))
+      if (!isAllowed) lines.push(`  - **排除**: ${label}(显式写 NOT/AND NOT 在 query_text 里)`)
+    }
+  } else {
+    lines.push('文献类型: 协议未指定 — 默认允许 "Article" + "Review",并显式排除 Conference / Editorial / Letter / Meeting Abstract。')
   }
+
+  // 语言
   if (Array.isArray(pi.language_limits) && pi.language_limits.length) {
-    lines.push(`语言限定: ${pi.language_limits.join(', ')}`)
+    lines.push('')
+    lines.push(`**语言限定(必须写进每条 query_text)**: ${pi.language_limits.join(', ')}`)
   }
 
   // 协议主体
   lines.push('')
   lines.push(`推荐综述类型: ${p.recommended_review_type || '(未指定)'}`)
-  if (p.rationale) lines.push(`理由: ${p.rationale}`)
+  if (p.rationale) lines.push(`协议设计理由: ${p.rationale}`)
 
   if (Array.isArray(p.research_questions) && p.research_questions.length) {
     lines.push('')
@@ -141,18 +272,15 @@ export function buildSearchUserPrompt({ protocol, projectInput }) {
   }
   if (Array.isArray(p.exclusion_criteria) && p.exclusion_criteria.length) {
     lines.push('')
-    lines.push('排除标准:')
+    lines.push('排除标准(LLM 必须把可在检索式里实现的排除条件直接写进 query_text):')
     p.exclusion_criteria.forEach((c) => lines.push(`  - ${c}`))
   }
 
   lines.push('')
-  lines.push('请严格按 system message 的 JSON schema 输出,9 条 strategies 不能少。')
+  lines.push(`请严格按 system message 的 JSON schema 输出,正好 ${totalCount} 条 strategies,不能多也不能少。`)
+  lines.push('每条 query_text 必须包含:概念组 + 年份过滤 + 文献类型过滤(含显式 NOT 排除) + 语言过滤,缺一不可。')
   return lines.join('\n')
 }
-
-// ---- 内部常量 ----
-const VALID_DATABASES = ['wos', 'scopus', 'pubmed']
-const VALID_QUERY_TYPES = ['high_recall', 'balanced', 'high_precision']
 
 /**
  * 把 LLM 输出 normalize 成可直接入库的结构。
@@ -167,7 +295,7 @@ const VALID_QUERY_TYPES = ['high_recall', 'balanced', 'high_precision']
  *   }
  *
  * 容错规则:
- *   - 非 9 条不强制报错(让调用方根据条数决定走还是回滚)
+ *   - 非 N 条不强制报错(让调用方根据条数决定走还是回滚)
  *   - 缺字段 / 字段类型错 → 用空值兜底
  *   - query_text 必须是非空字符串,否则该条剔除
  *   - database / query_type 不在白名单 → 该条剔除

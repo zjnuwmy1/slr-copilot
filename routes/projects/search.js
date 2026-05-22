@@ -22,7 +22,9 @@ import { audit } from '../../services/audit.js'
 import { runLlm } from '../../services/llm.js'
 import {
   SEARCH_SYSTEM,
+  buildSearchSystem,
   buildSearchUserPrompt,
+  resolveTargetDatabases,
   normalizeSearchOutput,
   SEARCH_DATABASES,
   SEARCH_QUERY_TYPES,
@@ -147,15 +149,25 @@ router.get('/:id/search', (req, res) => {
     ? []
     : strategies.filter((s) => s.version === latestVersion)
 
-  const byDatabase = { wos: [], scopus: [], pubmed: [] }
+  // 只为用户在项目里勾选的库准备 tab(IEEE / ACM 等不在 prompt 支持列表里,自动落到 ['wos','scopus','pubmed'] 兜底)
+  const targetDatabases = resolveTargetDatabases(project.databases)
+  const byDatabase = {}
+  for (const k of targetDatabases) byDatabase[k] = []
   for (const s of latestBatch) {
-    if (byDatabase[s.database_name]) byDatabase[s.database_name].push(s)
+    // 历史 batch 里可能有未选中的库残留(例如以前生成时还是 3 库默认),也展示
+    if (!byDatabase[s.database_name]) byDatabase[s.database_name] = []
+    byDatabase[s.database_name].push(s)
   }
   // 每个 database 内按 query_type 顺序排序
   const QT_ORDER = { high_recall: 0, balanced: 1, high_precision: 2 }
   for (const k of Object.keys(byDatabase)) {
     byDatabase[k].sort((a, b) => (QT_ORDER[a.query_type] ?? 9) - (QT_ORDER[b.query_type] ?? 9))
   }
+  // dbOrder = 用户选中的 + 历史 batch 里多出来的(放后面)
+  const dbOrderForView = [
+    ...targetDatabases,
+    ...Object.keys(byDatabase).filter((k) => !targetDatabases.includes(k)),
+  ]
 
   let progress = null
   try {
@@ -219,7 +231,8 @@ router.get('/:id/search', (req, res) => {
     recommendation,
     dbLabel: DB_LABEL,
     qtLabel: QT_LABEL,
-    dbOrder: SEARCH_DATABASES,
+    dbOrder: dbOrderForView,
+    targetDatabases,
     qtOrder: SEARCH_QUERY_TYPES,
   })
 })
@@ -243,6 +256,11 @@ router.post('/:id/search/generate', async (req, res) => {
     return res.redirect(`/projects/${project.id}/search`)
   }
 
+  // 只为用户勾选的库生成 — 不再硬编码三库
+  const targetDatabases = resolveTargetDatabases(project.databases)
+  const expectedCount = targetDatabases.length * 3
+
+  const dynamicSystem = buildSearchSystem({ targetDatabases })
   const userPrompt = buildSearchUserPrompt({
     protocol: approved,
     projectInput: {
@@ -255,6 +273,7 @@ router.post('/:id/search/generate', async (req, res) => {
       language_limits: project.language_limits,
       document_types: project.document_types,
     },
+    targetDatabases,
   })
 
   let result
@@ -263,12 +282,12 @@ router.post('/:id/search/generate', async (req, res) => {
       userId: req.user.id,
       actionType: 'search_strategy',
       projectId: project.id,
-      system: SEARCH_SYSTEM,
+      system: dynamicSystem,
       prompt: userPrompt,
       expectJson: true,
       model: 'heavy',
-      maxTokens: 8192,       // 9 条检索式 + 同义词扩展 + 警告,中文较长
-      timeoutMs: 480_000,    // 8 分钟:CLI spawn 开销 + Sonnet 输出 9 条长检索式
+      maxTokens: 8192,
+      timeoutMs: 480_000,
     })
   } catch (e) {
     console.error('[search/generate] runLlm threw:', e)
@@ -295,9 +314,12 @@ router.post('/:id/search/generate', async (req, res) => {
 
   // 标准化
   const normalized = normalizeSearchOutput(result.data || null)
+  // 只保留 LLM 给出的 *本次 targetDatabases* 内的策略,避免历史污染
+  normalized.strategies = normalized.strategies.filter((s) => targetDatabases.includes(s.database))
 
-  // 最少 6 条(2 数据库 × 3 版本)才算有意义,否则记审计 + 失败 flash
-  if (normalized.strategies.length < 6) {
+  // 至少 expectedCount * 2/3 条(允许 LLM 漏一两条但不能整库缺)
+  const minRequired = Math.max(2, Math.floor(expectedCount * 2 / 3))
+  if (normalized.strategies.length < minRequired) {
     audit(db, req, {
       eventType: 'search_generate_failed',
       userId: req.user.id,
@@ -305,13 +327,15 @@ router.post('/:id/search/generate', async (req, res) => {
       payload: {
         status: 'parsed_too_few',
         count: normalized.strategies.length,
+        expected: expectedCount,
+        target_databases: targetDatabases,
         model: result.model,
         had_json: !!result.data,
       },
     })
     req.session.flash = {
       type: 'error',
-      message: `LLM 返回的检索式过少(${normalized.strategies.length} 条),请重试或检查协议是否完整。`,
+      message: `LLM 返回的检索式过少(${normalized.strategies.length}/${expectedCount} 条),请重试或检查协议是否完整。`,
     }
     return res.redirect(`/projects/${project.id}/search`)
   }
@@ -513,9 +537,9 @@ router.post('/:id/search/recommend-best', async (req, res) => {
       system: RECOMMEND_SYSTEM,
       prompt: userPrompt,
       expectJson: true,
-      model: 'standard',
-      maxTokens: 1024,
-      timeoutMs: 60_000,
+      model: 'heavy',     // 之前用 standard 偶尔会出 envelope 包装 / 字段命名漂移
+      maxTokens: 2048,    // 1024 在 secondary_choices > 2 条时偶尔截断,2K 更稳
+      timeoutMs: 120_000,
     })
   } catch (e) {
     console.error('[search/recommend-best] runLlm threw:', e)
