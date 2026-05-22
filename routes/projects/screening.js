@@ -854,11 +854,18 @@ router.get('/:id/screening/progress.json', (req, res) => {
 router.post('/:id/screening/decide/:recordId', (req, res) => {
   const db = req.app.locals.db
   const project = ownProjectOr404(db, req.params.id, req.user.id)
+  // 检测前端是否要 JSON 响应(AJAX 模式)— 避免整页跳转
+  const wantsJson =
+    (req.get('Accept') || '').includes('application/json') ||
+    req.get('X-Requested-With') === 'XMLHttpRequest'
+
   if (!project) {
+    if (wantsJson) return res.status(404).json({ ok: false, error: '项目不存在' })
     return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
   }
   const record = getRecordInProject(db, project.id, req.params.recordId)
   if (!record) {
+    if (wantsJson) return res.status(404).json({ ok: false, error: '文献条目不存在或不属于本项目' })
     return res.status(404).render('error', { title: 'Not Found', message: '文献条目不存在或不属于本项目' })
   }
 
@@ -867,6 +874,7 @@ router.post('/:id/screening/decide/:recordId', (req, res) => {
 
   const decision = String(req.body.decision || '').trim()
   if (!SCREENING_DECISIONS.includes(decision)) {
+    if (wantsJson) return res.status(400).json({ ok: false, error: '决定值非法' })
     req.session.flash = { type: 'error', message: '决定值非法' }
     return res.redirect(redirectUrl)
   }
@@ -893,6 +901,9 @@ router.post('/:id/screening/decide/:recordId', (req, res) => {
     },
   })
 
+  if (wantsJson) {
+    return res.json({ ok: true, record_id: record.id, decision, reason: reason || null })
+  }
   req.session.flash = { type: 'success', message: `已记录人工决定:${decision}` }
   // 跳回 + 锚点定位到当前 record
   res.redirect(redirectUrl + `#row-${record.id}`)

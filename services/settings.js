@@ -193,6 +193,35 @@ export function getAllStepModels(db) {
   return out
 }
 
+/**
+ * 反查:给定一个具体模型名,返回它属于哪个 provider('anthropic' / 'openai' / null)。
+ *
+ * 用途:runLlm 在 pickCredential 之前需要知道 step_model 偏好的 provider,
+ * 否则 pickCredential 默认拿 anthropic 凭证,然后 resolveStepModel 看到 gpt-5.5
+ * 不在 anthropic 列表里,做"跨 provider 翻译"→ 用户的 OpenAI 选择被静默改成 Claude。
+ *
+ * 别名('flagship'/'heavy'/'standard'/'light')不映射 provider,返回 null。
+ * 未知型号启发式判定:gpt-* / o[1-9]* → openai;claude-* → anthropic。
+ */
+export function inferProviderFromModelName(modelName) {
+  if (!modelName) return null
+  const lower = String(modelName).toLowerCase().trim()
+  if (!lower) return null
+  // 别名 — 不绑定特定 provider
+  if (['flagship', 'heavy', 'standard', 'light', ''].includes(lower)) return null
+  // 精确匹配 AVAILABLE_MODELS
+  for (const p of Object.keys(AVAILABLE_MODELS)) {
+    if (AVAILABLE_MODELS[p].some((m) => m.id.toLowerCase() === lower)) return p
+  }
+  // 启发式兜底(用户可能输入未列出的型号,如 future 版本)
+  if (lower.startsWith('gpt-') || lower.startsWith('o1') || lower.startsWith('o3')
+      || lower.startsWith('o4') || lower.startsWith('chatgpt-')) {
+    return 'openai'
+  }
+  if (lower.startsWith('claude-')) return 'anthropic'
+  return null
+}
+
 // ============================================================
 // 推理强度(thinking / reasoning_effort)
 //

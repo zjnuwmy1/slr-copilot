@@ -47,7 +47,7 @@ const LIGHT_MODEL = {
   openai: process.env.OPENAI_MODEL_LIGHT || 'gpt-5.4-mini',
 }
 
-import { resolveStepModel, resolveStepReasoning } from './settings.js'
+import { resolveStepModel, resolveStepReasoning, getSetting, inferProviderFromModelName } from './settings.js'
 
 /**
  * 从模型字符串里提取语义。优先级:
@@ -348,10 +348,23 @@ export async function runLlm(db, opts) {
   }
 
   // 1. 选凭证
+  //    BUGFIX:如果调用方没指定 preferredProvider,但 step_model.<actionType>
+  //    设的是具体型号(如 'gpt-5.5'),要先反查 provider 用作 preferredProvider,
+  //    否则 pickCredential 会默认拿 anthropic,后续 resolveStepModel 看到
+  //    gpt-5.5 不在 anthropic 列表 → 跨 provider 翻译成 claude-opus 系列,
+  //    用户的 OpenAI 选择被静默改成 Claude。
+  let effectivePreferredProvider = preferredProvider
+  if (!effectivePreferredProvider && actionType) {
+    try {
+      const configured = getSetting(db, `step_model.${actionType}`)
+      const p = inferProviderFromModelName(configured)
+      if (p) effectivePreferredProvider = p
+    } catch { /* settings 表异常 — 走默认 */ }
+  }
   const pick = pickCredential(db, {
     userId,
     credentialId: credIdOverride,
-    preferredProvider,
+    preferredProvider: effectivePreferredProvider,
     preferredAuthType,
   })
   if (!pick.ok) {

@@ -497,8 +497,10 @@
                 <span class="text-xs text-slate-400">先审批协议才能跑 AI</span>
               <% } %>
 
-              <!-- 人工决定 -->
+              <!-- 人工决定(AJAX — 不跳转,提交后视觉反馈) -->
               <form method="post" action="<%= filterBase %>/decide/<%= r.id %>"
+                    data-ajax-decide
+                    data-record-id="<%= r.id %>"
                     class="flex flex-wrap items-center gap-2">
                 <% ['include', 'exclude', 'uncertain'].forEach(v => {
                      const [cls, label] = humanBadge(v)
@@ -513,9 +515,10 @@
                        value="<%= escAttr(r.human_reason) %>"
                        placeholder="人工备注(可选)"
                        class="w-56 rounded-md border border-slate-300 px-2 py-1 text-xs focus:border-slate-500 focus:outline-none" />
-                <button type="submit" class="rounded-md bg-slate-900 px-2.5 py-1 text-xs text-white hover:bg-slate-700">
+                <button type="submit" class="rounded-md bg-slate-900 px-2.5 py-1 text-xs text-white hover:bg-slate-700 disabled:opacity-60">
                   保存
                 </button>
+                <span class="ajax-feedback text-xs text-slate-500" aria-live="polite"></span>
               </form>
             </div>
           </article>
@@ -602,8 +605,79 @@
     })
   }
 
-  // 批量进度轮询
+  // ============================================================
+  // AJAX 人工决定按钮 — 提交后不跳转,直接视觉反馈
+  // ============================================================
+  function decideBadge(d) {
+    return ({
+      include: ['#059669', '纳入'],  exclude: ['#e11d48', '排除'],
+      uncertain: ['#d97706', '不确定'],
+    })[d] || ['#64748b', d]
+  }
+  document.querySelectorAll('form[data-ajax-decide]').forEach(function(form) {
+    form.addEventListener('submit', function(e) {
+      e.preventDefault()
+      var btn = form.querySelector('button[type=submit]')
+      var fb = form.querySelector('.ajax-feedback')
+      var checked = form.querySelector('input[name="decision"]:checked')
+      if (!checked) {
+        if (fb) { fb.textContent = '请先勾选纳/排/疑'; fb.style.color = '#e11d48' }
+        return
+      }
+      var prevBtnText = btn ? btn.textContent : ''
+      if (btn) { btn.disabled = true; btn.textContent = '保存中…' }
+      if (fb) { fb.textContent = ''; fb.style.color = '' }
+      var fd = new FormData(form)
+      fetch(form.action, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        body: fd,
+      })
+        .then(function(r) { return r.json().catch(function() { return { ok: false, error: 'HTTP ' + r.status } }) })
+        .then(function(d) {
+          if (btn) { btn.disabled = false; btn.textContent = prevBtnText || '保存' }
+          if (!d || !d.ok) {
+            if (fb) { fb.style.color = '#e11d48'; fb.textContent = '✗ ' + ((d && d.error) || '保存失败') }
+            return
+          }
+          var v = decideBadge(d.decision)
+          // 行底色:include → emerald;exclude → rose
+          var row = document.getElementById('row-' + (d.record_id || form.dataset.recordId))
+          if (row) {
+            row.style.background = d.decision === 'include' ? 'rgba(16,185,129,0.06)'
+              : d.decision === 'exclude' ? 'rgba(244,63,94,0.05)' : ''
+          }
+          if (fb) {
+            fb.style.color = v[0]
+            fb.textContent = '✓ 已保存:' + v[1]
+            setTimeout(function() { if (fb.textContent.indexOf('✓') === 0) fb.textContent = '' }, 2000)
+          }
+          // 更新 radio 选中视觉:同 form 内 label 的 ring 切换
+          form.querySelectorAll('label').forEach(function(lb) {
+            var inp = lb.querySelector('input[type=radio]')
+            if (!inp) return
+            if (inp.checked) {
+              lb.classList.add('border-blue-500', 'ring-2', 'ring-blue-200')
+              lb.classList.remove('border-slate-300')
+            } else {
+              lb.classList.remove('border-blue-500', 'ring-2', 'ring-blue-200')
+              lb.classList.add('border-slate-300')
+            }
+          })
+        })
+        .catch(function(err) {
+          if (btn) { btn.disabled = false; btn.textContent = prevBtnText || '保存' }
+          if (fb) { fb.style.color = '#e11d48'; fb.textContent = '✗ 网络错误' }
+        })
+    })
+  })
+
+  // ============================================================
+  // 批量进度轮询 + 完成通知(Web Notification + title 闪动 + 页内 toast)
+  // ============================================================
   var pjId = <%- JSON.stringify(project.id) %>;
+  var pjTitle = <%- JSON.stringify(project.title || 'SLR') %>;
   var box = document.getElementById('batch-progress');
   var bar = document.getElementById('bp-bar');
   var status = document.getElementById('bp-status');
@@ -611,7 +685,66 @@
   var current = document.getElementById('bp-current');
   if (!box) return;
 
+  // ---- 通知工具 ----
+  var origTitle = document.title
+  var titleBlinkTimer = null
+  function blinkTitle(text) {
+    if (titleBlinkTimer) clearInterval(titleBlinkTimer)
+    var on = true
+    titleBlinkTimer = setInterval(function() {
+      document.title = on ? text : origTitle
+      on = !on
+    }, 1000)
+    // 用户切回标签 → 停止闪动
+    var stop = function() {
+      if (document.visibilityState === 'visible') {
+        if (titleBlinkTimer) { clearInterval(titleBlinkTimer); titleBlinkTimer = null }
+        document.title = origTitle
+        document.removeEventListener('visibilitychange', stop)
+      }
+    }
+    document.addEventListener('visibilitychange', stop)
+  }
+  function showToast(msg, kind) {
+    kind = kind || 'success'
+    var t = document.createElement('div')
+    var bg = kind === 'error' ? '#e11d48' : '#059669'
+    t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;background:' + bg +
+      ';color:#fff;padding:14px 18px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);' +
+      'font-size:13px;max-width:380px;line-height:1.5;cursor:pointer'
+    t.textContent = msg
+    t.addEventListener('click', function() { t.remove() })
+    document.body.appendChild(t)
+    setTimeout(function() { if (t.parentNode) t.remove() }, 8000)
+  }
+  function notifyDone(p) {
+    var msg = 'AI 初筛完成:' + p.done + '/' + p.total +
+      (p.errors ? '(错误 ' + p.errors + ')' : '') + ' — ' + pjTitle
+    // 页内 toast(始终有)
+    showToast('✓ ' + msg, p.errors ? 'error' : 'success')
+    // 标签页非激活 → 闪动 title + 尝试系统通知
+    if (document.visibilityState !== 'visible') {
+      blinkTitle('🔔 完成 · ' + origTitle)
+      if ('Notification' in window && Notification.permission === 'granted') {
+        try { new Notification('SLR 批量初筛完成', { body: msg, tag: 'screening-' + pjId, icon: '/favicon.ico' }) }
+        catch (e) { /* ignore */ }
+      }
+    }
+  }
+  // 启动前主动申请通知权限(只在用户启动批量后才请求)
+  function ensureNotificationPermission() {
+    if (!('Notification' in window)) return
+    if (Notification.permission === 'default') {
+      Notification.requestPermission().catch(function() { /* ignore */ })
+    }
+  }
+  // 监听批量启动 form(让它请求权限)
+  var batchForm = document.querySelector('form[action*="/screening/run-batch"]')
+  if (batchForm) batchForm.addEventListener('submit', ensureNotificationPermission)
+
+  // ---- 轮询 ----
   var initialBatch = <%- JSON.stringify(batch || null) %>;
+  var notifiedDone = false
   var poll = function() {
     fetch('/projects/' + pjId + '/screening/progress.json', { credentials: 'same-origin' })
       .then(function(r) { return r.json() })
@@ -629,8 +762,12 @@
         if (p.running) {
           setTimeout(poll, 3000);
         } else {
-          // 完成后 2 秒刷新页面,把新结果显出来
-          setTimeout(function() { window.location.reload(); }, 2000);
+          if (!notifiedDone) {
+            notifiedDone = true
+            notifyDone(p)
+          }
+          // 完成后 3 秒刷新页面,把新结果显出来(给 toast/notification 一点显示时间)
+          setTimeout(function() { window.location.reload(); }, 3000);
         }
       })
       .catch(function() {
@@ -640,6 +777,8 @@
   };
   // 只有当前有任务在跑时才轮询(根据初始状态)
   if (initialBatch && initialBatch.status === 'running') {
+    // 进入页面就主动申请通知权限(用户可能是刚启动批量后导航回这页)
+    ensureNotificationPermission()
     setTimeout(poll, 1500);
   }
 })();
