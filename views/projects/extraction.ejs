@@ -79,10 +79,21 @@
               <%= (batchJob && batchJob.status === 'running') ? '运行中…' : `批量抽取 ${stats.pending} 条` %>
             </button>
           </form>
-          <a href="/projects/<%= project.id %>/extraction/export.json"
-             class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-            导出 JSON
-          </a>
+          <% if (stats.done > 0) { %>
+            <a href="/projects/<%= project.id %>/extraction/export.json"
+               class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
+              导出 JSON(<%= stats.done %> 条)
+            </a>
+            <a href="/projects/<%= project.id %>/matrix/template.xlsx"
+               class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+               title="文献矩阵 Excel(更适合人工浏览;每列一个维度,每行一篇论文)">
+              导出 Excel(矩阵)
+            </a>
+          <% } else { %>
+            <span class="text-xs text-slate-400 italic">
+              ⓘ 暂无已抽取的数据,先跑批量抽取再导出
+            </span>
+          <% } %>
         </div>
       </div>
 

@@ -127,14 +127,18 @@ router.get('/:id/matrix/template.xlsx', async (req, res, next) => {
     try { seedColumnsForProject(db, project.id) } catch {}
 
     const buf = await buildXlsxTemplate(db, project.id)
-    const safeTitle = (project.title || 'project').replace(/[^\w\-一-龥]+/g, '_').slice(0, 40)
+    // Content-Disposition 不能含非 ASCII 字符(Node 强制 ERR_INVALID_CHAR);
+    // 用 RFC 5987:filename="<ASCII fallback>"; filename*=UTF-8''<encoded>
+    const fname = `matrix_${(project.title || 'project').replace(/\s+/g, '_').slice(0, 40)}.xlsx`
+    const asciiFallback = fname.replace(/[^\x20-\x7E]/g, '_')
+    const encoded = encodeURIComponent(fname)
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="matrix_${safeTitle}.xlsx"`
+      `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`
     )
     res.send(buf)
   } catch (e) {

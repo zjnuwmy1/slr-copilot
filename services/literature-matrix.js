@@ -186,6 +186,130 @@ DOI:{{doi}}
 标题:{{title}}
 摘要:{{abstract}}`,
   },
+
+  // ─── 跨学科通用补充字段(工 / 文 / 医 都用得到)─────────
+  {
+    key: 'research_question',
+    label: '研究问题/假设',
+    description: '作者明确陈述的 RQ 或 H(不是发现,是问题本身)',
+    is_quantitative: 0,
+    display_order: 15,   // 早于 population,因为这是研究的起点
+    ai_prompt_template:
+`这篇论文要回答的核心研究问题(RQ)或假设(H)是什么?
+摘录或概括作者明确陈述的问题/假设,1-2 句,80 字内。
+不要把"发现"或"结论"塞进来 — 那是答案,不是问题。
+如果作者没明说,从摘要的"目的/目标"段推一个。
+标题:{{title}}
+摘要:{{abstract}}`,
+  },
+  {
+    key: 'theoretical_framework',
+    label: '理论框架',
+    description: '依据什么理论 / 学派 / 模型(文科 & 社科常见,工医偶尔)',
+    is_quantitative: 0,
+    display_order: 25,
+    ai_prompt_template:
+`这篇论文用了什么理论框架、模型或学派立场?
+例如:"建构主义""自我决定论""TAM 技术接受模型""社会认知理论""扎根理论""话语分析"等。
+没有显式理论的实证 / 工程论文写"无明确理论框架(实证/工程)"。
+列 1-2 个,15 字内,顿号分隔。
+标题:{{title}}
+摘要:{{abstract}}`,
+  },
+  {
+    key: 'data_source',
+    label: '数据来源/类型',
+    description: '问卷 / 访谈 / 实验测量 / 公开数据集 / 档案 等',
+    is_quantitative: 0,
+    display_order: 75,   // 紧跟 intervention 之后
+    ai_prompt_template:
+`这篇论文的数据是怎么来的?用 1-3 个标签描述。
+常见类别:
+  - 实证:问卷调查 / 半结构访谈 / 焦点小组 / 实验测量 / 田野观察 / 课堂录像
+  - 二手:公开数据集 / 档案文献 / 政策文本 / 媒体语料 / 已发表论文(系统综述/元分析)
+  - 工程:仿真数据 / 真实采集 / benchmark 数据集 / 传感器记录
+顿号分隔,30 字内。摘要未说就写"未说明"。
+标题:{{title}}
+摘要:{{abstract}}`,
+  },
+  {
+    key: 'analysis_method',
+    label: '数据分析方法',
+    description: '统计 / 编码 / 主题分析 / 内容分析 / 仿真 / 机器学习 等',
+    is_quantitative: 0,
+    display_order: 95,   // outcomes 之后,measurement_tools 之前
+    ai_prompt_template:
+`这篇论文用了哪些数据分析方法?列出关键方法名,顿号分隔,40 字内。
+例如:
+  - 量化:t 检验 / ANOVA / 回归 / SEM 结构方程 / 多层模型 / 元分析
+  - 质性:主题分析 / 扎根理论编码 / 话语分析 / 内容分析 / 案例对比
+  - 工程:数值仿真 / 蒙特卡洛 / 机器学习 / 深度学习模型 / 系统识别
+  - 综合:混合方法 / 三角验证
+摘要常省略具体方法,如果只写得粗(如"统计分析"),原样写;如果完全没说,写"未说明"。
+标题:{{title}}
+摘要:{{abstract}}`,
+  },
+  {
+    key: 'key_concepts_defined',
+    label: '核心概念定义',
+    description: '本文给出的关键术语操作性定义(文/社科尤其重要)',
+    is_quantitative: 0,
+    display_order: 115,   // key_findings 之前一点
+    ai_prompt_template:
+`这篇论文在哪些核心术语上给出了自己的定义?列 1-3 个,格式:"术语:简短定义"。
+例如:"工作记忆:在认知任务中临时保持并操控信息的系统"。
+只列论文里**显式定义**的术语,不要列你常识里的。摘要通常不展开定义,如果没有写"摘要未提"。
+标题:{{title}}
+摘要:{{abstract}}`,
+  },
+  {
+    key: 'ethics_funding',
+    label: '伦理审查 + 资助 + COI',
+    description: 'IRB/伦理委员会编号、资助来源、利益冲突声明(医学/社科必查)',
+    is_quantitative: 0,
+    display_order: 135,
+    ai_prompt_template:
+`这篇论文是否报告了 (1) 伦理审查 / IRB 批准编号、(2) 资助来源、(3) 利益冲突声明?
+按以下格式输出(只写论文中明确提到的):
+  伦理:[编号或机构 / 或"未报告"]
+  资助:[资助方 / 或"未报告"]
+  COI:[有/无 / 或"未报告"]
+摘要里通常不放这些信息,大多数情况都写"未报告(需查正文)"。
+标题:{{title}}
+摘要:{{abstract}}`,
+  },
+  {
+    key: 'reproducibility',
+    label: '可重复性(数据/代码)',
+    description: '数据是否公开 / 代码 / 仪器 / 协议是否可获取',
+    is_quantitative: 0,
+    display_order: 140,
+    ai_prompt_template:
+`这篇论文的可重复性如何?检查以下几点:
+  - 数据公开:是 / 否 / 未说明(若是,提供链接如 OSF / GitHub / Zenodo)
+  - 代码公开:是 / 否 / 未说明
+  - 协议预注册:是(PROSPERO/OSF 编号) / 否 / 未说明
+  - 详细方法:正文有 / 仅摘要
+一行写完,30 字内。摘要通常不提,写"摘要未提,需查正文"。
+标题:{{title}}
+摘要:{{abstract}}`,
+  },
+  {
+    key: 'practical_implication',
+    label: '应用启示',
+    description: '作者建议的实践应用 / 政策含义 / 工程改进点',
+    is_quantitative: 0,
+    display_order: 145,
+    ai_prompt_template:
+`作者提出了什么具体的实践应用建议?可以是:
+  - 教育:课堂改革 / 课程设计建议
+  - 医学:临床指南更新 / 患者管理建议
+  - 工程:设计准则 / 系统优化建议
+  - 政策:管理决策含义
+1-2 句,60 字内。如果作者只讲了"未来研究方向"没讲应用,写"作者仅提未来研究,未给具体应用"。
+标题:{{title}}
+摘要:{{abstract}}`,
+  },
 ]
 
 // ============================================================
