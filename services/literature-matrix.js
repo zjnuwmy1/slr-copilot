@@ -33,11 +33,9 @@ export const DEFAULT_MATRIX_COLUMNS = [
     ai_prompt_template:
 `请帮我判断下面这篇论文是什么研究设计,只输出一个短语,不要解释。
 可选项:RCT、准实验、队列、横断面、病例对照、案例研究、质性研究、混合方法、系统综述、其它(注明)。
-论文信息:
-标题:{{title}}
-DOI:{{doi}}
-摘要:{{abstract}}
-如果摘要不足以判断,回答"无法从摘要判断"。`,
+如果全文不足以判断,回答"无法判断(全文未明示)"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'population',
@@ -48,8 +46,8 @@ DOI:{{doi}}
     ai_prompt_template:
 `从下面这篇论文里提取研究对象的描述:人群类型、年龄段、学段或职业、健康/学习状态。
 一句话写完,30 字以内,不要列要点。
-标题:{{title}}
-摘要:{{abstract}}`,
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'country_region',
@@ -59,9 +57,9 @@ DOI:{{doi}}
     display_order: 30,
     ai_prompt_template:
 `这篇论文的数据来自哪个国家或地区?只输出国家/地区名(可多个,用逗号分隔)。
-如果摘要没说,回答"未说明"。
-标题:{{title}}
-摘要:{{abstract}}`,
+如果全文没说,回答"未说明"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'sample_size_total',
@@ -71,9 +69,9 @@ DOI:{{doi}}
     display_order: 40,
     ai_prompt_template:
 `这篇论文的总样本量是多少?只输出一个数字,不带"人""名""位",也不要带括号。
-如果是综述/不适用,输出 0。如果摘要没给,输出 -1。
-标题:{{title}}
-摘要:{{abstract}}`,
+如果是综述/不适用,输出 0。如果全文没给,输出 -1。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'sample_size_per_group',
@@ -84,8 +82,8 @@ DOI:{{doi}}
     ai_prompt_template:
 `如果这篇论文有分组,列出各组人数,格式如"实验组 30 / 对照组 28"。
 没有分组就写"单组"或"不适用"。一行写完,不要解释。
-标题:{{title}}
-摘要:{{abstract}}`,
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'recruitment',
@@ -95,9 +93,9 @@ DOI:{{doi}}
     display_order: 60,
     ai_prompt_template:
 `这篇论文的受试者是怎么招到的?常见类别:便利抽样、随机抽样、分层抽样、滚雪球、线上招募、课堂整班、社区/医院。
-一句话讲清,20 字内。摘要没说就写"未说明"。
-标题:{{title}}
-摘要:{{abstract}}`,
+一句话讲清,20 字内。全文没说就写"未说明"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'intervention',
@@ -108,8 +106,8 @@ DOI:{{doi}}
     ai_prompt_template:
 `这篇论文里的核心干预或技术是什么?用一句话讲清:做了什么、用了什么工具、持续多久(若有)。
 40 字以内,不要写"旨在""探究"这类八股。
-标题:{{title}}
-摘要:{{abstract}}`,
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'comparator',
@@ -119,9 +117,9 @@ DOI:{{doi}}
     display_order: 80,
     ai_prompt_template:
 `这篇论文的对照组是什么?常见:传统教学、常规护理、空白对照、等待名单、安慰剂、无对照。
-一句话写完。如果摘要没讲对照,写"未说明"或"无对照"。
-标题:{{title}}
-摘要:{{abstract}}`,
+一句话写完。如果全文没讲对照,写"未说明"或"无对照"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'outcomes',
@@ -132,8 +130,8 @@ DOI:{{doi}}
     ai_prompt_template:
 `这篇论文测了哪些结局变量?列出 2-5 个,用顿号分隔。
 例如"学业成绩、学习动机、焦虑水平"。不要写测量工具(那是另一列)。
-标题:{{title}}
-摘要:{{abstract}}`,
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'measurement_tools',
@@ -144,9 +142,9 @@ DOI:{{doi}}
     ai_prompt_template:
 `这篇论文用了哪些量表、问卷或客观指标来测结局?
 列出名字(英文缩写也可),用顿号分隔,如"MSLQ、PISA 阅读题、心率"。
-摘要没给就写"未说明"。
-标题:{{title}}
-摘要:{{abstract}}`,
+全文没给就写"未说明"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'key_findings',
@@ -157,8 +155,8 @@ DOI:{{doi}}
     ai_prompt_template:
 `用一两句中文讲清这篇论文的核心发现 —— 谁比谁怎么样、显著与否、效应方向。
 60 字以内,直接说结论,不要"本研究表明""旨在探究"这种开头。
-标题:{{title}}
-摘要:{{abstract}}`,
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'quantitative_results',
@@ -169,9 +167,9 @@ DOI:{{doi}}
     ai_prompt_template:
 `从这篇论文里提取所有显著性检验和效应量的数值。
 格式:每个发现一行,如"实验组 vs 对照组:t(58)=2.31, p=.024, d=0.61"。
-没有量化结果(质性/综述)写"不适用"。摘要没给但是定量研究,写"全文需查"。
-标题:{{title}}
-摘要:{{abstract}}`,
+没有量化结果(质性/综述)写"不适用"。全文有但找不到具体数值,写"未明确报告"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'limitations',
@@ -182,9 +180,9 @@ DOI:{{doi}}
     ai_prompt_template:
 `这篇论文作者自己承认了哪些局限?列 1-3 条,用顿号分隔。
 只写作者自己说的,不要你额外评判。
-摘要里通常不写局限,如果没有就回答"摘要未提"。
-标题:{{title}}
-摘要:{{abstract}}`,
+全文末尾或讨论部分通常会写,如果完全没有就回答"作者未讨论局限"。
+论文(完整全文):
+{{paper}}`,
   },
 
   // ─── 跨学科通用补充字段(工 / 文 / 医 都用得到)─────────
@@ -198,9 +196,9 @@ DOI:{{doi}}
 `这篇论文要回答的核心研究问题(RQ)或假设(H)是什么?
 摘录或概括作者明确陈述的问题/假设,1-2 句,80 字内。
 不要把"发现"或"结论"塞进来 — 那是答案,不是问题。
-如果作者没明说,从摘要的"目的/目标"段推一个。
-标题:{{title}}
-摘要:{{abstract}}`,
+如果作者没明说,从引言末尾或方法首段推一个。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'theoretical_framework',
@@ -213,8 +211,8 @@ DOI:{{doi}}
 例如:"建构主义""自我决定论""TAM 技术接受模型""社会认知理论""扎根理论""话语分析"等。
 没有显式理论的实证 / 工程论文写"无明确理论框架(实证/工程)"。
 列 1-2 个,15 字内,顿号分隔。
-标题:{{title}}
-摘要:{{abstract}}`,
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'data_source',
@@ -228,9 +226,9 @@ DOI:{{doi}}
   - 实证:问卷调查 / 半结构访谈 / 焦点小组 / 实验测量 / 田野观察 / 课堂录像
   - 二手:公开数据集 / 档案文献 / 政策文本 / 媒体语料 / 已发表论文(系统综述/元分析)
   - 工程:仿真数据 / 真实采集 / benchmark 数据集 / 传感器记录
-顿号分隔,30 字内。摘要未说就写"未说明"。
-标题:{{title}}
-摘要:{{abstract}}`,
+顿号分隔,30 字内。全文未说就写"未说明"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'analysis_method',
@@ -245,9 +243,9 @@ DOI:{{doi}}
   - 质性:主题分析 / 扎根理论编码 / 话语分析 / 内容分析 / 案例对比
   - 工程:数值仿真 / 蒙特卡洛 / 机器学习 / 深度学习模型 / 系统识别
   - 综合:混合方法 / 三角验证
-摘要常省略具体方法,如果只写得粗(如"统计分析"),原样写;如果完全没说,写"未说明"。
-标题:{{title}}
-摘要:{{abstract}}`,
+如果作者只写得很粗(如"统计分析"),原样写;完全没说就写"未说明"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'key_concepts_defined',
@@ -258,9 +256,9 @@ DOI:{{doi}}
     ai_prompt_template:
 `这篇论文在哪些核心术语上给出了自己的定义?列 1-3 个,格式:"术语:简短定义"。
 例如:"工作记忆:在认知任务中临时保持并操控信息的系统"。
-只列论文里**显式定义**的术语,不要列你常识里的。摘要通常不展开定义,如果没有写"摘要未提"。
-标题:{{title}}
-摘要:{{abstract}}`,
+只列论文里**显式定义**的术语,不要列你常识里的。如果全文中没有显式定义,回答"未给出显式定义"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'ethics_funding',
@@ -274,9 +272,9 @@ DOI:{{doi}}
   伦理:[编号或机构 / 或"未报告"]
   资助:[资助方 / 或"未报告"]
   COI:[有/无 / 或"未报告"]
-摘要里通常不放这些信息,大多数情况都写"未报告(需查正文)"。
-标题:{{title}}
-摘要:{{abstract}}`,
+如果全文中也没有,写"未报告"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'reproducibility',
@@ -289,10 +287,10 @@ DOI:{{doi}}
   - 数据公开:是 / 否 / 未说明(若是,提供链接如 OSF / GitHub / Zenodo)
   - 代码公开:是 / 否 / 未说明
   - 协议预注册:是(PROSPERO/OSF 编号) / 否 / 未说明
-  - 详细方法:正文有 / 仅摘要
-一行写完,30 字内。摘要通常不提,写"摘要未提,需查正文"。
-标题:{{title}}
-摘要:{{abstract}}`,
+  - 详细方法:正文有完整章节 / 仅有概述
+一行写完,30 字内。如果完全没有,写"未报告"。
+论文(完整全文):
+{{paper}}`,
   },
   {
     key: 'practical_implication',
@@ -307,8 +305,8 @@ DOI:{{doi}}
   - 工程:设计准则 / 系统优化建议
   - 政策:管理决策含义
 1-2 句,60 字内。如果作者只讲了"未来研究方向"没讲应用,写"作者仅提未来研究,未给具体应用"。
-标题:{{title}}
-摘要:{{abstract}}`,
+论文(完整全文):
+{{paper}}`,
   },
 ]
 
@@ -611,6 +609,223 @@ export function addCustomColumn(db, projectId, { key, label, description, ai_pro
     order,
   )
   return { id, key: safeKey }
+}
+
+// ============================================================
+// 一次性总 prompt:把所有列拼成一段大 prompt
+// 用户把这段 prompt + 论文全文喂给自己的 AI(Claude/ChatGPT),
+// 一次性输出所有字段的 JSON,然后粘到 matrix 行或 Excel。
+// ============================================================
+export function buildMasterExtractionPrompt(db, projectId, project) {
+  const columns = listColumns(db, projectId)
+  const p = project || {}
+  const lines = []
+
+  lines.push('# 文献矩阵抽取(一次性总 prompt)')
+  lines.push('')
+  lines.push('你是一位严谨的 SLR(系统性文献综述)数据抽取助手。')
+  lines.push('我会给你一篇论文的完整全文(可能是 PDF / Markdown / 纯文本)。')
+  lines.push('请按下面的字段定义,**一次性**输出一段 JSON,把每个字段填完。')
+  lines.push('')
+
+  // 项目上下文 — 帮 AI 更精准判断
+  if (p.title || p.topic || p.discipline) {
+    lines.push('## 本 SLR 项目背景(供你理解抽取语境)')
+    if (p.title)      lines.push(`- 项目标题:${p.title}`)
+    if (p.topic)      lines.push(`- 主题:${p.topic}`)
+    if (p.discipline) lines.push(`- 学科:${p.discipline}`)
+    if (p.goal)       lines.push(`- 研究目标:${p.goal}`)
+    lines.push('')
+  }
+
+  // 字段定义
+  lines.push(`## 字段(共 ${columns.length} 个)`)
+  lines.push('')
+  for (const c of columns) {
+    const typeTag = c.is_quantitative ? '[数字]' : '[文本]'
+    lines.push(`### \`${c.key}\` — ${c.label} ${typeTag}`)
+    if (c.description) lines.push(`说明:${c.description}`)
+    if (c.ai_prompt_template) {
+      // 删除 prompt 里"论文(完整全文):\n{{paper}}"段(总 prompt 末尾会统一附论文)
+      const cleaned = c.ai_prompt_template
+        .replace(/论文\(完整全文\)[\s\S]*?\{\{paper\}\}/g, '')
+        .replace(/\{\{paper\}\}/g, '')
+        .trim()
+      if (cleaned) lines.push(`抽取要点:\n${cleaned}`)
+    }
+    lines.push('')
+  }
+
+  // 输出 schema 示例
+  lines.push('## 输出格式(严格 JSON,字段名一字不差)')
+  lines.push('```json')
+  lines.push('{')
+  columns.forEach((c, i) => {
+    const comma = i < columns.length - 1 ? ',' : ''
+    const placeholder = c.is_quantitative ? '0' : '""'
+    lines.push(`  "${c.key}": ${placeholder}${comma}`)
+  })
+  lines.push('}')
+  lines.push('```')
+  lines.push('')
+
+  // 规则
+  lines.push('## 规则(必须遵守)')
+  lines.push('1. 输出**只能**是一个 JSON 代码块,不要前后加任何解释。')
+  lines.push('2. 字段名必须**一字不差**(case-sensitive),不要省略字段。')
+  lines.push('3. [数字] 字段输出整数;找不到用 `-1`;明确不适用用 `0`。')
+  lines.push('4. [文本] 字段输出短句,找不到用 `""` 空字符串。')
+  lines.push('5. 只摘取作者**显式陈述**的内容,不要替作者推断。')
+  lines.push('6. 涉及方法、数据、伦理这类信息,请**读完整全文**(不要只看摘要)。')
+  lines.push('')
+
+  lines.push('## 论文')
+  lines.push('请把论文全文粘贴/上传在下面(或这条消息之后单独发):')
+  lines.push('```')
+  lines.push('<在此粘贴论文全文 — Title / Authors / Abstract / Body / References>')
+  lines.push('```')
+
+  return lines.join('\n')
+}
+
+// ============================================================
+// 刷新默认列的 prompt 模板到最新版(DEFAULT_MATRIX_COLUMNS)
+// 只更新 is_default=1 的列,保留用户自定义列不动。
+// 用户在矩阵页点"刷新默认列模板"触发。
+// ============================================================
+export function refreshDefaultColumnPrompts(db, projectId) {
+  const updateStmt = db.prepare(
+    `UPDATE matrix_columns
+     SET description = ?, ai_prompt_template = ?
+     WHERE project_id = ? AND key = ? AND is_default = 1`
+  )
+  let updated = 0
+  const tx = db.transaction(() => {
+    for (const c of DEFAULT_MATRIX_COLUMNS) {
+      const r = updateStmt.run(
+        c.description || null,
+        c.ai_prompt_template || null,
+        projectId,
+        c.key,
+      )
+      if (r.changes) updated += 1
+    }
+  })
+  tx()
+  return { updated }
+}
+
+// ============================================================
+// AI 定制列建议 — system + user prompt 构造器
+// 调用方:routes/projects/matrix.js POST /:id/matrix/suggest-columns
+// ============================================================
+export const SUGGEST_COLUMNS_SYSTEM = `你是 SLR 文献矩阵定制顾问。
+基于用户的项目主题 + 研究协议 + 已有列,反推 3-6 个**对这个具体项目特别有用**
+但通用模板里没有的额外列。
+
+判断标准:
+- 跟项目研究问题、概念组、纳排标准强相关
+- 通用 21 列覆盖不到的子维度(例如医学影像 SLR 才需要"影像模态",教育干预 SLR 才需要"教育阶段")
+- 能从一篇论文的全文中提取(不要凭空发明无法从论文里读到的字段)
+
+避免:
+- 跟现有列重复 / 高度相似
+- 完全主观的判断(如"创新性"这种无法从论文事实提取)
+- 一次给超过 6 个
+
+**输出严格 JSON,不要任何前后文字 / Markdown / 代码围栏**:
+{
+  "suggestions": [
+    {
+      "key": "<英文 snake_case,简短>",
+      "label": "<中文短标签,≤10字>",
+      "description": "<≤30字 说明这个字段干啥>",
+      "is_quantitative": <true|false>,
+      "ai_prompt_template": "<≤200字 中文 prompt,告诉读全文的 AI 如何提取此字段。占位符必含 {{paper}}>",
+      "reasoning": "<≤40字 中文,说明为什么这个项目特别需要这列>"
+    }
+  ],
+  "overall_reasoning": "<≤120字 中文,总览思路>"
+}`
+
+export function buildSuggestColumnsPrompt({ project, protocol, existingKeys }) {
+  const p = project || {}
+  const pr = protocol || {}
+  const lines = []
+  lines.push('请基于以下项目信息,给出 3-6 个**专属定制列**(通用 21 列已覆盖的不要重复)。')
+  lines.push('')
+  if (p.title)      lines.push(`项目标题:${p.title}`)
+  if (p.topic)      lines.push(`主题:${p.topic}`)
+  if (p.discipline) lines.push(`学科:${p.discipline}`)
+  if (p.goal)       lines.push(`研究目标:${p.goal}`)
+
+  const rqs = Array.isArray(pr.research_questions) ? pr.research_questions : []
+  if (rqs.length) {
+    lines.push('')
+    lines.push('研究问题:')
+    rqs.forEach((q, i) => lines.push(`  RQ${i + 1}. ${q}`))
+  }
+  const cg = Array.isArray(pr.concept_groups) ? pr.concept_groups : []
+  if (cg.length) {
+    lines.push('')
+    lines.push('概念组:')
+    cg.forEach((g, i) => {
+      const terms = Array.isArray(g.terms) ? g.terms : []
+      lines.push(`  ${i + 1}. ${g.name || '未命名'}: ${terms.slice(0, 8).join(' | ')}`)
+    })
+  }
+  const ic = Array.isArray(pr.inclusion_criteria) ? pr.inclusion_criteria : []
+  if (ic.length) {
+    lines.push('')
+    lines.push('纳入标准:')
+    ic.forEach((c) => lines.push(`  - ${c}`))
+  }
+
+  lines.push('')
+  lines.push('已有列(请不要重复):')
+  lines.push((existingKeys || []).join(' / '))
+
+  lines.push('')
+  lines.push('请输出 JSON({ suggestions: [...], overall_reasoning })。')
+  return lines.join('\n')
+}
+
+/**
+ * 解析 LLM 的 suggest-columns 输出 → 安全字段数组
+ */
+export function normalizeSuggestColumns(raw, { existingKeys } = {}) {
+  if (!raw || typeof raw !== 'object') return { suggestions: [], overall_reasoning: '' }
+  // 剥 wrapper
+  let r = raw
+  for (let i = 0; i < 3; i++) {
+    if (Array.isArray(r.suggestions)) break
+    const inner = r.result || r.data || r.output || r.response
+    if (inner && typeof inner === 'object') r = inner
+    else break
+  }
+  if (!Array.isArray(r.suggestions)) return { suggestions: [], overall_reasoning: '' }
+
+  const known = new Set((existingKeys || []).map((k) => String(k).toLowerCase()))
+  const out = []
+  for (const item of r.suggestions.slice(0, 8)) {
+    if (!item || typeof item !== 'object') continue
+    const key = String(item.key || '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').slice(0, 40)
+    if (!key || known.has(key)) continue
+    const label = String(item.label || '').trim().slice(0, 30)
+    if (!label) continue
+    out.push({
+      key,
+      label,
+      description: String(item.description || '').trim().slice(0, 120),
+      is_quantitative: !!item.is_quantitative,
+      ai_prompt_template: String(item.ai_prompt_template || '').trim().slice(0, 800),
+      reasoning: String(item.reasoning || '').trim().slice(0, 200),
+    })
+  }
+  return {
+    suggestions: out,
+    overall_reasoning: String(r.overall_reasoning || '').trim().slice(0, 400),
+  }
 }
 
 // ============================================================

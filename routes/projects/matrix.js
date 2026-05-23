@@ -24,6 +24,7 @@ import express from 'express'
 import multer from 'multer'
 import { audit } from '../../services/audit.js'
 import { getProjectProgress } from '../../services/prisma.js'
+import { runLlm } from '../../services/llm.js'
 import {
   seedColumnsForProject,
   listColumns,
@@ -34,6 +35,11 @@ import {
   importXlsxBuffer,
   addCustomColumn,
   deleteCustomColumn,
+  buildMasterExtractionPrompt,
+  refreshDefaultColumnPrompts,
+  SUGGEST_COLUMNS_SYSTEM,
+  buildSuggestColumnsPrompt,
+  normalizeSuggestColumns,
 } from '../../services/literature-matrix.js'
 
 const router = express.Router({ mergeParams: true })
@@ -317,6 +323,166 @@ router.post('/:id/matrix/columns/:colId/delete', (req, res, next) => {
       req.session.flash = { type: 'error', message: '删列失败:' + e.message }
     }
 
+    res.redirect(`/projects/${project.id}/matrix`)
+  } catch (e) {
+    next(e)
+  }
+})
+
+// ============================================================
+// GET /:id/matrix/master-prompt.txt — 一次性总 prompt 文本下载
+//   用户:复制 → 粘贴到自己的 AI(Claude/ChatGPT)→ 附论文 → 得 JSON
+// ============================================================
+router.get('/:id/matrix/master-prompt.txt', (req, res, next) => {
+  try {
+    const db = req.app.locals.db
+    const project = ownProjectOr404(db, req.params.id, req.user.id)
+    if (!project) return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+    try { seedColumnsForProject(db, project.id) } catch {}
+    const text = buildMasterExtractionPrompt(db, project.id, project)
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.send(text)
+  } catch (e) {
+    next(e)
+  }
+})
+
+// ============================================================
+// POST /:id/matrix/refresh-default-prompts — 把已 seed 的 is_default 列
+//   的 description + ai_prompt_template 强制刷到 DEFAULT_MATRIX_COLUMNS 最新版。
+//   用户自定义列不动。
+// ============================================================
+router.post('/:id/matrix/refresh-default-prompts', (req, res, next) => {
+  try {
+    const db = req.app.locals.db
+    const project = ownProjectOr404(db, req.params.id, req.user.id)
+    if (!project) return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+    // seed 一次保证新增列(已 seed 项目缺少的新 key)也写入
+    try { seedColumnsForProject(db, project.id) } catch {}
+    const { updated } = refreshDefaultColumnPrompts(db, project.id)
+    audit(db, req, {
+      eventType: 'matrix_default_prompts_refreshed',
+      userId: req.user.id, projectId: project.id,
+      payload: { updated },
+    })
+    req.session.flash = { type: 'success', message: `已把 ${updated} 个默认列的 prompt 刷新到最新版(自定义列不动)。` }
+    res.redirect(`/projects/${project.id}/matrix`)
+  } catch (e) {
+    next(e)
+  }
+})
+
+// ============================================================
+// POST /:id/matrix/suggest-columns — AI 根据协议反推专属列建议
+//   返回 JSON,前端弹 modal,用户复选后 POST /columns/add 一一加入。
+// ============================================================
+router.post('/:id/matrix/suggest-columns', async (req, res) => {
+  try {
+    const db = req.app.locals.db
+    const project = ownProjectOr404(db, req.params.id, req.user.id)
+    if (!project) return res.status(404).json({ ok: false, error: 'not_found' })
+
+    // 已审批协议
+    const protocolRow = db.prepare(
+      `SELECT * FROM protocols WHERE project_id = ? AND approved_by_user = 1 ORDER BY version DESC LIMIT 1`
+    ).get(project.id)
+    if (!protocolRow) {
+      return res.status(400).json({ ok: false, error: '请先审批协议(才能让 AI 知道你研究的是什么)' })
+    }
+    const protocol = {
+      ...protocolRow,
+      research_questions: parseJsonArrayField(protocolRow.research_questions),
+      inclusion_criteria: parseJsonArrayField(protocolRow.inclusion_criteria),
+      exclusion_criteria: parseJsonArrayField(protocolRow.exclusion_criteria),
+      concept_groups: (() => {
+        try { const x = JSON.parse(protocolRow.concept_groups || '[]'); return Array.isArray(x) ? x : [] }
+        catch { return [] }
+      })(),
+    }
+
+    try { seedColumnsForProject(db, project.id) } catch {}
+    const existingCols = listColumns(db, project.id)
+    const existingKeys = existingCols.map((c) => c.key)
+
+    const userPrompt = buildSuggestColumnsPrompt({
+      project, protocol, existingKeys,
+    })
+
+    const result = await runLlm(db, {
+      userId: req.user.id,
+      actionType: 'matrix_suggest_columns',
+      projectId: project.id,
+      system: SUGGEST_COLUMNS_SYSTEM,
+      prompt: userPrompt,
+      expectJson: true,
+      model: 'standard',
+      maxTokens: 2048,
+      timeoutMs: 120_000,
+    })
+
+    if (!result.ok) {
+      return res.status(502).json({ ok: false, error: `AI 调用失败:${result.status} ${(result.error || '').slice(0, 200)}` })
+    }
+
+    const norm = normalizeSuggestColumns(result.data || null, { existingKeys })
+    audit(db, req, {
+      eventType: 'matrix_suggest_columns',
+      userId: req.user.id, projectId: project.id,
+      payload: { count: norm.suggestions.length, model: result.model },
+    })
+    res.json({
+      ok: true,
+      ...norm,
+      model: result.model,
+    })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: 'server_error: ' + (e?.message || '').slice(0, 200) })
+  }
+})
+
+// ============================================================
+// POST /:id/matrix/columns/batch-add — 从 suggest-columns modal 一次批量加
+//   body: suggestions JSON 数组(已通过 normalizeSuggestColumns,前端往 input 里塞)
+// ============================================================
+router.post('/:id/matrix/columns/batch-add', (req, res, next) => {
+  try {
+    const db = req.app.locals.db
+    const project = ownProjectOr404(db, req.params.id, req.user.id)
+    if (!project) return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
+
+    let suggestions = []
+    try { suggestions = JSON.parse(req.body.suggestions_json || '[]') } catch { suggestions = [] }
+    if (!Array.isArray(suggestions) || suggestions.length === 0) {
+      req.session.flash = { type: 'error', message: '没有选中的列' }
+      return res.redirect(`/projects/${project.id}/matrix`)
+    }
+
+    let added = 0
+    const failed = []
+    for (const s of suggestions) {
+      try {
+        addCustomColumn(db, project.id, {
+          key: s.key,
+          label: s.label,
+          description: s.description,
+          ai_prompt_template: s.ai_prompt_template,
+          is_quantitative: !!s.is_quantitative,
+        })
+        added += 1
+      } catch (e) {
+        failed.push(`${s.label || s.key}:${e.message}`)
+      }
+    }
+    audit(db, req, {
+      eventType: 'matrix_columns_batch_added',
+      userId: req.user.id, projectId: project.id,
+      payload: { added, failed: failed.length, source: 'ai_suggest' },
+    })
+    req.session.flash = {
+      type: failed.length === suggestions.length ? 'error' : 'success',
+      message: `已加 ${added} 列${failed.length ? ` · ${failed.length} 失败:` + failed.slice(0, 3).join(' / ') : ''}`,
+    }
     res.redirect(`/projects/${project.id}/matrix`)
   } catch (e) {
     next(e)

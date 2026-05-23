@@ -37,10 +37,54 @@
           <span class="text-[11px] text-slate-400">≤ <%= maxUploadMb %>MB</span>
         </form>
 
+        <!-- 一次性总 prompt 复制按钮 -->
+        <button type="button" id="btn-copy-master-prompt"
+                class="rounded-lg border-2 border-blue-300 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-800 hover:bg-blue-100"
+                title="复制一段大 prompt,把所有列定义打包成一次性指令。配合论文全文喂给 Claude / ChatGPT 一次抽完。">
+          📋 复制一次性总提示词
+        </button>
+
+        <!-- AI 定制专属列 -->
+        <button type="button" id="btn-suggest-cols"
+                class="rounded-lg border-2 border-purple-300 bg-purple-50 px-3 py-2 text-sm font-medium text-purple-800 hover:bg-purple-100"
+                title="让 AI 根据本项目协议反推 3-6 个特别有用、通用模板没覆盖的额外列">
+          🎯 让 AI 定制本项目专属列
+        </button>
+
         <button type="button" id="btn-add-col"
                 class="ml-auto rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-          + 加列
+          + 手动加列
         </button>
+
+        <!-- 刷新默认列 prompt -->
+        <form method="post" action="/projects/<%= project.id %>/matrix/refresh-default-prompts" class="inline"
+              onsubmit="return confirm('把默认列(is_default=1)的 prompt 模板刷到最新版?\n你之前手改过的默认列描述/prompt 会被覆盖回最新模板。\n自定义列不动。');">
+          <button type="submit" title="把默认列的 description + ai_prompt_template 更新到最新版本(每次代码升级后用一次)"
+                  class="rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50">
+            ↻ 刷默认列
+          </button>
+        </form>
+      </div>
+
+      <!-- 复制提示 反馈 -->
+      <p id="copy-feedback" class="mt-2 hidden text-xs"></p>
+
+      <!-- AI 定制列 modal(默认隐藏) -->
+      <div id="suggest-modal" class="hidden mt-3 rounded-lg border-2 border-purple-300 bg-purple-50/40 p-4">
+        <div class="flex items-center justify-between">
+          <p class="text-sm font-semibold text-purple-900">🎯 AI 推荐的项目专属列</p>
+          <button type="button" id="suggest-close" class="text-xs text-purple-700 hover:underline">关闭</button>
+        </div>
+        <p id="suggest-status" class="mt-1 text-xs text-purple-700">AI 思考中…(~10-30s)</p>
+        <form method="post" action="/projects/<%= project.id %>/matrix/columns/batch-add"
+              id="suggest-add-form" class="hidden mt-3 space-y-2">
+          <input type="hidden" name="suggestions_json" id="suggest-payload" />
+          <p id="suggest-reasoning" class="text-[11px] text-purple-600"></p>
+          <div id="suggest-list" class="space-y-2"></div>
+          <button type="submit" class="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-500">
+            添加勾选的列
+          </button>
+        </form>
       </div>
 
       <!-- 加列表单(默认隐藏) -->
@@ -309,6 +353,144 @@
     cell._lastSaved = cell.value
     cell.addEventListener('blur', () => saveCell(cell))
   })
+
+  // ============================================================
+  // 复制一次性总 prompt
+  // ============================================================
+  var feedback = document.getElementById('copy-feedback')
+  function flashFeedback(msg, color) {
+    if (!feedback) return
+    feedback.textContent = msg
+    feedback.style.color = color || '#059669'
+    feedback.classList.remove('hidden')
+    setTimeout(function() { feedback.classList.add('hidden') }, 3000)
+  }
+  var copyBtn = document.getElementById('btn-copy-master-prompt')
+  if (copyBtn) {
+    copyBtn.addEventListener('click', function() {
+      copyBtn.disabled = true
+      copyBtn.textContent = '📋 加载中…'
+      fetch('/projects/<%= project.id %>/matrix/master-prompt.txt', { credentials: 'same-origin' })
+        .then(function(r) { return r.text() })
+        .then(function(text) {
+          // 用 Clipboard API,降级用 textarea
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).then(function() { return text.length })
+          }
+          var ta = document.createElement('textarea')
+          ta.value = text
+          ta.style.position = 'fixed'
+          ta.style.top = '-1000px'
+          document.body.appendChild(ta)
+          ta.select()
+          document.execCommand('copy')
+          ta.remove()
+          return text.length
+        })
+        .then(function(len) {
+          copyBtn.disabled = false
+          copyBtn.textContent = '✓ 已复制(' + len + ' 字)'
+          flashFeedback('✓ 总 prompt 已复制到剪贴板。粘到你的 AI 工具(Claude/ChatGPT),再附论文全文即可。', '#059669')
+          setTimeout(function() { copyBtn.textContent = '📋 复制一次性总提示词' }, 3000)
+        })
+        .catch(function(err) {
+          copyBtn.disabled = false
+          copyBtn.textContent = '📋 复制一次性总提示词'
+          flashFeedback('✗ 复制失败:' + err.message, '#e11d48')
+        })
+    })
+  }
+
+  // ============================================================
+  // AI 定制专属列
+  // ============================================================
+  var sugBtn = document.getElementById('btn-suggest-cols')
+  var sugModal = document.getElementById('suggest-modal')
+  var sugStatus = document.getElementById('suggest-status')
+  var sugForm = document.getElementById('suggest-add-form')
+  var sugList = document.getElementById('suggest-list')
+  var sugReasoning = document.getElementById('suggest-reasoning')
+  var sugPayload = document.getElementById('suggest-payload')
+  var sugClose = document.getElementById('suggest-close')
+
+  if (sugClose) {
+    sugClose.addEventListener('click', function() {
+      if (sugModal) sugModal.classList.add('hidden')
+    })
+  }
+  if (sugBtn) {
+    sugBtn.addEventListener('click', function() {
+      sugBtn.disabled = true
+      sugBtn.textContent = '🤖 AI 思考中…'
+      if (sugModal) sugModal.classList.remove('hidden')
+      if (sugStatus) sugStatus.textContent = 'AI 正在阅读你的协议并定制专属列…(10-30s)'
+      if (sugForm) sugForm.classList.add('hidden')
+
+      fetch('/projects/<%= project.id %>/matrix/suggest-columns', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: '',
+      })
+        .then(function(r) { return r.json().catch(function() { return { ok: false, error: 'HTTP ' + r.status } }) })
+        .then(function(d) {
+          sugBtn.disabled = false
+          sugBtn.textContent = '🎯 让 AI 定制本项目专属列'
+          if (!d || !d.ok) {
+            if (sugStatus) sugStatus.textContent = '✗ ' + ((d && d.error) || '失败')
+            return
+          }
+          var suggestions = d.suggestions || []
+          if (suggestions.length === 0) {
+            if (sugStatus) sugStatus.textContent = 'AI 觉得通用 21 列已经够你这个项目了 — 没建议新增列。'
+            return
+          }
+          if (sugStatus) sugStatus.textContent = 'AI 建议加 ' + suggestions.length + ' 列(默认全选,可勾掉不要的):'
+          if (sugReasoning) sugReasoning.textContent = d.overall_reasoning || ''
+          if (sugList) sugList.innerHTML = ''
+          suggestions.forEach(function(s, i) {
+            var item = document.createElement('label')
+            item.className = 'flex items-start gap-2 rounded border border-purple-200 bg-white p-2 cursor-pointer hover:border-purple-400'
+            item.innerHTML =
+              '<input type="checkbox" data-sug-idx="' + i + '" checked class="mt-1" />' +
+              '<div class="flex-1 min-w-0">' +
+                '<p class="text-sm font-medium text-slate-900">' + escapeHtml(s.label) +
+                  ' <code class="ml-1 text-[10px] font-mono text-slate-500">' + escapeHtml(s.key) + '</code>' +
+                  (s.is_quantitative ? ' <span class="ml-1 rounded bg-blue-100 px-1 py-0 text-[9px] text-blue-700">数字</span>' : '') +
+                '</p>' +
+                '<p class="text-xs text-slate-600 mt-0.5">' + escapeHtml(s.description) + '</p>' +
+                (s.reasoning ? '<p class="text-[10px] text-purple-600 mt-1">推荐理由:' + escapeHtml(s.reasoning) + '</p>' : '') +
+                (s.ai_prompt_template ? '<details class="mt-1"><summary class="text-[10px] text-slate-500 cursor-pointer">AI prompt 模板</summary>' +
+                  '<pre class="mt-1 max-h-32 overflow-auto rounded bg-slate-50 p-1 text-[10px] whitespace-pre-wrap">' + escapeHtml(s.ai_prompt_template) + '</pre></details>' : '') +
+              '</div>'
+            if (sugList) sugList.appendChild(item)
+          })
+          // 监听复选 → 重写 hidden payload
+          function rebuildPayload() {
+            var selected = []
+            sugList.querySelectorAll('input[type=checkbox]').forEach(function(cb) {
+              if (cb.checked) selected.push(suggestions[parseInt(cb.dataset.sugIdx, 10)])
+            })
+            if (sugPayload) sugPayload.value = JSON.stringify(selected)
+          }
+          sugList.querySelectorAll('input[type=checkbox]').forEach(function(cb) {
+            cb.addEventListener('change', rebuildPayload)
+          })
+          rebuildPayload()
+          if (sugForm) sugForm.classList.remove('hidden')
+        })
+        .catch(function(err) {
+          sugBtn.disabled = false
+          sugBtn.textContent = '🎯 让 AI 定制本项目专属列'
+          if (sugStatus) sugStatus.textContent = '✗ 网络错误:' + err.message
+        })
+    })
+  }
+  function escapeHtml(s) {
+    if (s == null) return ''
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]
+    })
+  }
 })()
 </script>
 
