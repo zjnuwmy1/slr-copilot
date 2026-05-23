@@ -83,7 +83,35 @@ export function normalizeRecord(rawRow) {
     if (m) out.year = Number(m[1]);
   }
 
+  // 双语标题清洗 — 见 cleanBilingualTitle 注释
+  const cleaned = cleanBilingualTitle(out.title);
+  if (cleaned.title_alt) {
+    out.title = cleaned.title;
+    out.title_alt = cleaned.title_alt;
+  }
+
   return out;
+}
+
+/**
+ * 把 Scopus / WoS 的双语标题(`<English>; [<其他语言翻译>]`)拆成主标题 + 翻译。
+ *
+ *   输入  "Foo; [Bar]"
+ *   输出  { title: 'Foo', title_alt: 'Bar' }
+ *
+ *   输入  "Foo" / null / ''
+ *   输出  { title: <原值>, title_alt: null }
+ *
+ * 用于所有需要把 record.title 给"下游"的地方:引文输出(APA / IEEE / GB/T 7714 / BibTeX /
+ * RIS / CSL JSON)、LLM 抽取 prompt、综述初稿、PRISMA flow 等。
+ * 不动 DB 原值。
+ */
+export function cleanBilingualTitle(rawTitle) {
+  if (!rawTitle) return { title: rawTitle || '', title_alt: null };
+  const s = String(rawTitle);
+  const m = s.match(/^(.+?)\s*;\s*\[(.+)\]\s*$/s);
+  if (!m) return { title: s, title_alt: null };
+  return { title: m[1].trim(), title_alt: m[2].trim() };
 }
 
 // ---------------------------------------------------------------------------

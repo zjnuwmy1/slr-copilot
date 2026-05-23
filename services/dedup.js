@@ -106,26 +106,32 @@ export function dedupProject(db, { projectId }) {
   }
 
   // ---- Level 1: DOI 完全匹配 ----
-  const byDoi = new Map() // normDoi → first record's group_id
+  // 注意:只把"真正配上对的 DOI"(at least 2 rows 共享同一 normalized DOI)归组。
+  //       单条 DOI 的不分组,以免占住 Level 2 的位置 —— Level 2 还要看它能不能跟
+  //       无 DOI 的同篇 records 通过 title 匹配。
+  // 早期 bug:旧实现给每条有 DOI 的记录都 assign 一个 group_id(哪怕只有自己一条),
+  //          导致 "Scopus(有 DOI)+ Zotero(无 DOI)同篇" 永远不会在 Level 2 合并 —
+  //          因为 Scopus 已经被 Level 1 占住、Level 2 直接 continue 跳过。
+  const doiGroups = new Map() // normDoi → [recordIds]
   for (const r of rows) {
     const nd = normalizeDoi(r.doi)
     if (!nd) continue
-    if (byDoi.has(nd)) {
-      const gid = byDoi.get(nd)
-      assign(r.id, gid)
-    } else {
-      const gid = randomId('dup')
-      byDoi.set(nd, gid)
-      assign(r.id, gid)
-    }
+    if (!doiGroups.has(nd)) doiGroups.set(nd, [])
+    doiGroups.get(nd).push(r.id)
+  }
+  for (const [_nd, ids] of doiGroups) {
+    if (ids.length < 2) continue   // 单 DOI 不算"匹配上"
+    const gid = randomId('dup')
+    for (const rid of ids) assign(rid, gid)
   }
 
   // ---- Level 2: normalized_title + year±1 + 第一作者姓 ----
-  // 先按 normalized_title 聚类
+  // 先按 normalized_title 聚类。被 Level 1 真正归过组(>= 2 条 DOI 匹配)的跳过,
+  // 但只有自己一条的、有 DOI 的 records 仍然走 Level 2 —— 它们可能跟无 DOI 的同篇配对。
   const byTitle = new Map() // normTitle → [rows...]
   for (const r of rows) {
     if (!r.normalized_title) continue
-    if (groupOf.has(r.id)) continue // 已被 DOI 归组的不再 title 归
+    if (groupOf.has(r.id)) continue // 已被 DOI 真组(>=2)归过的不再 title 归
     const t = r.normalized_title
     if (!byTitle.has(t)) byTitle.set(t, [])
     byTitle.get(t).push(r)

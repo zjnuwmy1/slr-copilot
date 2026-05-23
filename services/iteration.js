@@ -21,6 +21,7 @@
  */
 
 import { audit } from './audit.js'
+import { cleanBilingualTitle } from './citation-format.js'
 
 // ============================================================
 // 1) Snapshot 收集器:把项目所有前序数据装进一个对象
@@ -386,7 +387,7 @@ function gatherPerRecordDecisions(db, projectId, maxRows = 300) {
   const out = picked.map((r, idx) => ({
     idx: idx + 1,
     record_id: r.id,
-    title: truncate(r.title, 160),
+    title: truncate(cleanBilingualTitle(r.title).title, 160),
     year: r.year,
     journal: truncate(r.journal, 60),
     doi: r.doi || null,
@@ -766,7 +767,7 @@ export function buildIterationUserPrompt({ snapshot, userFeedback }) {
         const huR = r.human_reason ? ` · Human: "${r.human_reason}"` : ''
         const doi = r.doi ? ` doi=${r.doi}` : ''
         const yr = r.year ? ` (${r.year})` : ''
-        lines.push(`  #${r.idx} AI=${r.ai_suggestion}${conf} Human=${r.human_decision} · "${r.title}"${yr}${doi}${aiR}${mi}${me}${huR}`)
+        lines.push(`  #${r.idx} AI=${r.ai_suggestion}${conf} Human=${r.human_decision} · "${cleanBilingualTitle(r.title).title}"${yr}${doi}${aiR}${mi}${me}${huR}`)
       }
     }
   }

@@ -1,5 +1,5 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
-<%- include('partials/project-header', { project }) %>
+<%- include('partials/project-header', { project, currentStep: 'report' }) %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
   <%- include('partials/stepper', { project, progress, currentStep: 'report' }) %>
@@ -8,9 +8,9 @@
     <!-- Step 8 是综述输出 — PRISMA 在这里要前台,因为最终成稿必须 PRISMA 合规 -->
     <div class="rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3">
       <p class="text-xs font-medium uppercase tracking-wider text-emerald-700">第 8 步 / 共 8 步</p>
-      <h1 class="mt-1 text-lg font-semibold text-slate-900">写成可投稿的综述</h1>
+      <h1 class="mt-1 text-lg font-semibold text-slate-900">撰写综述初稿</h1>
       <p class="mt-1 text-sm text-slate-600">
-        最终成稿环节,整文按 PRISMA 2020 合规导出。下方会自动:① 分章生成 9 段初稿,每条事实自动挂回原文献;② 从筛选日志算出 PRISMA flow diagram;③ 导出 Markdown 时附上 27 项 PRISMA 清单与检索式附录。
+        最终成稿环节,全文按 PRISMA 2020 规范输出。本步骤自动完成:① 分章生成九段初稿,每条事实回溯至原文献;② 依据筛选日志生成 PRISMA 流程图;③ 导出 Markdown 时附 27 项 PRISMA 清单与检索式附录。
       </p>
       <p class="mt-2 text-xs text-emerald-700">
         ✓ 覆盖 PRISMA
@@ -87,8 +87,8 @@
         </div>
         <% if (job.errors && job.errors.length) { %>
           <details class="mt-2">
-            <summary class="cursor-pointer text-xs text-red-700">⚠ <%= job.errors.length %> 个章节失败</summary>
-            <ul class="mt-1 space-y-0.5 text-xs text-red-700">
+            <summary class="cursor-pointer text-xs text-rose-700">⚠ <%= job.errors.length %> 个章节失败</summary>
+            <ul class="mt-1 space-y-0.5 text-xs text-rose-700">
               <% job.errors.forEach(e => { %>
                 <li>· <%= e.section %>: <%= e.msg %></li>
               <% }) %>

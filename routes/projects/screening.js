@@ -339,6 +339,11 @@ router.get('/:id/screening', (req, res) => {
     if (Number.isFinite(n) && n > 0 && n < 9999) yearTo = n
   }
   const onlyPdf = req.query.has_pdf === '1' || req.query.has_pdf === 'on' || req.query.has_pdf === 'true'
+  // PDF 状态相关筛选(三选一互斥,优先级 pdf > 暂无 > 容缺)
+  //   missing_pdf  = "仅暂无"(用户没标过容缺,待审)— 用户去 triaging
+  //   only_unavailable = "仅容缺"(用户已确认找不到,可批量跑摘要)
+  const onlyMissingPdf = req.query.missing_pdf === '1' || req.query.missing_pdf === 'on' || req.query.missing_pdf === 'true'
+  const onlyUnavailable = req.query.only_unavailable === '1' || req.query.only_unavailable === 'on'
   const onlyDoi = req.query.has_doi === '1' || req.query.has_doi === 'on' || req.query.has_doi === 'true'
   const onlyMultiLang = req.query.only_multi_language === '1'
   const onlyNonEnglish = req.query.only_non_english === '1'
@@ -358,6 +363,9 @@ router.get('/:id/screening', (req, res) => {
     params.push(humanF)
   }
   if (onlyPdf) where.push('r.has_pdf = 1')
+  // 注意 missing_pdf 收紧为"暂无"(pending,非 unavailable),让用户能专注 triage 待办那一批
+  if (onlyMissingPdf) where.push("((r.has_pdf = 0 OR r.has_pdf IS NULL) AND (r.pdf_status IS NULL OR r.pdf_status = 'pending'))")
+  if (onlyUnavailable) where.push("r.pdf_status = 'unavailable'")
   if (onlyDoi) where.push("r.doi IS NOT NULL AND r.doi != ''")
   if (onlyMultiLang) {
     where.push(`(r.language IS NOT NULL AND r.language != '' AND
@@ -393,7 +401,7 @@ router.get('/:id/screening', (req, res) => {
   const rows = db
     .prepare(
       `SELECT r.id, r.title, r.year, r.journal, r.authors_text, r.abstract,
-              r.keywords_json, r.has_pdf, r.doi, r.language, r.source_databases,
+              r.keywords_json, r.has_pdf, r.pdf_status, r.doi, r.language, r.source_databases,
               sd.id AS sd_id, sd.ai_suggestion, sd.ai_reason, sd.ai_confidence,
               sd.ai_model, sd.ai_matched_inclusion, sd.ai_matched_exclusion,
               sd.ai_matched_concepts, sd.ai_need_full_text, sd.ai_ran_at,
@@ -403,8 +411,19 @@ router.get('/:id/screening', (req, res) => {
          ON sd.record_id = r.id AND sd.stage = 'title_abstract'
        WHERE ${whereSql}
        ORDER BY
-         -- 未人工决定的排最前(用户一打开就看到剩余待办)
-         CASE WHEN COALESCE(sd.human_decision, 'not_decided') = 'not_decided' THEN 0 ELSE 1 END,
+         -- 用户最需要看的排最前(按用户业务优先级排,不要光按 not_decided):
+         --   1. 人工 uncertain — 用户主动标了"不确定",最该回头细看
+         --   2. include + 暂无 PDF — 已决定纳入但还缺原文,补 PDF 待办
+         --   3. include + 容缺 PDF — 已确认找不到,可走 Step 4 摘要模式
+         --   4. 未决定(not_decided)— AI 跑过待人工确认
+         --   5. 其他(已 include 且有 PDF / exclude)— 已收尾
+         CASE
+           WHEN sd.human_decision = 'uncertain'                                                                              THEN 0
+           WHEN sd.human_decision = 'include' AND (r.has_pdf = 0 OR r.has_pdf IS NULL) AND COALESCE(r.pdf_status, '') != 'unavailable' THEN 1
+           WHEN sd.human_decision = 'include' AND (r.has_pdf = 0 OR r.has_pdf IS NULL) AND r.pdf_status = 'unavailable'        THEN 2
+           WHEN COALESCE(sd.human_decision, 'not_decided') = 'not_decided'                                                   THEN 3
+           ELSE 4
+         END,
          -- 同 bucket 内:AI uncertain 排前面(更需要人工细看)
          CASE WHEN sd.ai_suggestion = 'uncertain' THEN 0
               WHEN sd.ai_suggestion = 'include'   THEN 1
@@ -465,7 +484,12 @@ router.get('/:id/screening', (req, res) => {
                     OR sd.ai_reason LIKE 'codex_%'
                     OR sd.ai_reason LIKE 'json_parse_failed%'
                     OR sd.ai_reason LIKE 'spawn_%'
-                    OR sd.ai_reason LIKE 'proc_%' THEN 1 ELSE 0 END) AS ai_failed
+                    OR sd.ai_reason LIKE 'proc_%' THEN 1 ELSE 0 END) AS ai_failed,
+         -- "一键确认 AI"按钮的可应用数:AI 给了 include/exclude 建议且人工还没决定的
+         --   = 0 时按钮置灰(没活可干);避免按完之后误点重复跑覆盖人工已有的手动调整
+         SUM(CASE WHEN sd.ai_suggestion IN ('include','exclude')
+                   AND COALESCE(sd.human_decision, 'not_decided') = 'not_decided'
+                  THEN 1 ELSE 0 END) AS bulk_accept_eligible
        FROM records r
        LEFT JOIN screening_decisions sd
          ON sd.record_id = r.id AND sd.stage = 'title_abstract'
@@ -483,6 +507,7 @@ router.get('/:id/screening', (req, res) => {
     human_include: statsRow.human_include || 0,
     human_exclude: statsRow.human_exclude || 0,
     human_uncertain: statsRow.human_uncertain || 0,
+    bulk_accept_eligible: statsRow.bulk_accept_eligible || 0,  // "一键确认 AI" 按钮是否可点
   }
   stats.ai_pending = stats.total - stats.ai_done
   stats.human_pending = stats.total - stats.human_done
@@ -503,7 +528,9 @@ router.get('/:id/screening', (req, res) => {
   const buildHref = (overrides = {}) => {
     const qs = new URLSearchParams()
     const cur = { ai: aiF, human: humanF, q, year_from: yearFrom, year_to: yearTo,
-                  has_pdf: onlyPdf ? '1' : '', has_doi: onlyDoi ? '1' : '',
+                  has_pdf: onlyPdf ? '1' : '', missing_pdf: onlyMissingPdf ? '1' : '',
+                  only_unavailable: onlyUnavailable ? '1' : '',
+                  has_doi: onlyDoi ? '1' : '',
                   only_multi_language: onlyMultiLang ? '1' : '',
                   only_non_english: onlyNonEnglish ? '1' : '' }
     const merged = { ...cur, ...overrides }
@@ -521,6 +548,8 @@ router.get('/:id/screening', (req, res) => {
     if (yearFrom != null) qs.set('year_from', String(yearFrom))
     if (yearTo != null) qs.set('year_to', String(yearTo))
     if (onlyPdf) qs.set('has_pdf', '1')
+    if (onlyMissingPdf) qs.set('missing_pdf', '1')
+    if (onlyUnavailable) qs.set('only_unavailable', '1')
     if (onlyDoi) qs.set('has_doi', '1')
     if (onlyMultiLang) qs.set('only_multi_language', '1')
     if (onlyNonEnglish) qs.set('only_non_english', '1')
@@ -548,7 +577,8 @@ router.get('/:id/screening', (req, res) => {
     filterHuman: humanF,
     filters: {
       q, year_from: yearFrom, year_to: yearTo,
-      has_pdf: onlyPdf, has_doi: onlyDoi,
+      has_pdf: onlyPdf, missing_pdf: onlyMissingPdf, only_unavailable: onlyUnavailable,
+      has_doi: onlyDoi,
       only_multi_language: onlyMultiLang, only_non_english: onlyNonEnglish,
     },
     yearRange: { min_year: yearRange.min_year || null, max_year: yearRange.max_year || null },
@@ -563,7 +593,7 @@ router.get('/:id/screening', (req, res) => {
     targetIncludePct,
     actualIncludePct,
     currentStep: 'screening',
-    stepLabel: '3. 筛选(Screening)',
+    stepLabel: '3. 题录筛选',
   })
 })
 
@@ -1120,6 +1150,54 @@ router.post('/:id/screening/decide/:recordId', (req, res) => {
   req.session.flash = { type: 'success', message: `已记录人工决定:${decision}` }
   // 跳回 + 锚点定位到当前 record
   res.redirect(redirectUrl + `#row-${record.id}`)
+})
+
+// ============================================================
+// POST /:id/screening/pdf-status/:recordId
+//   body.status:
+//     'unavailable' → 用户确认找不到原文(容缺)
+//     'pending' / '' / 缺省 → 清回"暂无"状态(撤销容缺)
+//   如果 record 已经有 has_pdf=1,拒绝操作(有真 PDF 不应标 unavailable)。
+// ============================================================
+router.post('/:id/screening/pdf-status/:recordId', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  const wantsJson =
+    (req.get('Accept') || '').includes('application/json') ||
+    req.get('X-Requested-With') === 'XMLHttpRequest'
+  if (!project) {
+    if (wantsJson) return res.status(404).json({ ok: false, error: '项目不存在' })
+    return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+  }
+  const record = getRecordInProject(db, project.id, req.params.recordId)
+  if (!record) {
+    if (wantsJson) return res.status(404).json({ ok: false, error: '文献不存在' })
+    return res.status(404).render('error', { title: 'Not Found', message: '文献不存在' })
+  }
+  if (record.has_pdf) {
+    if (wantsJson) return res.status(400).json({ ok: false, error: '该文献已有 PDF,无须标记容缺' })
+    req.session.flash = { type: 'error', message: '该文献已有 PDF,无须标记容缺' }
+    return res.redirect(`/projects/${project.id}/screening#rec-${record.id}`)
+  }
+
+  const raw = String(req.body.status || '').trim()
+  const newStatus = raw === 'unavailable' ? 'unavailable' : null
+  db.prepare(`UPDATE records SET pdf_status = ? WHERE id = ? AND project_id = ?`)
+    .run(newStatus, record.id, project.id)
+
+  audit(db, req, {
+    eventType: 'record_pdf_status_changed',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: { record_id: record.id, new_status: newStatus || 'pending' },
+  })
+
+  if (wantsJson) return res.json({ ok: true, record_id: record.id, pdf_status: newStatus || 'pending' })
+  req.session.flash = {
+    type: 'success',
+    message: newStatus === 'unavailable' ? '已标记为容缺(确认找不到原文)' : '已取消容缺标记',
+  }
+  res.redirect(`/projects/${project.id}/screening#rec-${record.id}`)
 })
 
 // ============================================================

@@ -96,11 +96,11 @@
       </div>
       <div>
         <dt class="text-xs text-slate-500">创建</dt>
-        <dd class="mt-0.5 text-xs text-slate-500"><%= project.created_at %></dd>
+        <dd class="mt-0.5 text-xs text-slate-500"><%- include('../../partials/_time', { value: project.created_at }) %></dd>
       </div>
       <div>
         <dt class="text-xs text-slate-500">更新</dt>
-        <dd class="mt-0.5 text-xs text-slate-500"><%= project.updated_at %></dd>
+        <dd class="mt-0.5 text-xs text-slate-500"><%- include('../../partials/_time', { value: project.updated_at }) %></dd>
       </div>
     </dl>
   </div>
@@ -168,7 +168,7 @@
                   <span class="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">已审批</span>
                 <% } %>
               </div>
-              <span class="text-xs text-slate-500"><%= p.created_at %></span>
+              <span class="text-xs text-slate-500"><%- include('../../partials/_time', { value: p.created_at }) %></span>
             </div>
             <% if (p.model) { %>
               <p class="mt-1 text-xs text-slate-500">模型:<code class="font-mono"><%= p.model %></code></p>
@@ -223,7 +223,7 @@
                   <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"><%= s.result_count %> hits</span>
                 <% } %>
               </div>
-              <span class="text-slate-400"><%= s.created_at %></span>
+              <span class="text-slate-400"><%- include('../../partials/_time', { value: s.created_at }) %></span>
             </div>
             <pre class="mt-2 whitespace-pre-wrap break-all rounded bg-white p-2 font-mono text-[11px] text-slate-700"><%= s.query_text %></pre>
           </li>
@@ -302,7 +302,7 @@
                 <td class="py-1 font-medium text-slate-700"><%= s.stage %></td>
                 <td class="py-1 text-right font-mono"><%= s.total %></td>
                 <td class="py-1 text-right font-mono text-emerald-700"><%= s.included %></td>
-                <td class="py-1 text-right font-mono text-red-700"><%= s.excluded %></td>
+                <td class="py-1 text-right font-mono text-rose-700"><%= s.excluded %></td>
                 <td class="py-1 text-right font-mono text-amber-700"><%= s.uncertain %></td>
                 <td class="py-1 text-right font-mono text-slate-600"><%= s.ai_done %></td>
               </tr>
@@ -361,7 +361,7 @@
                 <% } %>
               </td>
               <td class="py-1 font-mono text-[10px] text-slate-500"><%= d.model || '—' %></td>
-              <td class="py-1 text-[10px] text-slate-500"><%= d.updated_at %></td>
+              <td class="py-1 text-[10px] text-slate-500"><%- include('../../partials/_time', { value: d.updated_at }) %></td>
             </tr>
           <% }) %>
         </tbody>

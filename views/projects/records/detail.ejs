@@ -2,11 +2,15 @@
 <%- include('../partials/project-header', { project }) %>
 
 <%
-  function fmtBytes(n) {
-    if (!Number.isFinite(n) || n <= 0) return '—'
-    if (n < 1024) return `${n} B`
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-    return `${(n / 1024 / 1024).toFixed(1)} MB`
+  // fmtBytes 由 route 注入(来自 services/storage-quota.js 的 formatBytes,全局唯一实现)。
+  // 兼容旧调用方式:locals 未提供时 fall back 一个最小实现。
+  if (typeof fmtBytes !== 'function') {
+    var fmtBytes = function (n) {
+      if (!Number.isFinite(n) || n <= 0) return '—'
+      if (n < 1024) return `${n} B`
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+      return `${(n / 1024 / 1024).toFixed(1)} MB`
+    }
   }
   const kindLabel = {
     pdf: 'PDF',
@@ -35,9 +39,23 @@
     </div>
 
     <!-- 标题 + 元信息 -->
+    <%
+      // Scopus / WoS 对双语论文导出时把翻译用 `; [<other-language>]` 拼到主标题里,
+      // 直接渲染会让用户以为标题重复了 — 拆分:第一段大字、翻译小灰色斜体放下面。
+      // 兼容:也支持仅 `[...]` 包裹的纯翻译,以及多个 `; [...]` 段。
+      const __rawTitle = String(record.title || '')
+      const __titleMatch = __rawTitle.match(/^(.+?)\s*;\s*\[(.+)\]\s*$/s)
+      const titlePrimary = __titleMatch ? __titleMatch[1].trim() : __rawTitle
+      const titleAlt = __titleMatch ? __titleMatch[2].trim() : null
+    %>
     <div class="rounded-2xl border border-slate-200 bg-white p-6">
       <div class="flex flex-wrap items-start justify-between gap-3">
-        <h1 class="min-w-0 flex-1 text-xl font-semibold leading-snug text-slate-900"><%= record.title %></h1>
+        <div class="min-w-0 flex-1">
+          <h1 class="text-xl font-semibold leading-snug text-slate-900"><%= titlePrimary %></h1>
+          <% if (titleAlt) { %>
+            <p class="mt-1 text-sm italic text-slate-500" title="原始来源(WoS/Scopus)把双语标题拼在一起,我们这里只是分行展示"><span class="font-normal not-italic text-[10px] text-slate-400 mr-1">译/另一语言</span><%= titleAlt %></p>
+          <% } %>
+        </div>
         <div class="flex flex-none items-center gap-2">
           <a href="/projects/<%= project.id %>/records/<%= record.id %>/edit"
              class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
@@ -231,6 +249,39 @@
                 </li>
               <% }) %>
             </ul>
+          <% } %>
+
+          <!-- 单篇 PDF 补传 — 仅高级抽取权限用户可见 -->
+          <%
+            const canUploadPdf = !!(user && (user.advanced_extraction_enabled || user.is_super_admin))
+            const hasPdfAlready = (attachments || []).some(a => a.attachment_kind === 'pdf')
+          %>
+          <% if (canUploadPdf) { %>
+            <div class="mt-4 border-t border-slate-100 pt-3">
+              <p class="text-[11px] text-slate-500 mb-2">
+                <% if (hasPdfAlready) { %>
+                  已有 PDF — 重新上传会替换现有 PDF。
+                <% } else { %>
+                  这篇论文没有 PDF。补传后,可走 AI 平台批量抽取(路径 B)。
+                <% } %>
+              </p>
+              <form method="post"
+                    action="/projects/<%= project.id %>/records/<%= record.id %>/upload-pdf"
+                    enctype="multipart/form-data"
+                    class="space-y-2">
+                <input type="file" name="pdf_file" accept=".pdf,application/pdf" required
+                       class="block w-full text-xs file:mr-2 file:rounded file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-slate-700 hover:file:bg-slate-200" />
+                <button type="submit"
+                        class="w-full rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500">
+                  <%= hasPdfAlready ? '↻ 替换 PDF' : '↑ 补传 PDF' %>
+                </button>
+                <p class="text-[10px] text-slate-400">单文件 ≤ 100 MB · 上传会计入你的存储配额(默认 1 GB)</p>
+              </form>
+            </div>
+          <% } else if (!hasPdfAlready) { %>
+            <p class="mt-3 border-t border-slate-100 pt-3 text-[11px] text-slate-400">
+              🔒 单篇补传 PDF 需要"高级抽取"权限,请联系管理员。
+            </p>
           <% } %>
         </div>
 

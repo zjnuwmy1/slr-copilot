@@ -15,6 +15,11 @@ Restart=always
 RestartSec=5
 
 # 资源限制(服务器 1.6G 内存,留余量给 knowledge-share + Claude CLI 子进程)
+# B4.8:加 MemoryHigh(soft)— 超过 500M 时 systemd 会 throttle 该 cgroup
+# (而不是 OOM kill),让 Node GC 有机会跑;到 MemoryMax=600M 才硬杀。
+# 这给 600M 留了 100M 的告警窗口 → systemd journal 里能看到 "memory.high reached"
+# 比直接 OOM kill 友好得多,也不会被 systemd Restart=always 死循环重启。
+MemoryHigh=500M
 MemoryMax=600M
 TasksMax=200
 

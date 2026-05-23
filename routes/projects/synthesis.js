@@ -90,23 +90,45 @@ function listEvidencePoints(db, projectId) {
 }
 
 function listVerifiedExtractions(db, projectId) {
-  // 与 records JOIN,拿到 title / year / authors_text
-  return db
-    .prepare(
-      `SELECT
-         e.id AS extraction_id,
-         e.record_id,
-         e.extracted_json,
-         e.human_verified,
-         r.title,
-         r.year,
-         r.authors_text
-       FROM extractions e
-       LEFT JOIN records r ON r.id = e.record_id
-       WHERE e.project_id = ? AND e.human_verified = 1
-       ORDER BY r.year DESC, r.title ASC`
-    )
-    .all(projectId)
+  // 同时从两个源拉:
+  //   ① 老的 extractions 表 (human_verified=1)
+  //   ② 新的 literature_matrix 表 (filled_by='ai' 或 'user' 都算 — 用户已经填了就视作有效)
+  // 同 record 时 extractions 优先(避免重复)。
+  const fromExt = db.prepare(`
+    SELECT
+      'extraction' AS data_source,
+      e.id AS extraction_id,
+      e.record_id,
+      e.extracted_json,
+      1 AS human_verified,
+      r.title, r.year, r.authors_text
+    FROM extractions e
+    LEFT JOIN records r ON r.id = e.record_id
+    WHERE e.project_id = ? AND e.human_verified = 1
+  `).all(projectId)
+
+  const fromMatrix = db.prepare(`
+    SELECT
+      'matrix' AS data_source,
+      m.id AS extraction_id,
+      m.record_id,
+      m.fields AS extracted_json,
+      CASE WHEN m.filled_by = 'user' OR m.filled_by = 'ai_edited' THEN 1 ELSE 0 END AS human_verified,
+      r.title, r.year, r.authors_text
+    FROM literature_matrix m
+    LEFT JOIN records r ON r.id = m.record_id
+    WHERE m.project_id = ?
+      AND m.fields IS NOT NULL
+      AND m.fields != '{}'
+      AND m.completeness >= 0.2
+  `).all(projectId)
+
+  const seen = new Set(fromExt.map((r) => r.record_id))
+  const merged = [...fromExt, ...fromMatrix.filter((r) => !seen.has(r.record_id))]
+  return merged.sort((a, b) => {
+    if ((b.year || 0) !== (a.year || 0)) return (b.year || 0) - (a.year || 0)
+    return String(a.title || '').localeCompare(String(b.title || ''))
+  })
 }
 
 function getApprovedProtocol(db, projectId) {
@@ -139,11 +161,10 @@ router.get('/:id/synthesis', (req, res) => {
   const themes = listThemes(db, project.id)
   const evidencePoints = listEvidencePoints(db, project.id)
 
-  // 用于"前置检查":verified extractions 数量
+  // 前置检查:两个源都算 — extractions(human_verified=1)+ literature_matrix(有内容)
   let verifiedCount = 0
   try {
-    const r = db.prepare(`SELECT COUNT(*) AS n FROM extractions WHERE project_id = ? AND human_verified = 1`).get(project.id)
-    verifiedCount = r?.n || 0
+    verifiedCount = listVerifiedExtractions(db, project.id).length
   } catch { verifiedCount = 0 }
 
   // 全部已纳入(records JOIN screening or extractions)— 用于矩阵的行
@@ -197,7 +218,7 @@ router.get('/:id/synthesis', (req, res) => {
     project,
     progress,
     currentStep: 'synthesis',
-    stepLabel: '6. 综合(Synthesis)',
+    stepLabel: '6. 主题综合',
     stepItems,
     themes,
     evidencePoints,

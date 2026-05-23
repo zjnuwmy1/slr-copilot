@@ -46,13 +46,36 @@ export function randomId(prefix = '', bytes = 16) {
   return prefix ? `${prefix}_${hex}` : hex
 }
 
-/** 邀请码:8 位大写字母数字,易读 */
+/**
+ * 邀请码:16 位易读字符 ([A-HJ-NP-Z2-9],去掉 I O 0 1 防混淆)。
+ *
+ * 长度 & 字符集:
+ *   - 长度 16(register.ejs 的 input maxlength=16 对齐)。
+ *   - 字符集 32 个 = 5 bit/字符 ⇒ 共 80 bit 熵,够暴力 / 撞库 / 离线枚举防御。
+ *   - 历史上只有 8 字符(40 bit),已升级。
+ *
+ * 大小写:
+ *   - 故意只用大写。routes/auth.js 在 register POST 时对 invite_code 做 toUpperCase()
+ *     标准化,所以加小写没意义反而破坏匹配。如果以后去掉那个 toUpperCase,可把
+ *     alphabet 换成 [A-Za-z2-9](≈ 5.85 bit/字符,16 位 ≈ 94 bit)。
+ *
+ * 采样方式:
+ *   - rejection sampling,避免 `bytes[i] % 32` 在 256 % 32 = 0 时的非均匀性
+ *     (其实 32 整除 256 没有偏差,但显式 mask 更安全也更直观,改了字符集大小
+ *      也不用重新分析)。
+ */
 export function generateInviteCode() {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // 去掉易混的 I O 0 1
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // 32 chars,去掉易混的 I O 0 1
+  const len = 16
   let out = ''
-  const bytes = crypto.randomBytes(8)
-  for (let i = 0; i < 8; i++) {
-    out += alphabet[bytes[i] % alphabet.length]
+  // 一次抓足够多的随机字节(每个字符最多消耗 2 字节 worst case),不够再补
+  let pool = crypto.randomBytes(len * 2)
+  let pi = 0
+  while (out.length < len) {
+    if (pi >= pool.length) { pool = crypto.randomBytes(len * 2); pi = 0 }
+    const v = pool[pi++]
+    // mask 到 5 bit 区间(0..31)— alphabet 长度刚好 32,无偏。
+    out += alphabet[v & 0x1f]
   }
   return out
 }

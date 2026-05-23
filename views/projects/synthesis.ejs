@@ -1,5 +1,5 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
-<%- include('partials/project-header', { project }) %>
+<%- include('partials/project-header', { project, currentStep: 'synthesis' }) %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
   <%- include('partials/stepper', { project, progress, currentStep: 'synthesis' }) %>
@@ -7,8 +7,8 @@
   <section class="space-y-6">
     <%- include('partials/step-banner', {
       stepNum: 6,
-      stepTitle: '整合发现成主题',
-      stepIntro: '跨论文找规律 — 哪些发现一致?哪些矛盾?哪里有空白?AI 帮你聚类成主题,你审阅 + 调整。',
+      stepTitle: '主题综合',
+      stepIntro: '跨研究归纳规律 —— 哪些发现一致、哪些矛盾、哪里存在空白?AI 协助进行主题聚类,由您审阅与调整最终主题结构。',
       prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
     }) %>
 
@@ -139,7 +139,7 @@
               <form method="post" action="/projects/<%= project.id %>/synthesis/themes/<%= t.id %>/delete"
                     class="mt-2 text-right"
                     onsubmit="return confirm('删除主题“<%= t.name %>”?evidence_points 不会被删,但会失去主题关联。')">
-                <button type="submit" class="text-xs text-red-600 hover:underline">删除主题</button>
+                <button type="submit" class="text-xs text-rose-600 hover:underline">删除主题</button>
               </form>
             </details>
           </div>

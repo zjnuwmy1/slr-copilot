@@ -14,11 +14,15 @@
  */
 
 import express from 'express'
+import multer from 'multer'
 import path from 'node:path'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import { getProjectProgress } from '../../services/prisma.js'
 import { randomId } from '../../services/crypto.js'
 import { audit } from '../../services/audit.js'
+import { requireAdvancedExtraction } from '../../middleware/auth.js'
+import { ensureRoomForUpload as quotaEnsureRoomForUpload, formatBytes as quotaFormatBytes, createReservation, releaseReservation } from '../../services/storage-quota.js'
 import { formatAllStyles, normalizeRecord } from '../../services/citation-format.js'
 import {
   exportBibTeX,
@@ -41,10 +45,22 @@ const router = express.Router({ mergeParams: true })
 // 配置
 // ============================================================
 
-// 上传根目录:storage_path 必须在这个目录下,防止路径遍历
-// 与 DATA_DIR 保持一致(默认 /var/lib/slr),uploads 子目录
+// 上传根目录:storage_path 必须在以下任一目录下,防止路径遍历。
+// 历史上只允许 uploads/(Zotero 包),但 mergeZoteroIntoSystem 把 PDF 拷到 PDF_ROOT
+// (/var/lib/slr/pdfs/),如果只校验 uploads/ 那预览/下载会报"路径非法"。
+// 现在允许两个根 + 用户手动上传也走 PDF_ROOT。
 const DATA_DIR = process.env.DATA_DIR || '/var/lib/slr'
 const UPLOADS_ROOT = path.resolve(path.join(DATA_DIR, 'uploads'))
+const PDF_ROOT = path.resolve(process.env.SLR_PDF_ROOT || path.join(DATA_DIR, 'pdfs'))
+const ALLOWED_ROOTS = [UPLOADS_ROOT, PDF_ROOT]
+
+function isInsideAllowedRoots(absolute) {
+  return ALLOWED_ROOTS.some((root) => {
+    if (absolute === root) return true
+    const rel = path.relative(root, absolute)
+    return !rel.startsWith('..') && !path.isAbsolute(rel)
+  })
+}
 
 const PAGE_SIZE = 50
 
@@ -640,7 +656,7 @@ function _legacyListHandler(req, res) {
     project,
     progress,
     currentStep: 'screening',
-    stepLabel: '3. 筛选(Screening)',
+    stepLabel: '3. 题录筛选',
     records: rows,
     stats,
     screeningStats,
@@ -837,7 +853,7 @@ router.get('/:id/records/new', (req, res) => {
     project,
     progress,
     currentStep: 'screening',
-    stepLabel: '3. 筛选(Screening)',
+    stepLabel: '3. 题录筛选',
     formAction: `/projects/${project.id}/records`,
     cancelHref: `/projects/${project.id}/records`,
     form: recordFormDefaults(),
@@ -912,7 +928,7 @@ router.post('/:id/records', (req, res) => {
       project,
       progress,
       currentStep: 'screening',
-      stepLabel: '3. 筛选(Screening)',
+      stepLabel: '3. 题录筛选',
       formAction: `/projects/${project.id}/records`,
       cancelHref: `/projects/${project.id}/records`,
       form: raw,
@@ -1092,7 +1108,7 @@ router.get('/:id/records/:recordId', (req, res) => {
     project,
     progress,
     currentStep: 'screening',
-    stepLabel: '3. 筛选(Screening)',
+    stepLabel: '3. 题录筛选',
     record,
     attachments,
     duplicateGroup,
@@ -1100,6 +1116,8 @@ router.get('/:id/records/:recordId', (req, res) => {
     citations,
     screening,
     neighbors,
+    // 统一字节格式化函数(来自 services/storage-quota.js),避免视图层重复实现
+    fmtBytes: quotaFormatBytes,
   })
 })
 
@@ -1133,7 +1151,7 @@ router.get('/:id/records/:recordId/edit', (req, res) => {
     project,
     progress,
     currentStep: 'screening',
-    stepLabel: '3. 筛选(Screening)',
+    stepLabel: '3. 题录筛选',
     record: row,
     formAction: `/projects/${project.id}/records/${row.id}/update`,
     cancelHref: `/projects/${project.id}/records/${row.id}`,
@@ -1174,7 +1192,7 @@ router.post('/:id/records/:recordId/update', (req, res) => {
       project,
       progress,
       currentStep: 'screening',
-      stepLabel: '3. 筛选(Screening)',
+      stepLabel: '3. 题录筛选',
       record: row,
       formAction: `/projects/${project.id}/records/${row.id}/update`,
       cancelHref: `/projects/${project.id}/records/${row.id}`,
@@ -1213,6 +1231,186 @@ router.post('/:id/records/:recordId/update', (req, res) => {
   req.session.flash = { type: 'success', message: '已更新文献条目' }
   res.redirect(`/projects/${project.id}/records/${row.id}`)
 })
+
+// ============================================================
+// POST /projects/:id/records/:recordId/upload-pdf
+//   — 单篇 PDF 补传(仅 advanced_extraction_enabled 用户)
+//   - multer 限单文件 ≤ 100 MB
+//   - 走 storage-quota 预检
+//   - 写到 /var/lib/slr/pdfs/<record_id>.pdf(若已有同名则覆盖)
+//   - INSERT 或 REPLACE attachments 行 + UPDATE records.has_pdf=1
+// ============================================================
+const pdfStorageDir = path.resolve(DATA_DIR, 'pdfs')
+const pdfUpload = multer({
+  storage: multer.diskStorage({
+    destination(req, _file, cb) {
+      try { fs.mkdirSync(pdfStorageDir, { recursive: true }) } catch {}
+      cb(null, pdfStorageDir)
+    },
+    filename(req, _file, cb) {
+      // 直接用 record_id.pdf — 同 record 只会有一份单篇补传 PDF
+      cb(null, `${req.params.recordId}.pdf`)
+    },
+  }),
+  limits: { fileSize: 100 * 1024 * 1024, files: 1 },
+  fileFilter(_req, file, cb) {
+    const name = (file.originalname || '').toLowerCase()
+    if (name.endsWith('.pdf') || file.mimetype === 'application/pdf') return cb(null, true)
+    cb(new Error('只接受 .pdf 文件'))
+  },
+})
+
+router.post('/:id/records/:recordId/upload-pdf',
+  requireAdvancedExtraction,
+  (req, res, next) => {
+    // 校验项目归属 + record 归属(在 multer 之前,避免任意人都能往 pdfs/ 写)
+    const db = req.app.locals.db
+    const project = ownProjectOr404(db, req.params.id, req.user.id)
+    if (!project) {
+      req.session.flash = { type: 'error', message: '项目不存在或无权访问' }
+      return res.redirect(`/projects/${req.params.id}/records`)
+    }
+    const record = db.prepare(
+      'SELECT id, title FROM records WHERE id = ? AND project_id = ?'
+    ).get(req.params.recordId, project.id)
+    if (!record) {
+      req.session.flash = { type: 'error', message: '文献条目不存在' }
+      return res.redirect(`/projects/${project.id}/records`)
+    }
+    req._project = project
+    req._record  = record
+
+    // 存储配额预检(Content-Length 估算)
+    // B2.2:预检后立即占 reservation,响应结束时释放(成功时 attachments.size_bytes 取代,
+    //       失败时直接释放)。
+    const contentLength = Number(req.headers['content-length']) || 0
+    if (contentLength > 0) {
+      const check = quotaEnsureRoomForUpload(db, req.user, contentLength)
+      if (!check.ok) {
+        req.session.flash = {
+          type: 'error',
+          message: check.message + '(本次 ≈ ' + quotaFormatBytes(contentLength) + ')。请联系超级管理员提高配额。',
+        }
+        return res.redirect(`/projects/${project.id}/records/${record.id}`)
+      }
+      req._reservationId = createReservation(db, req.user.id, contentLength, 'pdf_upload')
+      res.once('close', () => releaseReservation(req.app.locals.db, req._reservationId))
+    }
+    next()
+  },
+  (req, res, next) => {
+    pdfUpload.single('pdf_file')(req, res, (err) => {
+      if (err) {
+        const recordId = req.params.recordId
+        const code = err.code === 'LIMIT_FILE_SIZE' ? '文件超过 100 MB 上限' : err.message
+        req.session.flash = { type: 'error', message: '上传失败:' + code }
+        return res.redirect(`/projects/${req.params.id}/records/${recordId}`)
+      }
+      next()
+    })
+  },
+  async (req, res, next) => {
+    try {
+      const db = req.app.locals.db
+      const project = req._project
+      const record = req._record
+      const file = req.file
+      if (!file || !file.path) {
+        req.session.flash = { type: 'error', message: '没收到文件' }
+        return res.redirect(`/projects/${project.id}/records/${record.id}`)
+      }
+
+      // ── B1.3 PDF magic-byte 校验 — 防 .txt 改名 .pdf 把 pdf-parse 弄崩 ──
+      // 真正的 PDF 文件前 4-5 字节是 "%PDF-" (0x25 50 44 46 2D)
+      try {
+        const fd = fs.openSync(file.path, 'r')
+        const head = Buffer.alloc(5)
+        fs.readSync(fd, head, 0, 5, 0)
+        fs.closeSync(fd)
+        const sig = head.toString('latin1')
+        if (!sig.startsWith('%PDF-')) {
+          // 不是真 PDF — 立刻 unlink + reject + 不留磁盘垃圾
+          try { fs.unlinkSync(file.path) } catch {}
+          req.session.flash = {
+            type: 'error',
+            message: `上传被拒:文件内容不是有效的 PDF(开头是 "${sig.slice(0, 4).replace(/[\x00-\x1F]/g, '?')}",应为 "%PDF-")。请确认是真的 PDF 文件,不是改了扩展名的其他文件。`,
+          }
+          return res.redirect(`/projects/${project.id}/records/${record.id}`)
+        }
+      } catch (e) {
+        try { fs.unlinkSync(file.path) } catch {}
+        req.session.flash = { type: 'error', message: '读取上传文件失败:' + e.message }
+        return res.redirect(`/projects/${project.id}/records/${record.id}`)
+      }
+
+      // 拿真实大小
+      let sizeBytes = file.size || 0
+      try { sizeBytes = fs.statSync(file.path).size } catch {}
+
+      // 删旧 attachments(同 record 已有 kind=pdf 的全部清掉,storage_path 文件如果不是
+      //   本次 path 也一并删掉,避免存储泄漏)
+      const oldAtts = db.prepare(
+        `SELECT id, storage_path FROM attachments
+          WHERE record_id = ? AND attachment_kind = 'pdf'`
+      ).all(record.id)
+      for (const a of oldAtts) {
+        if (a.storage_path && path.resolve(a.storage_path) !== path.resolve(file.path)) {
+          try { fs.unlinkSync(a.storage_path) } catch {}
+        }
+        db.prepare(`DELETE FROM attachments WHERE id = ?`).run(a.id)
+      }
+
+      // 写新 attachments 行 + 标 has_pdf
+      const attId = randomId('att')
+      db.prepare(
+        `INSERT INTO attachments
+           (id, record_id, package_id, attachment_kind, filename, storage_path, size_bytes, mime_type)
+         VALUES (?, ?, NULL, 'pdf', ?, ?, ?, 'application/pdf')`
+      ).run(
+        attId, record.id,
+        file.originalname || `${record.id}.pdf`,
+        file.path,
+        sizeBytes,
+      )
+      // 同时清掉 pdf_status(之前用户可能标过"容缺",现在有真 PDF 了过时了)
+      db.prepare(`UPDATE records SET has_pdf = 1, pdf_status = NULL WHERE id = ?`).run(record.id)
+
+      audit(db, req, {
+        eventType: 'record_pdf_uploaded',
+        userId: req.user.id, actorUserId: req.user.id, projectId: project.id,
+        payload: {
+          record_id: record.id,
+          title_snippet: (record.title || '').slice(0, 100),
+          size_bytes: sizeBytes,
+          filename: file.originalname,
+          replaced_old: oldAtts.length,
+        },
+      })
+
+      // 自动 chunk 新 PDF — 否则矩阵抽取会回退到只读摘要(历史 bug)。
+      // setImmediate 异步,不阻塞响应。pdf-parse 通常 1-3 秒。
+      const _attId = attId, _recordId = record.id
+      setImmediate(async () => {
+        try {
+          const { parsePdfAttachment } = await import('../../services/pdf-parse.js')
+          const r = await parsePdfAttachment(db, { attachmentId: _attId, recordId: _recordId })
+          if (r.requires_ocr) console.warn(`[records auto-chunk] requires OCR: ${_recordId}`)
+          else if (r.total_chunks > 0) console.log(`[records auto-chunk] ${_recordId}: ${r.total_chunks} chunks`)
+        } catch (e) {
+          console.error('[records auto-chunk] failed for', _recordId, e.message)
+        }
+      })
+
+      req.session.flash = {
+        type: 'success',
+        message: `PDF 上传成功(${quotaFormatBytes(sizeBytes)})。${oldAtts.length ? '已替换原 PDF。' : ''}系统正在后台解析 PDF(~1-3 秒),完成后矩阵 AI 批量就能用全文了。`,
+      }
+      res.redirect(`/projects/${project.id}/records/${record.id}`)
+    } catch (e) {
+      next(e)
+    }
+  }
+)
 
 // ============================================================
 // POST /projects/:id/records/:recordId/delete — 删除 + 级联清理附件文件
@@ -1255,10 +1453,7 @@ router.post('/:id/records/:recordId/delete', (req, res) => {
     if (!a.storage_path) continue
     try {
       const abs = path.resolve(a.storage_path)
-      const rel = path.relative(UPLOADS_ROOT, abs)
-      const inside = abs === UPLOADS_ROOT ||
-        (!rel.startsWith('..') && !path.isAbsolute(rel))
-      if (!inside) continue
+      if (!isInsideAllowedRoots(abs)) continue
       fs.unlinkSync(abs)
       removed++
     } catch (e) {
@@ -1316,19 +1511,14 @@ router.get('/:id/attachments/:attachmentId/download', (req, res) => {
     return res.status(500).render('error', { title: 'Server Error', message: '附件路径缺失' })
   }
 
-  // 路径遍历防御:必须在 UPLOADS_ROOT 下
+  // 路径遍历防御:必须在 ALLOWED_ROOTS(uploads/ 或 pdfs/)之内
   const absolute = path.resolve(row.storage_path)
-  // 用 path.relative + startsWith 双保险
-  const rel = path.relative(UPLOADS_ROOT, absolute)
-  const isInside =
-    absolute === UPLOADS_ROOT ||
-    (!rel.startsWith('..') && !path.isAbsolute(rel))
-  if (!isInside) {
-    console.error('[records:download] path outside uploads root', {
+  if (!isInsideAllowedRoots(absolute)) {
+    console.error('[records:download] path outside allowed roots', {
       attachmentId,
       storage_path: row.storage_path,
       absolute,
-      uploads_root: UPLOADS_ROOT,
+      allowed_roots: ALLOWED_ROOTS,
     })
     return res.status(403).render('error', { title: 'Forbidden', message: '附件路径非法' })
   }

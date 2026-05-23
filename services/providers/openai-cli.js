@@ -190,6 +190,8 @@ export async function sendMessage({
         cwd: homePath,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
+        // detached + 自成进程组 → timeout 时 kill(-pid) 杀整组,防 codex wrapper 的子子进程僵尸
+        detached: true,
       })
     } catch (e) {
       cleanupOutFile(outFile)
@@ -208,17 +210,21 @@ export async function sendMessage({
       fn()
     }
 
+    // 杀整个进程组
+    function killTree(sig) {
+      try { process.kill(-proc.pid, sig) }
+      catch {
+        try { proc.kill(sig) } catch {}
+      }
+    }
+
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
-      try {
-        proc.kill('SIGTERM')
-      } catch {
-        // ignore
-      }
+      killTree('SIGTERM')
       setTimeout(() => {
         try {
-          proc.kill('SIGKILL')
+          killTree('SIGKILL')
         } catch {
           // ignore
         }

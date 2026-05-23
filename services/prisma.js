@@ -145,28 +145,67 @@ export function getProjectProgress(db, projectId) {
     }
   } catch (e) { /* keep not_started */ }
 
-  // ---- 4. Extraction ----
-  //   有 extractions 行就视为 in_progress;all 纳入 records 都有 extraction → done
+  // ---- 4. Extraction / Matrix(2026-05 新版 Step 4)----
+  //   双路径取最大值:
+  //     ① 老 extractions(human_verified=1)
+  //     ② 新 literature_matrix(任何 fields 非空 + completeness>=0.2)
+  //   覆盖率达到 include 的 100% → done;有任何 → in_progress
   try {
-    const extRow = db.prepare(`SELECT COUNT(*) AS c FROM extractions WHERE project_id = ?`).get(projectId)
-    const extCount = extRow.c || 0
-    if (extCount > 0) {
-      // 计算 "已纳入待抽取的论文数"(human_decision = include)
-      const incRow = db.prepare(
-        `SELECT COUNT(*) AS c FROM screening_decisions
-         WHERE project_id = ? AND stage = 'title_abstract' AND human_decision = 'include'`
-      ).get(projectId)
-      const includeCount = incRow.c || 0
-      if (includeCount > 0 && extCount >= includeCount) {
-        stepStatus.extraction = { status: 'done', summary: `${extCount}/${includeCount} 篇已抽取` }
-      } else {
-        stepStatus.extraction = { status: 'in_progress', summary: `已抽取 ${extCount} 篇` }
-      }
+    const incRow = db.prepare(
+      `SELECT COUNT(*) AS c FROM screening_decisions
+       WHERE project_id = ? AND stage = 'title_abstract' AND human_decision = 'include'`
+    ).get(projectId)
+    const includeCount = incRow.c || 0
+
+    // 用 DISTINCT record_id 跨两表合并去重
+    const extractedRow = db.prepare(`
+      SELECT COUNT(*) AS c FROM (
+        SELECT record_id FROM extractions
+         WHERE project_id = ? AND extracted_json IS NOT NULL AND extracted_json != ''
+        UNION
+        SELECT record_id FROM literature_matrix
+         WHERE project_id = ? AND fields IS NOT NULL AND fields != '{}'
+           AND completeness >= 0.2
+      )
+    `).get(projectId, projectId)
+    const extCount = extractedRow.c || 0
+
+    // Step 4 状态 — 之前只看"有没有填过矩阵行",抽取没开始就显"未开始",
+    //   但用户其实从 Step 3 一旦标了 include 就进入 Step 4 准备阶段(配 PDF / 让 AI 定制矩阵列)。
+    //   现在按业务进度细分:
+    //     done         矩阵已填到 include 100%(或全部论文已抽过)
+    //     in_progress  已抽过部分,或已配过 AI 定制矩阵列,或已上传过 Zotero 包,
+    //                  或仅"有 include 但还没动手"(用户进入了准备阶段就算)
+    //     not_started  连一条 include 都没有(Step 3 都没开始勾"纳入")
+    const prepRow = db.prepare(`
+      SELECT
+        (SELECT matrix_ai_customized_at_version FROM projects WHERE id = ?) AS matrix_customized,
+        (SELECT COUNT(*) FROM zotero_packages WHERE project_id = ?) AS zotero_pkg_count
+    `).get(projectId, projectId) || {}
+    const hasPrep = !!prepRow.matrix_customized || (prepRow.zotero_pkg_count || 0) > 0
+
+    if (extCount > 0 && includeCount > 0 && extCount >= includeCount) {
+      stepStatus.extraction = { status: 'done', summary: `${extCount}/${includeCount} 篇已抽取(矩阵)` }
+    } else if (extCount > 0 && includeCount > 0) {
+      stepStatus.extraction = { status: 'in_progress', summary: `已抽取 ${extCount}/${includeCount} 篇` }
+    } else if (extCount > 0) {
+      stepStatus.extraction = { status: 'in_progress', summary: `已抽取 ${extCount} 篇` }
+    } else if (includeCount > 0 && hasPrep) {
+      stepStatus.extraction = { status: 'in_progress', summary: `${includeCount} 篇待抽取(已开始准备)` }
+    } else if (includeCount > 0) {
+      stepStatus.extraction = { status: 'in_progress', summary: `${includeCount} 篇待抽取` }
     }
   } catch (e) { /* keep not_started */ }
 
-  // ---- 5. RoB(risk of bias):有 grade_assessments 即视为开始(没单独表)----
-  //   这步实际并入 GRADE 流程,暂不强校验
+  // ---- 5. RoB(risk of bias)----
+  //   站内工具未开放,用户在外部完成后点"标记为已外部完成" → projects.rob_marked_done_at
+  //   据此变 done,8/8 进度可达。
+  try {
+    const row = db.prepare(`SELECT rob_marked_done_at FROM projects WHERE id = ?`).get(projectId)
+    if (row && row.rob_marked_done_at) {
+      stepStatus.rob = { status: 'done', summary: '已外部完成(自报告)' }
+    }
+  } catch {}
 
   // ---- 6. Synthesis(主题聚类 + evidence matrix)----
   try {

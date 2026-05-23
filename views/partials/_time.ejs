@@ -1,0 +1,46 @@
+<%
+// _time.ejs - 把 SQLite 原始时间字符串("YYYY-MM-DD HH:MM:SS",UTC)
+// 渲染成相对时间(刚刚 / N 分钟前 / N 小时前 / N 天前 / YYYY-MM-DD),
+// 同时把原始字符串放进 title 属性,鼠标悬停能看到精确时间。
+//
+// 用法(在父模板里):
+//   include('../partials/_time', { value: row.updated_at })
+//   include('../partials/_time', { value: row.created_at, mono: true })
+//
+// locals:
+//   value       : 原始时间字符串(null / undefined / ISO 都行)
+//   mono        : 可选,true 时用 font-mono(给审计 / 日志类表格用)
+//   placeholder : 可选,value 为空时显示什么,默认 "—"
+const __raw = (typeof value === 'undefined' || value === null) ? '' : String(value)
+const __placeholder = (typeof placeholder !== 'undefined' && placeholder !== null) ? placeholder : '—'
+const __mono = (typeof mono !== 'undefined') ? !!mono : false
+
+function __fmtRelative(s) {
+  if (!s) return __placeholder
+  // SQLite datetime('now') 返回 UTC,无时区标记。把它当 UTC 解析。
+  // 如果已经是 ISO(带 T 或 Z),按原样解析。
+  let iso = s
+  if (!/T/.test(iso)) iso = iso.replace(' ', 'T')
+  if (!/Z|[+-]\d{2}:?\d{2}$/.test(iso)) iso = iso + 'Z'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return s
+  const diff = (Date.now() - d.getTime()) / 1000
+  if (diff < 0) return '刚刚'
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前'
+  if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前'
+  if (diff < 86400 * 7) return Math.floor(diff / 86400) + ' 天前'
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+const __label = __fmtRelative(__raw)
+const __cls = __mono ? 'font-mono' : ''
+-%>
+<% if (!__raw) { -%>
+<span class="text-slate-400 <%= __cls %>"><%= __placeholder %></span>
+<% } else { -%>
+<span class="<%= __cls %>" title="<%= __raw %>"><%= __label %></span>
+<% } -%>

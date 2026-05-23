@@ -23,8 +23,8 @@
   </div>
 
   <form method="post" action="/admin/settings" class="space-y-4">
-    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <table class="min-w-full text-sm">
+    <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <table class="w-full min-w-[760px] text-sm">
         <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase text-slate-500">
           <tr>
             <th class="px-4 py-2" style="min-width: 200px;">步骤</th>
@@ -131,18 +131,18 @@
     method="post"
     action="/admin/settings/reset"
     onsubmit="return confirm('确定要重置所有步骤的模型和思考强度配置吗?所有步骤都会回到代码默认值。')"
-    class="rounded-xl border border-red-200 bg-red-50/50 p-4"
+    class="rounded-xl border border-rose-200 bg-rose-50/50 p-4"
   >
     <div class="flex items-center justify-between gap-4">
       <div>
-        <p class="text-sm font-semibold text-red-800">重置全部</p>
-        <p class="mt-1 text-xs text-red-700">
+        <p class="text-sm font-semibold text-rose-800">重置全部</p>
+        <p class="mt-1 text-xs text-rose-700">
           清空所有 <code class="font-mono">step_model.*</code> 与 <code class="font-mono">step_reasoning.*</code>,所有步骤回到代码默认。
         </p>
       </div>
       <button
         type="submit"
-        class="rounded-md border border-red-300 bg-white px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 transition"
+        class="rounded-md border border-rose-300 bg-white px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-100 transition"
       >
         重置全部
       </button>

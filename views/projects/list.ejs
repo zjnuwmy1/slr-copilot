@@ -22,22 +22,40 @@
   <% } else { %>
     <div class="grid gap-4 md:grid-cols-2">
       <% projects.forEach(p => { %>
+        <%
+          const statusCfg = ({
+            draft: ['bg-slate-100 text-slate-600', '草稿'],
+            protocol_pending: ['bg-amber-100 text-amber-700', '研究方案待审批'],
+            protocol_approved: ['bg-emerald-100 text-emerald-700', '研究方案已审批'],
+            searching: ['bg-blue-100 text-blue-700', '构建检索策略'],
+            screening: ['bg-blue-100 text-blue-700', '题录筛选中'],
+            extracting: ['bg-blue-100 text-blue-700', '构建矩阵中'],
+            synthesizing: ['bg-blue-100 text-blue-700', '主题综合中'],
+            complete: ['bg-emerald-100 text-emerald-700', '已完成'],
+            archived: ['bg-slate-100 text-slate-500', '归档'],
+          })[p.status] || ['bg-slate-100 text-slate-600', p.status]
+          // 把"待办类"状态徽章变成快捷跳转 — 一键直奔对应 step,不必先进项目首页
+          // 注意:外层卡片是 <a> 包整张卡,所以这里的徽章用绝对定位脱离 <a> 嵌套(避免 nested-anchor 渲染问题)
+          const statusJumpCfg = ({
+            protocol_pending: { step: '/protocol',  label: 'Step 1 协议' },
+            searching:        { step: '/search',    label: 'Step 2 检索式' },
+            screening:        { step: '/screening', label: 'Step 3 筛选' },
+            extracting:       { step: '/matrix',    label: 'Step 4 矩阵' },
+            synthesizing:     { step: '/synthesis', label: 'Step 6 主题综合' },
+          })[p.status]
+        %>
         <div class="group relative">
           <a href="/projects/<%= p.id %>" class="block rounded-2xl border border-slate-200 bg-white p-6 transition hover:border-slate-400 hover:shadow-card">
             <div class="flex items-center justify-between">
               <h2 class="text-lg font-semibold text-slate-900 pr-10"><%= p.title %></h2>
-              <% const statusCfg = ({
-                draft: ['bg-slate-100 text-slate-600', '草稿'],
-                protocol_pending: ['bg-amber-100 text-amber-700', '待审批'],
-                protocol_approved: ['bg-emerald-100 text-emerald-700', '协议已审批'],
-                searching: ['bg-blue-100 text-blue-700', '检索中'],
-                screening: ['bg-blue-100 text-blue-700', '筛选中'],
-                extracting: ['bg-blue-100 text-blue-700', '抽取中'],
-                synthesizing: ['bg-blue-100 text-blue-700', '综合中'],
-                complete: ['bg-emerald-100 text-emerald-700', '已完成'],
-                archived: ['bg-slate-100 text-slate-500', '归档'],
-              })[p.status] || ['bg-slate-100 text-slate-600', p.status] %>
-              <span class="rounded-full px-2 py-0.5 text-xs <%= statusCfg[0] %>"><%= statusCfg[1] %></span>
+              <% if (statusJumpCfg) { %>
+                <!-- 占位:实际可点徽章在卡片外层绝对定位(防止嵌套 <a>)-->
+                <span class="rounded-full px-2 py-0.5 text-xs opacity-0 pointer-events-none">
+                  <%= statusCfg[1] %> →
+                </span>
+              <% } else { %>
+                <span class="rounded-full px-2 py-0.5 text-xs <%= statusCfg[0] %>"><%= statusCfg[1] %></span>
+              <% } %>
             </div>
             <p class="mt-2 line-clamp-3 text-sm text-slate-600"><%= p.topic %></p>
             <div class="mt-3 flex items-center gap-3 text-xs text-slate-400">
@@ -45,9 +63,18 @@
               <% if (p.year_start || p.year_end) { %><span><%= p.year_start || '?' %>–<%= p.year_end || '?' %></span><% } %>
               <% if (p.approved_version) { %><span>协议 v<%= p.approved_version %> ✓</span>
               <% } else if (p.latest_version) { %><span>协议 v<%= p.latest_version %>(未审批)</span><% } %>
-              <span class="ml-auto"><%= p.updated_at %></span>
+              <span class="ml-auto"><%- include('../partials/_time', { value: p.updated_at }) %></span>
             </div>
           </a>
+          <!-- 可点徽章:绝对定位覆盖在卡片右上的占位上(与 H2 同一行) -->
+          <!-- 让出右上角给 hover-only 删除按钮:badge 在右侧第二档位(right-12) -->
+          <% if (statusJumpCfg) { %>
+            <a href="/projects/<%= p.id %><%= statusJumpCfg.step %>"
+               title="点击前往 <%= statusJumpCfg.label %>"
+               class="absolute top-6 right-6 group-hover:right-12 rounded-full px-2 py-0.5 text-xs <%= statusCfg[0] %> ring-1 ring-transparent hover:ring-slate-400 hover:shadow-sm transition-all">
+              <%= statusCfg[1] %> →
+            </a>
+          <% } %>
           <!-- 删除按钮:hover 卡片才显示,点击不触发卡片链接 -->
           <form method="post" action="/projects/<%= p.id %>/delete"
                 onsubmit="return confirm('确认删除项目「<%= p.title %>」?\n该项目的协议、检索式、文献、抽取、主题、综述草稿以及上传的 PDF 都会一并清除,无法撤销。')"

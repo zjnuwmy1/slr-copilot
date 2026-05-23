@@ -679,6 +679,12 @@ export function persistParseResult(db, { projectId, userId, packageId, parseResu
         r.has_pdf ? 1 : 0,
       )
 
+      // ingest 插入 attachments 指向 extracted/(每条记录可能有多个附件,如 PDF + snapshot)。
+      // 注意:对 matched 记录,后续 mergeZoteroIntoSystem 会另外插一行指向 /pdfs/<sys_record>.pdf,
+      // 同一文件可能在 attachments 表里有两行(zotero record + system record)。
+      // 占用统计的去重靠 services/storage.js 的 seenInodes(hardlink 同 inode 只算一次);
+      // 配额统计的去重要确保 size_bytes 设置正确(我们已 stat 出真实大小)。
+      // 这是一个权衡:多一行 DB 行换代码简单 + Zotero 记录自身也能查到 PDF。
       for (const a of r.attachments || []) {
         let sizeBytes = null
         try {
@@ -743,6 +749,34 @@ export function persistParseResult(db, { projectId, userId, packageId, parseResu
  *   rdf_filename:string,
  * }>}
  */
+/**
+ * 终态失败时清理 extractDir。仅允许动 UPLOAD_ROOT 之内的路径,防越权 rm -rf。
+ *   失败时如不清理:files 会一直占用用户配额、admin 看到"项目占用 359 MB / 0 attachments"
+ *   这种诡异数字,且不会出现在孤儿列表(DB 行还在)。
+ *   清完文件后,调用方应同时把 zotero_packages.storage_path 置 NULL。
+ */
+function cleanupFailedPackageFiles(packageRootPath) {
+  if (!packageRootPath) return
+  const UPLOAD_ROOT = path.resolve(process.env.SLR_UPLOAD_ROOT || '/var/lib/slr/uploads')
+  const resolved = path.resolve(packageRootPath)
+  // 必须在 UPLOAD_ROOT 之下,且不能等于 UPLOAD_ROOT(防 rm -rf 整个 uploads/)
+  if (!resolved.startsWith(UPLOAD_ROOT + path.sep) || resolved === UPLOAD_ROOT) {
+    console.warn('[zotero-ingest] refusing cleanup outside UPLOAD_ROOT:', packageRootPath)
+    return
+  }
+  try {
+    // 顺手把上层 pkg_xxx/ 目录也清(extractDir 通常是 pkg_xxx/extracted/)
+    const parent = path.dirname(resolved)
+    if (parent.startsWith(UPLOAD_ROOT + path.sep) && parent !== UPLOAD_ROOT) {
+      fs.rmSync(parent, { recursive: true, force: true })
+    } else {
+      fs.rmSync(resolved, { recursive: true, force: true })
+    }
+  } catch (e) {
+    console.error('[zotero-ingest] cleanup failed for', packageRootPath, e.message)
+  }
+}
+
 export async function ingestPackage(db, { projectId, userId, packageId, packageRootPath }) {
   if (!projectId || !packageId || !packageRootPath) {
     throw new Error('projectId, packageId, packageRootPath required')
@@ -751,14 +785,52 @@ export async function ingestPackage(db, { projectId, userId, packageId, packageR
     throw new Error(`packageRootPath not a directory: ${packageRootPath}`)
   }
 
-  // 找 .rdf 文件:取目录下第一个 *.rdf
-  const entries = fs.readdirSync(packageRootPath)
-  const rdfName = entries.find((n) => n.toLowerCase().endsWith('.rdf'))
+  // 找 .rdf 文件。三种情况:
+  //   1. 上层路由 findRdfFilename 已经扫到并存进 zotero_packages.rdf_filename(可能含子目录如 "ai下载/ai下载.rdf")
+  //      → 优先用,避免重复扫盘 + 兼容深一层结构
+  //   2. 老包没存 → 顶层扫一遍
+  //   3. 顶层没有 → 扫 1 层子目录(Zotero 导出包常见结构:storage/library.rdf)
+  let rdfName = null
+  try {
+    const row = db.prepare('SELECT rdf_filename FROM zotero_packages WHERE id = ?').get(packageId)
+    if (row && row.rdf_filename) {
+      // 校验文件实存在,失效就 fallback 到扫盘
+      const candidate = path.join(packageRootPath, row.rdf_filename)
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        rdfName = row.rdf_filename
+      }
+    }
+  } catch { /* 没列也走 fallback */ }
+
   if (!rdfName) {
-    db.prepare(`UPDATE zotero_packages SET status = 'failed', error_message = ? WHERE id = ?`).run(
-      'no .rdf file found in package',
-      packageId,
-    )
+    const entries = fs.readdirSync(packageRootPath)
+    rdfName = entries.find((n) => n.toLowerCase().endsWith('.rdf')) || null
+    // 顶层没找到 — 扫 1 层子目录(包内 storage/library.rdf 或 用户标题命名的子目录)
+    if (!rdfName) {
+      for (const n of entries) {
+        const sub = path.join(packageRootPath, n)
+        let st; try { st = fs.statSync(sub) } catch { continue }
+        if (!st.isDirectory()) continue
+        const inner = fs.readdirSync(sub)
+        const m = inner.find((x) => x.toLowerCase().endsWith('.rdf'))
+        if (m) { rdfName = path.join(n, m); break }
+      }
+    }
+  }
+
+  if (!rdfName) {
+    // 终态失败:.rdf 不在包里 → 这个包没法 ingest,清掉 extractDir 立刻释放配额。
+    //   storage_path 一并置空(schema NOT NULL,所以用 '' 不是 NULL),
+    //   getProjectStorage/diskUsage 都会把它当作"无引用"跳过。
+    //   保留 DB 行供 UI 显示"上传失败"原因 + 用户可点删除按钮彻底清掉。
+    cleanupFailedPackageFiles(packageRootPath)
+    db.prepare(
+      `UPDATE zotero_packages
+          SET status = 'failed',
+              error_message = ?,
+              storage_path = ''
+        WHERE id = ?`
+    ).run('no .rdf file found in package', packageId)
     throw new Error('no .rdf file found in package')
   }
 
@@ -770,7 +842,14 @@ export async function ingestPackage(db, { projectId, userId, packageId, packageR
     const rdfPath = path.join(packageRootPath, rdfName)
     const rdfText = fs.readFileSync(rdfPath, 'utf8')
 
-    const parseResult = parseZoteroRdf({ rdfText, packageRootPath })
+    // 关键:Zotero RDF 里的 z:path 是相对 RDF 文件所在目录的(不是 packageRootPath)。
+    //   当 rdfName 含子目录(如 'ai下载/ai下载.rdf')时,packageRootPath = extractDir = '/.../extracted',
+    //   但 z:path 形如 'files/3034/Fares.pdf' 是相对 '/.../extracted/ai下载' 的。
+    //   旧代码直接 join(extractDir, relPath) 会找不到附件文件。
+    //   现在把 RDF 所在目录作为 parser 的"附件根"传进去。
+    const rdfDir = path.dirname(rdfPath)
+
+    const parseResult = parseZoteroRdf({ rdfText, packageRootPath: rdfDir })
 
     summary = persistParseResult(db, {
       projectId,
@@ -780,10 +859,15 @@ export async function ingestPackage(db, { projectId, userId, packageId, packageR
       packageStoragePath: packageRootPath,
     })
   } catch (e) {
-    db.prepare(`UPDATE zotero_packages SET status = 'failed', error_message = ? WHERE id = ?`).run(
-      String(e.message || e),
-      packageId,
-    )
+    // 解析/落库失败也算终态(没有 retry 流程)。清盘 + null storage_path。
+    cleanupFailedPackageFiles(packageRootPath)
+    db.prepare(
+      `UPDATE zotero_packages
+          SET status = 'failed',
+              error_message = ?,
+              storage_path = ''
+        WHERE id = ?`
+    ).run(String(e.message || e), packageId)
     throw e
   }
 

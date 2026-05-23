@@ -45,11 +45,11 @@
           <% rows.forEach(r => { %>
             <tr>
               <td class="px-4 py-2 font-mono text-xs text-slate-400"><%= r.id %></td>
-              <td class="px-4 py-2 font-mono text-xs text-slate-500"><%= r.created_at %></td>
+              <td class="px-4 py-2 text-xs text-slate-500"><%- include('../partials/_time', { value: r.created_at, mono: true }) %></td>
               <td class="px-4 py-2">
                 <% const isError = /fail|error|deactivated|revoke|timeout/.test(r.event_type) %>
                 <% const isAdmin = /admin|role|quota|invite/.test(r.event_type) %>
-                <span class="rounded-full px-2 py-0.5 text-xs <%= isError ? 'bg-red-100 text-red-700' : isAdmin ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700' %>">
+                <span class="rounded-full px-2 py-0.5 text-xs <%= isError ? 'bg-rose-100 text-rose-700' : isAdmin ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700' %>">
                   <%= r.event_type %>
                 </span>
               </td>

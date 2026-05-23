@@ -1,15 +1,15 @@
 <%- include('../../partials/header', { title }) %>
 
 <section class="mx-auto max-w-2xl">
-  <div class="rounded-2xl border border-red-200 bg-white p-8 shadow-sm">
-    <p class="text-xs font-medium uppercase tracking-wider text-red-600">
+  <div class="rounded-2xl border border-rose-200 bg-white p-8 shadow-sm">
+    <p class="text-xs font-medium uppercase tracking-wider text-rose-600">
       绑定失败<%= session.state === 'timeout' ? '(超时)' : '' %>
     </p>
     <h1 class="mt-2 text-2xl font-semibold tracking-tight">
       <%= session.provider === 'anthropic' ? 'Claude' : 'Codex' %> 绑定未完成
     </h1>
     <% if (session.error_message) { %>
-      <div class="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-mono text-red-800">
+      <div class="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-mono text-rose-800">
         <%= session.error_message %>
       </div>
     <% } %>

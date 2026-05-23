@@ -1,5 +1,5 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
-<%- include('partials/project-header', { project }) %>
+<%- include('partials/project-header', { project, currentStep: 'extraction' }) %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
   <%- include('partials/stepper', { project, progress: progress || { stepStatus: {}, prismaProgress: { donePct: 0, done: 0, total: 42 } }, currentStep: 'extraction' }) %>
@@ -7,23 +7,457 @@
   <section class="space-y-6 min-w-0">
     <%- include('partials/step-banner', {
       stepNum: 4,
-      stepTitle: '文献矩阵 — 用户主导填写',
-      stepIntro: '每行一篇纳入文献,每列一个维度。可下载 XLSX 模板线下整理后上传,也可直接在表格里编辑。每列旁边的小图标里有可复制的 AI prompt,粘贴到你自己的 AI(任何一个)再喂入论文 PDF/摘要,就能让它帮你整理对应字段。',
+      stepTitle: '构建文献矩阵',
+      stepIntro: '一篇一行,多维度抽取关键数据。两条路径殊途同归 —— 结果均归入同一份矩阵:① 手工 / 外部 AI:下载 Excel 模板线下整理后回传(所有用户均可) ② 平台 AI 批量抽取:由平台串行调用 LLM 一次性填完全部列(需管理员开通"高级抽取"权限)。',
       prismaItems: '#10a Data collection · #10b Data items · #12 Effect measures',
     }) %>
 
-    <!-- 切回 AI 抽取的链接 -->
-    <div class="rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-2 text-xs text-slate-600 flex items-center justify-between">
-      <span>想让 AI 自动抽 JSON?</span>
-      <a href="/projects/<%= project.id %>/extraction" class="text-slate-700 underline hover:text-slate-900">改用 AI 自动抽取 →</a>
+    <%
+      // 前置检查 — Step 4 之前的四个准备阶段进度
+      const aiCheck = aiCustomize || {}
+      const includedCount = (rows && rows.length) || 0
+      const customizedNow = !!aiCheck.customizedAtVersion
+      const protocolApprovedNow = !!aiCheck.protocolApproved
+      const stepSt = (progress && progress.stepStatus) || {}
+      const searchLocked = stepSt.search && stepSt.search.status === 'done'
+      // 4 个准备阶段:① 协议审批 ② 检索锁定 ③ 论文筛选 ④ 矩阵列定制
+      const prepSteps = [
+        {
+          id: 'protocol',
+          label: '协议审批',
+          href: `/projects/${project.id}/protocol`,
+          done: protocolApprovedNow,
+          ctaText: '去 Step 1 审批协议',
+        },
+        {
+          id: 'search',
+          label: '检索锁定',
+          href: `/projects/${project.id}/search`,
+          done: !!searchLocked,
+          ctaText: '去 Step 2 锁定检索',
+        },
+        {
+          id: 'screening',
+          label: '论文筛选',
+          href: `/projects/${project.id}/screening`,
+          done: includedCount > 0,
+          ctaText: '去 Step 3 筛选论文(纳入≥1 篇)',
+        },
+        {
+          id: 'customize',
+          label: '矩阵列定制',
+          href: '#btn-suggest-cols',
+          done: customizedNow,
+          ctaText: '点 🎯 让 AI 定制矩阵列',
+          optional: true,  // 不阻塞,但建议
+        },
+      ]
+      // "下一步应该做什么":第一个未完成的、非 optional 的步骤(optional 即使没完成也不卡)
+      const firstBlocking = prepSteps.find((s) => !s.done && !s.optional)
+      // 视觉:当前应做的橙色高亮 — 第一个未完成步骤(含 optional);如果全做完就没有 current
+      const currentPrep = prepSteps.find((s) => !s.done)
+    %>
+    <div class="rounded-xl border border-slate-200 bg-white p-3 sm:p-4">
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-[11px] font-medium uppercase tracking-wider text-slate-500">准备阶段</p>
+        <p class="text-[11px] text-slate-500">
+          <span class="font-mono"><%= prepSteps.filter((s) => s.done).length %>/<%= prepSteps.length %></span> 完成
+        </p>
+      </div>
+      <!-- mini stepper:横向 chip,每个可点 -->
+      <ol class="flex flex-wrap items-center gap-1.5 sm:gap-2">
+        <% prepSteps.forEach((s, i) => {
+             const isCurrent = currentPrep && currentPrep.id === s.id
+             const baseCls = s.done
+               ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+               : isCurrent
+                 ? 'border-amber-400 bg-amber-50 text-amber-900 ring-2 ring-amber-200 hover:bg-amber-100'
+                 : 'border-slate-200 bg-slate-50 text-slate-400 hover:bg-slate-100'
+             const icon = s.done ? '✓' : (i + 1)
+        %>
+          <li class="flex items-center gap-1.5">
+            <a href="<%= s.href %>"
+               title="<%= s.done ? '已完成 — 点击查看' : (isCurrent ? '⏵ 接下来做:' + s.label : '尚未完成 — 点击前往') %>"
+               class="inline-flex items-center gap-1.5 rounded-full border <%= baseCls %> px-2.5 py-1 text-xs font-medium transition">
+              <span class="<%= s.done ? 'bg-emerald-500 text-white' : isCurrent ? 'bg-amber-500 text-white' : 'bg-slate-300 text-white' %> flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-semibold"><%= icon %></span>
+              <%= s.label %><% if (s.optional) { %><span class="text-[10px] opacity-70">(可选)</span><% } %>
+            </a>
+            <% if (i < prepSteps.length - 1) { %>
+              <span class="hidden sm:inline text-slate-300 text-xs">→</span>
+            <% } %>
+          </li>
+        <% }) %>
+      </ol>
+      <% if (firstBlocking) { %>
+        <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs">
+          <p class="text-amber-900">
+            <strong>接下来:</strong>
+            <a class="ml-1 inline-flex items-center gap-1 rounded-md border border-amber-400 bg-white px-2 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
+               href="<%= firstBlocking.href %>">
+              <%= firstBlocking.ctaText %> →
+            </a>
+            <% if (firstBlocking.id === 'protocol') { %>
+              <span class="ml-1 text-amber-700">— 审批后才能进 Step 2 / 3 / 4。</span>
+            <% } else if (firstBlocking.id === 'screening') { %>
+              <span class="ml-1 text-amber-700">— 至少把 1 篇标为"纳入",这里才会出现论文行。</span>
+            <% } %>
+          </p>
+        </div>
+      <% } %>
     </div>
+
+    <%
+      // 协议升级警告:用户之前定制过矩阵列,但协议已升级到更高版本
+      // 此时锁定已解除(因为 protocolVersion > customizedAtVersion),
+      // 但用户可能没意识到旧列定制是基于旧协议的,建议重新定制。
+      const aiC3 = aiCustomize || {}
+      const protocolUpgraded = aiC3.protocolApproved
+        && aiC3.customizedAtVersion != null
+        && aiC3.protocolVersion != null
+        && aiC3.protocolVersion > aiC3.customizedAtVersion
+    %>
+    <% if (protocolUpgraded) { %>
+      <div class="rounded-xl border-2 border-amber-300 bg-amber-50 p-3 text-sm">
+        <p class="font-medium text-amber-900">
+          ⚠ 协议已更新到 <span class="font-mono">v<%= aiC3.protocolVersion %></span>,你的矩阵列定制还停留在 <span class="font-mono">v<%= aiC3.customizedAtVersion %></span> —
+          <a href="#btn-suggest-cols" class="font-semibold underline hover:text-amber-700">建议点 🎯 重新定制</a>
+          让 AI 按新协议重新调整列。
+        </p>
+        <p class="mt-1 text-[11px] text-amber-700">
+          (旧定制不会自动丢失;你可以选择保留 / 替换 / 合并新建议。)
+        </p>
+      </div>
+    <% } %>
+
+    <%
+      const aiC2 = aiCustomize || {}
+      const customized = !!aiC2.customizedAtVersion
+      const protocolApproved = !!aiC2.protocolApproved
+      const bj = batchJob || null
+      const bjRunning = bj && bj.status === 'running'
+      const canBatch = canAdvanced && customized && bj && bj.status !== 'running'
+    %>
+
+    <!-- Step 4 双路径 + 流程指引 -->
+    <div class="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4">
+      <p class="text-xs uppercase tracking-wider text-slate-500 mb-2">Step 4 工作流</p>
+      <!-- <md:纵向单列 + ↓ 箭头  /  ≥md:横向 6 列 grid + → 箭头 -->
+      <div class="space-y-3 md:space-y-0 md:grid md:gap-3 md:grid-cols-[40px_1fr_40px_1fr_40px_1fr]">
+        <!-- 步 1:定制列 -->
+        <div class="flex items-center md:justify-center gap-3 md:gap-0">
+          <span class="<%= customized ? 'bg-emerald-500 text-white' : protocolApproved ? 'bg-purple-500 text-white' : 'bg-slate-200 text-slate-400' %> rounded-full h-7 w-7 flex flex-none items-center justify-center text-sm font-semibold">
+            <%= customized ? '✓' : '1' %>
+          </span>
+          <div class="md:hidden text-xs flex-1">
+            <p class="font-medium text-slate-800">定制矩阵列</p>
+            <p class="mt-0.5 text-slate-500">让 AI 基于协议改写默认列 + 反推专属列 — 每个协议版本只能调一次</p>
+          </div>
+        </div>
+        <div class="hidden md:block text-xs">
+          <p class="font-medium text-slate-800">定制矩阵列</p>
+          <p class="mt-0.5 text-slate-500">让 AI 基于协议改写默认列 + 反推专属列 — 每个协议版本只能调一次</p>
+        </div>
+        <!-- 箭头:小屏 ↓ / 大屏 → -->
+        <div class="flex items-center justify-center text-slate-300 text-base md:text-sm">
+          <span class="md:hidden">↓</span>
+          <span class="hidden md:inline">→</span>
+        </div>
+        <!-- 步 2:确认 prompt -->
+        <div class="md:hidden flex items-start gap-3">
+          <span class="rounded-full h-7 w-7 flex flex-none items-center justify-center text-sm font-semibold bg-slate-200 text-slate-500">2</span>
+          <div class="text-xs flex-1">
+            <p class="font-medium text-slate-800">确认列定义 + prompt</p>
+            <p class="mt-0.5 text-slate-500">每列已生成 ai_prompt_template(可在表头小图标里查看)。下面的表格已是定制后的最终列。</p>
+          </div>
+        </div>
+        <div class="hidden md:block text-xs">
+          <p class="font-medium text-slate-800">确认列定义 + prompt</p>
+          <p class="mt-0.5 text-slate-500">每列已生成 ai_prompt_template(可在表头小图标里查看)。下面的表格已是定制后的最终列。</p>
+        </div>
+        <div class="flex items-center justify-center text-slate-300 text-base md:text-sm">
+          <span class="md:hidden">↓</span>
+          <span class="hidden md:inline">→</span>
+        </div>
+        <!-- 步 3:走哪条路 -->
+        <div class="md:hidden flex items-start gap-3">
+          <span class="rounded-full h-7 w-7 flex flex-none items-center justify-center text-sm font-semibold bg-slate-200 text-slate-500">3</span>
+          <div class="text-xs flex-1">
+            <p class="font-medium text-slate-800">两条路径任选其一</p>
+            <p class="mt-0.5 text-slate-500">
+              <strong class="text-slate-700">A.</strong> ↓ 下载 xlsx · 任意 AI 抽完 · ↑ 上传<br>
+              <strong class="text-slate-700">B.</strong> 📦 导入 Zotero 包(带 PDF) → ⚡ 平台批量(下方)
+            </p>
+          </div>
+        </div>
+        <div class="hidden md:block text-xs">
+          <p class="font-medium text-slate-800">两条路径任选其一</p>
+          <p class="mt-0.5 text-slate-500">
+            <strong class="text-slate-700">A.</strong> ↓ 下载 xlsx · 任意 AI 抽完 · ↑ 上传<br>
+            <strong class="text-slate-700">B.</strong> 📦 导入 Zotero 包(带 PDF) → ⚡ 平台批量(下方)
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI 批量抽取入口卡(Step 4 路径 B)-->
+    <%
+      const noPdf = (typeof noPdfTargetCount === 'number') ? noPdfTargetCount : 0
+      const unavailable = (typeof unavailableTargetCount === 'number') ? unavailableTargetCount : 0
+      const pending = (typeof pendingTargetCount === 'number') ? pendingTargetCount : noPdf - unavailable
+      const alreadyAi = (typeof alreadyAiCount === 'number') ? alreadyAiCount : 0
+      const totalAll = (typeof batchTargetCountAll === 'number') ? batchTargetCountAll : batchTargetCount
+      // totalAll = batchTargetCount(全文)+ unavailable(容缺);pending 不算 totalAll
+      const grandTotal = totalAll + pending
+      const canBatchAny = canAdvanced && customized && bj && bj.status !== 'running' && totalAll > 0
+      // 警示态:只要 pending > 0(还有待 triage)就高亮红色,提醒用户去 Step 3 审完
+      const pdfWarnActive = pending > 0
+    %>
+    <div data-pdf-warning="<%= pdfWarnActive ? '1' : '0' %>"
+         class="rounded-2xl border-2 <%=
+           pdfWarnActive
+             ? 'border-rose-400 bg-rose-50/40'
+             : (canBatchAny ? 'border-indigo-300 bg-indigo-50/40' : 'border-slate-200 bg-slate-50/40')
+         %> p-4">
+      <%# Chunk 状态条 — Step 4 完成度的核心瓶颈是"PDF 落盘但 chunks 没",会让 LLM 回退到只读摘要。
+          有 pending_chunk > 0 时显眼提示;全 chunk 完则显示绿色 ✓。 %>
+      <% const cs = chunkStatus || { include_total: 0, with_pdf: 0, with_chunks: 0, no_pdf: 0, pending_chunk: 0 }
+         const ppj = parsePdfsJob || null
+         const ppjRunning = !!(ppj && ppj.status === 'running')
+         const ppjProgress = ppj && ppj.total ? Math.round((ppj.done / ppj.total) * 100) : 0 %>
+      <% if (cs.with_pdf > 0) { %>
+        <div class="mb-3 rounded-lg border <%=
+          ppjRunning ? 'border-blue-300 bg-blue-50/60' :
+          (cs.pending_chunk > 0 ? 'border-amber-300 bg-amber-50/60' : 'border-emerald-300 bg-emerald-50/60')
+        %> px-3 py-2 text-xs">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <p>
+              <span class="font-medium">📄 PDF 解析状态:</span>
+              共 <%= cs.include_total %> include · 有 PDF <%= cs.with_pdf %>
+              · <span class="text-emerald-700">已 chunk <strong><%= cs.with_chunks %></strong></span>
+              <% if (cs.pending_chunk > 0) { %>
+                · <span class="text-amber-700">待 chunk <strong><%= cs.pending_chunk %></strong></span>
+              <% } %>
+              <% if (cs.no_pdf > 0) { %>
+                · <span class="text-slate-500">无 PDF <%= cs.no_pdf %></span>
+              <% } %>
+            </p>
+            <% if (ppjRunning) { %>
+              <span id="parse-pdfs-status" class="rounded bg-blue-100 px-2 py-0.5 text-blue-800 font-mono"
+                    data-job-id="<%= ppj.id %>" data-total="<%= ppj.total %>">
+                ⏳ 解析中 <%= ppj.done || 0 %>/<%= ppj.total %>(<%= ppjProgress %>%)
+              </span>
+            <% } else if (cs.pending_chunk > 0) { %>
+              <form id="parse-pdfs-form" method="post" action="/projects/<%= project.id %>/matrix/parse-pdfs" class="inline">
+                <button type="submit" id="parse-pdfs-btn"
+                        class="rounded-lg border-2 border-amber-400 bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900 hover:bg-amber-200 disabled:opacity-60 disabled:cursor-not-allowed"
+                        title="解析所有 PDF 出 chunks(每篇 1-3 秒)。完成后 LLM 抽矩阵就能读全文,完成度会大幅提升。">
+                  ⚛ 解析 PDF 出 chunks
+                </button>
+              </form>
+            <% } else if (cs.with_chunks > 0) { %>
+              <span class="rounded bg-emerald-100 px-2 py-0.5 text-emerald-800 font-medium">
+                ✓ 全部 chunk 完成
+              </span>
+            <% } %>
+          </div>
+          <% if (cs.pending_chunk > 0 && !ppjRunning) { %>
+            <p class="mt-1 text-[10px] text-amber-800/80">
+              ⚠ 待 chunk 的 PDF 不解析直接跑批量,LLM 只能读摘要(完成度可能从 0.75+ 降到 0.5)。强烈建议先解析。
+            </p>
+          <% } %>
+        </div>
+      <% } %>
+
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold <%=
+            pdfWarnActive ? 'text-rose-800' : (canBatchAny ? 'text-indigo-900' : 'text-slate-700')
+          %>">
+            ⚡ 路径 B:AI 平台批量抽取
+          </p>
+          <p class="mt-1 text-xs text-slate-600">
+            <% if (!canAdvanced) { %>
+              🔒 需超管开通"高级抽取"。当前可走路径 A:下载 xlsx 模板 → 任意 AI 抽完 → 上传回来。
+            <% } else if (!protocolApproved) { %>
+              ⓘ 请先去 Step 1 审批协议。
+            <% } else if (!customized) { %>
+              ⓘ 请先点下方 <span class="font-medium text-purple-700">🎯 让 AI 定制本项目矩阵列</span>,确认列定义和 prompt 后再跑批量。
+            <% } else if (grandTotal === 0) { %>
+              ⓘ 没有 include 的论文。先去 Step 3 筛选,把决定为"纳入"的论文标好。
+            <% } else if (pending > 0) { %>
+              <span class="font-medium text-rose-700">⚠ 还有 <%= pending %> 篇暂无 PDF 且未审过</span> —
+              请去 <a href="/projects/<%= project.id %>/screening?missing_pdf=1&human=include" class="font-medium text-rose-700 underline">Step 3 「仅暂无」筛选</a>
+              逐条确认:要么 ↑ 补传 PDF,要么 ✕ 标记容缺。这批不会进入下方批量。
+              <br>当前可跑 <strong><%= totalAll %></strong> 篇 =
+              <strong class="text-emerald-700"><%= batchTargetCount %></strong> 全文 PDF
+              + <strong class="text-slate-600"><%= unavailable %></strong> 容缺(用摘要,需勾下方"容缺原文")<% if (alreadyAi > 0) { %> · 已 AI 抽过 <%= alreadyAi %> 篇<% } %>。
+            <% } else if (unavailable > 0) { %>
+              候选 <strong><%= totalAll %></strong> 篇 =
+              <strong class="text-emerald-700"><%= batchTargetCount %></strong> 全文 PDF +
+              <strong class="text-slate-600"><%= unavailable %></strong> 容缺(只用标题+摘要,需勾"容缺原文")<% if (alreadyAi > 0) { %> · 已抽 <%= alreadyAi %><% } %>。
+            <% } else { %>
+              候选 <strong><%= totalAll %></strong> 篇全文 PDF<% if (alreadyAi > 0) { %><span class="ml-1 text-emerald-700">(已 AI 抽过 <%= alreadyAi %> 篇,默认跳过)</span><% } %>。
+              一篇一次 LLM 调用,master prompt 出全列,结果填进下方矩阵 (filled_by=ai)。
+            <% } %>
+          </p>
+        </div>
+
+        <!-- 📦 Zotero 包导入入口 — 路径 B 准备 PDF 的主要途径
+             noPdf > 0:红色凸显(配合卡片红边框);noPdf = 0:灰 outline,不抢眼 -->
+        <% if (canAdvanced) { %>
+          <a href="/projects/<%= project.id %>/zotero"
+             class="flex-none rounded-lg border-2 <%=
+               noPdf > 0
+                 ? 'border-rose-400 bg-rose-50 text-rose-900 hover:bg-rose-100'
+                 : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
+             %> px-3 py-2 text-sm font-medium transition"
+             title="<%= noPdf > 0
+               ? '还有 ' + noPdf + ' 篇 include 论文没传 PDF,点这里上传 Zotero 包补全'
+               : '上传 / 管理 Zotero 包(系统会跟你 include 的论文做二次匹配,把更全的字段 + PDF 合并进来)' %>">
+            📦 导入 Zotero 包
+            <% if (noPdf > 0) { %>
+              <span class="ml-1 rounded-full bg-rose-200 px-1.5 py-0.5 text-[10px] font-mono text-rose-900">补 <%= noPdf %> PDF</span>
+            <% } %>
+          </a>
+        <% } %>
+      </div>
+
+      <% if (canAdvanced && customized && totalAll > 0) { %>
+        <form method="post" action="/projects/<%= project.id %>/matrix/run-batch-ai" class="mt-3 space-y-2">
+          <% if (unavailable > 0) { %>
+            <label class="flex items-start gap-2 rounded border border-slate-300 bg-slate-50 px-2 py-1.5 text-xs text-slate-700 cursor-pointer" id="allow-abstract-label">
+              <input type="checkbox" name="allow_abstract_only" value="1" class="mt-0.5" id="allow-abstract-cb" />
+              <span>
+                <strong>容缺原文</strong>:对 <strong><%= unavailable %></strong> 篇已确认"容缺"(找不到原文)的论文也跑,只用标题+摘要。
+                LLM 已被严令<strong>不编造</strong>:摘要里没的字段一律留空。
+                <% if (pending > 0) { %>
+                  <br><span class="text-rose-700">另外 <%= pending %> 篇"暂无 PDF 且未审过"不会跑 — 请先去 Step 3 逐条 ↑补传 或 ✕标容缺。</span>
+                <% } %>
+              </span>
+            </label>
+          <% } else if (pending > 0) { %>
+            <div class="rounded border border-rose-200 bg-rose-50/60 px-2 py-1.5 text-xs text-rose-800">
+              ⚠ 有 <%= pending %> 篇 include 论文还没确认 PDF 状态。
+              请去 <a href="/projects/<%= project.id %>/screening?missing_pdf=1&human=include" class="font-medium underline">Step 3 「仅暂无」</a>
+              逐条 ↑补传 PDF 或 ✕标容缺。处理完后这里会出现"容缺原文"选项。
+            </div>
+          <% } %>
+          <% if (alreadyAi > 0) { %>
+            <label class="flex items-start gap-2 rounded border border-emerald-200 bg-emerald-50/40 px-2 py-1.5 text-xs text-emerald-900 cursor-pointer">
+              <input type="checkbox" name="force_rerun" value="1" class="mt-0.5" />
+              <span>
+                <strong>强制重跑</strong>:连同已 AI 抽过的 <%= alreadyAi %> 篇一起重跑(会覆盖现有 ai 结果)。
+                不勾就只跑新论文。
+              </span>
+            </label>
+          <% } %>
+          <div class="flex flex-wrap items-center gap-3">
+            <button type="submit"
+                    <%= bjRunning ? 'disabled' : '' %>
+                    class="rounded-lg px-4 py-2 text-sm font-medium <%=
+                      bjRunning ? 'bg-slate-200 text-slate-400 cursor-not-allowed' :
+                      'bg-indigo-600 text-white hover:bg-indigo-500'
+                    %>">
+              <% if (bjRunning) { %>
+                ⏳ 跑批中…
+              <% } else { %>
+                ⚡ 启动批量抽取
+              <% } %>
+            </button>
+            <span class="text-[11px] text-slate-500">默认只跑未 AI 抽过的有 PDF 论文;勾上面 checkbox 改变范围。</span>
+          </div>
+        </form>
+      <% } %>
+
+      <% if (bj) { %>
+        <%
+          const pct = bj.total ? Math.round(((bj.done || 0) / bj.total) * 100) : 0
+          const barCls = bj.status === 'running' ? 'bg-indigo-500' :
+                         (bj.failed > 0 ? 'bg-amber-500' : 'bg-emerald-500')
+        %>
+        <div id="matrix-batch-progress" class="mt-3">
+          <div class="flex items-center justify-between text-xs text-slate-600">
+            <span id="matrix-batch-status">
+              <% if (bj.status === 'running') { %>
+                运行中:<%= bj.done %>/<%= bj.total %> 完成,<%= bj.failed %> 失败
+                <% if (bj.current && bj.current.title) { %>
+                  · 当前:<span class="text-slate-800"><%= bj.current.title.slice(0, 70) %></span>
+                <% } %>
+              <% } else if (bj.status === 'finished') { %>
+                ✓ 完成:<%= bj.done %>/<%= bj.total %>,失败 <%= bj.failed %>(<%= bj.finishedAt || '' %>)
+              <% } else if (bj.status === 'aborted_by_restart') { %>
+                <span class="text-amber-700">⚠ 上次跑到 <%= bj.done %>/<%= bj.total %> 服务被重启,可重新启动跑剩下的(已抽过的会自动跳过)</span>
+              <% } else if (bj.status === 'failed') { %>
+                <span class="text-rose-700">✗ 上次失败 — 已完成 <%= bj.done %>/<%= bj.total %>(失败 <%= bj.failed %>)</span>
+              <% } else { %>
+                <%= bj.status %>
+              <% } %>
+            </span>
+            <span class="font-mono" id="matrix-batch-pct"><%= pct %>%</span>
+          </div>
+          <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+            <div class="h-full <%= barCls %>" id="matrix-batch-bar" style="width: <%= pct %>%"></div>
+          </div>
+          <%# B2.4:can_retry=1 时(failed / aborted_by_restart),显示重启按钮 + dismiss 按钮 %>
+          <% if (bj.canRetry) { %>
+            <div class="mt-2 flex flex-wrap items-center gap-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs">
+              <span class="text-amber-900">
+                <% if (bj.lastError) { %>错误:<code class="text-[11px] text-rose-700"><%= bj.lastError.slice(0, 200) %></code><% } else { %>可重新启动跑剩下的(已抽过的自动跳过)<% } %>
+              </span>
+              <form method="post" action="/projects/<%= project.id %>/matrix/run-batch-ai" class="inline ml-auto">
+                <% if (noPdf > 0) { %><input type="hidden" name="allow_abstract_only" value="" /><% } %>
+                <button type="submit" class="rounded-md border border-amber-400 bg-white px-2.5 py-1 text-amber-800 hover:bg-amber-100">
+                  ↻ 重新启动剩余 <%= Math.max(0, (bj.total || 0) - (bj.done || 0)) %> 篇
+                </button>
+              </form>
+              <form method="post" action="/projects/<%= project.id %>/matrix/batch-dismiss/<%= bj.id %>" class="inline">
+                <button type="submit" class="rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-600 hover:bg-slate-100" title="忽略此提示(不再显示重启按钮)">忽略</button>
+              </form>
+            </div>
+          <% } %>
+        </div>
+        <% if (bj.status === 'running') { %>
+          <script>
+            (function() {
+              const url = '/projects/<%= project.id %>/matrix/batch-progress.json'
+              async function poll() {
+                try {
+                  const r = await fetch(url, { headers: { 'accept': 'application/json' } })
+                  if (!r.ok) return
+                  const data = await r.json()
+                  if (!data || !data.job) return
+                  const job = data.job
+                  if (job.status !== 'running') { window.location.reload(); return }
+                  const total = job.total || 1
+                  const pct = Math.round(((job.done || 0) / total) * 100)
+                  const bar = document.getElementById('matrix-batch-bar')
+                  if (bar) bar.style.width = pct + '%'
+                  const st = document.getElementById('matrix-batch-status')
+                  if (st) {
+                    let s = '运行中:' + (job.done || 0) + '/' + total + ' 完成,' + (job.failed || 0) + ' 失败'
+                    if (job.current && job.current.title) s += ' · 当前:' + job.current.title.slice(0, 70)
+                    st.textContent = s
+                  }
+                  const pe = document.getElementById('matrix-batch-pct')
+                  if (pe) pe.textContent = pct + '%'
+                } catch {}
+              }
+              setInterval(poll, 5000)
+            })()
+          </script>
+        <% } %>
+      <% } %></div>
 
     <!-- 操作条 -->
     <div class="rounded-2xl border border-slate-200 bg-white p-4">
+      <p class="mb-2 text-[11px] text-slate-500">
+        💡 建议先点 <span class="font-medium text-purple-700">🎯 让 AI 定制本项目专属列</span>(基于你的协议反推额外列),再 ↓ 下载 XLSX 模板 — 这样得到的模板更贴合你的研究。模板里的"使用说明"sheet 自带一次性总 prompt,可以喂给 Claude / ChatGPT 一篇一篇手动抽完。
+      </p>
       <div class="flex flex-wrap items-center gap-3">
         <a href="/projects/<%= project.id %>/matrix/template.xlsx"
-           class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
-          ↓ 下载 XLSX 模板
+           class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+           title="下载本项目专属 XLSX:Data sheet 含所有已填值(可继续在 Excel 里编辑),另含使用说明 + 一次性总 prompt。改完上传回来覆盖。">
+          ↓ 下载 XLSX(含已填值)
         </a>
 
         <form method="post" action="/projects/<%= project.id %>/matrix/upload-xlsx"
@@ -44,12 +478,95 @@
           📋 复制一次性总提示词
         </button>
 
-        <!-- AI 定制专属列 -->
+        <!-- AI 定制专属列 — 每个协议版本只能调一次 -->
+        <%
+          const aiC = aiCustomize || {}
+          const aiLocked = !!aiC.locked
+          const aiNoProtocol = !aiC.protocolApproved
+        %>
         <button type="button" id="btn-suggest-cols"
-                class="rounded-lg border-2 border-purple-300 bg-purple-50 px-3 py-2 text-sm font-medium text-purple-800 hover:bg-purple-100"
-                title="让 AI 根据本项目协议反推 3-6 个特别有用、通用模板没覆盖的额外列">
-          🎯 让 AI 定制本项目专属列
+                <%= (aiLocked || aiNoProtocol) ? 'disabled' : '' %>
+                data-protocol-version="<%= aiC.protocolVersion || '' %>"
+                data-customized-version="<%= aiC.customizedAtVersion || '' %>"
+                data-locked="<%= aiLocked ? '1' : '0' %>"
+                class="rounded-lg border-2 px-3 py-2 text-sm font-medium transition <%=
+                  aiLocked ? 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed' :
+                  aiNoProtocol ? 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed' :
+                  'border-purple-300 bg-purple-50 text-purple-800 hover:bg-purple-100'
+                %>"
+                title="<%=
+                  aiLocked ? '本协议版本 v' + aiC.customizedAtVersion + ' 已定制过 — 修改并重新审批协议后可再次定制' :
+                  aiNoProtocol ? '请先去 Step 1 审批协议' :
+                  '让 AI 根据本项目协议:① 调整通用列的表达,让它更贴合你的研究 ② 推荐 3-6 个你这个项目特有的列。每个协议版本只能调一次。'
+                %>">
+          <% if (aiLocked) { %>
+            🔒 已定制(协议 v<%= aiC.customizedAtVersion %>)
+          <% } else if (aiNoProtocol) { %>
+            🔒 需先审批协议
+          <% } else { %>
+            🎯 让 AI 定制本项目专属列
+          <% } %>
         </button>
+        <% if (aiLocked && aiC.protocolVersion) { %>
+          <span class="text-[10px] text-slate-400">协议 v<%= aiC.protocolVersion %> · 重审批后解锁</span>
+        <% } %>
+
+        <%# 一键优化总 prompt — 4 个状态:
+              · in_flight  正在跑(防刷新后重复点)
+              · locked     该协议版已优化过
+              · idle       可点
+              · noProtocol 需先审批协议
+        %>
+        <%
+          const opt = optimizePrompt || {}
+          const optLocked = !!opt.locked
+          const optInFlight = !!opt.inFlight
+          const optNoProtocol = !aiC.protocolApproved
+          const optDisabled = optLocked || optInFlight || optNoProtocol
+          // 把开始时间(秒)透给 JS,让计时器从正确起点续上
+          const inFlightSec = opt.inFlightSeconds || 0
+        %>
+        <button type="button" id="btn-optimize-prompt"
+                <%= optDisabled ? 'disabled' : '' %>
+                data-locked="<%= optLocked ? '1' : '0' %>"
+                data-in-flight="<%= optInFlight ? '1' : '0' %>"
+                data-in-flight-sec="<%= inFlightSec %>"
+                class="rounded-lg border-2 px-3 py-2 text-sm font-medium transition <%=
+                  optInFlight ? 'border-amber-300 bg-amber-50 text-amber-800 cursor-wait' :
+                  optLocked ? 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed' :
+                  optNoProtocol ? 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed' :
+                  'border-indigo-300 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                %>"
+                title="<%=
+                  optInFlight ? '上一次点击的优化还在跑(服务端 LLM 调用通常 5-8 分钟)。等它完成,或 15 分钟后视为崩溃自动解锁。' :
+                  optLocked ? '本协议版本已优化过总 prompt — 重审批协议后可再次优化' :
+                  optNoProtocol ? '请先审批协议' :
+                  '基于协议 + AI 定制的列 + 入选论文样本(标题/摘要),让 LLM 写一份贴合本项目的批量抽取总 prompt;同时产出一个简化版供你复制到外部 AI 平台。每个协议版本只能调一次。'
+                %>">
+          <% if (optInFlight) { %>
+            ⏳ 优化进行中 <span id="opt-elapsed">(<%= Math.floor(inFlightSec/60) %>:<%= String(inFlightSec%60).padStart(2,'0') %>)</span>
+          <% } else if (optLocked) { %>
+            🔒 总 prompt 已优化(协议 v<%= opt.optimizedAtVersion %>)
+          <% } else if (optNoProtocol) { %>
+            🔒 需先审批协议
+          <% } else if (opt.hasOptimized) { %>
+            ⚙️ 重新优化总 prompt
+          <% } else { %>
+            ⚙️ 让 AI 优化总 prompt(批量+复制版)
+          <% } %>
+        </button>
+        <% if (opt.hasOptimized && !optLocked) { %>
+          <span class="text-[10px] text-emerald-600">✓ 已有优化版</span>
+        <% } %>
+
+        <%# 链式 UX:已定制了列但还没优化总 prompt(同一协议版本)→ 高亮优化按钮 + 提示
+            因为这俩是天然的"两步走":先让 AI 定列,再让 AI 用列 + 协议 + 论文样本写总 prompt %>
+        <% if (aiC.locked && aiC.customizedAtVersion && !opt.hasOptimized && !optNoProtocol) { %>
+          <span class="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-300 animate-pulse"
+                title="你已经定制过专属列了,顺手再点 ⚙️ 让 AI 把总 prompt 也优化一遍(用 Opus 4.7 + ultrathink),批量抽取质量会显著提升">
+            ↑ 推荐顺手优化总 prompt
+          </span>
+        <% } %>
 
         <button type="button" id="btn-add-col"
                 class="ml-auto rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
@@ -69,23 +586,63 @@
       <!-- 复制提示 反馈 -->
       <p id="copy-feedback" class="mt-2 hidden text-xs"></p>
 
-      <!-- AI 定制列 modal(默认隐藏) -->
-      <div id="suggest-modal" class="hidden mt-3 rounded-lg border-2 border-purple-300 bg-purple-50/40 p-4">
-        <div class="flex items-center justify-between">
-          <p class="text-sm font-semibold text-purple-900">🎯 AI 推荐的项目专属列</p>
-          <button type="button" id="suggest-close" class="text-xs text-purple-700 hover:underline">关闭</button>
+      <!-- AI 定制列 modal — fixed inset-0 全屏遮罩(默认隐藏) -->
+      <div id="suggest-modal" class="hidden fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8">
+        <!-- 点遮罩关闭(只在 click 在最外层时触发) -->
+        <div id="suggest-backdrop" class="absolute inset-0"></div>
+        <div class="relative my-4 w-full max-w-3xl rounded-xl border-2 border-purple-300 bg-purple-50/95 p-5 shadow-2xl backdrop-blur-sm">
+          <div class="flex items-center justify-between sticky top-0 -mt-5 -mx-5 mb-3 bg-purple-100 px-5 py-3 rounded-t-xl border-b border-purple-300">
+            <p class="text-sm font-semibold text-purple-900">🎯 AI 定制本项目矩阵列</p>
+            <button type="button" id="suggest-close" class="rounded px-2 py-0.5 text-xs text-purple-700 hover:bg-purple-200">✕ 关闭(Esc)</button>
+          </div>
+
+        <!-- 加载态:旋转 spinner + 计时 + 解释正在做什么 -->
+        <div id="suggest-loading" class="mt-3 flex items-start gap-3 rounded border border-purple-200 bg-white px-3 py-2">
+          <span class="mt-0.5 inline-block h-4 w-4 animate-spin rounded-full border-2 border-purple-300 border-t-purple-700"></span>
+          <div class="flex-1 min-w-0">
+            <p id="suggest-status" class="text-xs font-medium text-purple-800">
+              AI 正在阅读你的协议 + 现有列 + 学科背景…
+            </p>
+            <p class="mt-0.5 text-[10px] text-purple-600">
+              它会做两件事:① 调整通用列的表达,让它更贴合你的研究 ② 推荐 3-6 个你这个项目特有的列。
+              通常需要 15-40 秒,请别关页面。
+              <span class="ml-1 font-mono text-purple-500" id="suggest-timer">0s</span>
+            </p>
+          </div>
         </div>
-        <p id="suggest-status" class="mt-1 text-xs text-purple-700">AI 思考中…(~10-30s)</p>
+
         <form method="post" action="/projects/<%= project.id %>/matrix/columns/batch-add"
-              id="suggest-add-form" class="hidden mt-3 space-y-2">
+              id="suggest-add-form" class="hidden mt-3 space-y-3">
           <input type="hidden" name="suggestions_json" id="suggest-payload" />
-          <p id="suggest-reasoning" class="text-[11px] text-purple-600"></p>
-          <div id="suggest-list" class="space-y-2"></div>
+          <input type="hidden" name="rewrites_json" id="rewrite-payload" />
+
+          <p id="suggest-reasoning" class="rounded bg-purple-100 px-2 py-1 text-[11px] text-purple-800"></p>
+
+          <!-- ⚠️ 重要提示:逐列 review -->
+          <div class="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+            <strong>⚠ 重要:</strong> 应用前请<strong>逐列检查 prompt</strong>(默认全展开)。<strong>这些 prompt 决定了 AI 批量抽取每列时怎么读论文</strong> — 不合适的 prompt 会让 AI 抽出错的字段。可以直接在 textarea 里改;改后点击应用即生效。
+          </div>
+
+          <!-- 调整通用列 -->
+          <div id="rewrite-section" class="hidden">
+            <p class="text-xs font-semibold text-slate-800">✏️ 调整通用列(贴合你的研究)</p>
+            <p class="text-[10px] text-slate-500 mb-1">勾选要应用的调整。AI 只会改默认列的名称 / 说明 / 提取 prompt — 原列不会被删。任意 textarea 里都可以再手动改。</p>
+            <div id="rewrite-list" class="space-y-2"></div>
+          </div>
+
+          <!-- 新增专属列 -->
+          <div id="sug-section" class="hidden">
+            <p class="text-xs font-semibold text-slate-800">➕ 新增本项目专属列</p>
+            <p class="text-[10px] text-slate-500 mb-1">勾选要加的列。可在 textarea 里改 description / prompt 让它更精准。</p>
+            <div id="suggest-list" class="space-y-2"></div>
+          </div>
+
           <button type="submit" class="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-500">
-            添加勾选的列
+            ✓ 我已 review 上面的 prompt — 应用勾选的改动
           </button>
         </form>
-      </div>
+        </div>  <!-- end modal panel -->
+      </div>  <!-- end modal overlay -->
 
       <!-- 加列表单(默认隐藏) -->
       <form id="add-col-form" method="post" action="/projects/<%= project.id %>/matrix/columns/add"
@@ -132,6 +689,20 @@
         还没有纳入的文献。请先到「筛选」步把要分析的论文标为 include。
       </div>
     <% } else { %>
+      <%# 矩阵表头工具条:右上角放一个清晰的"导出"按钮,跟下载模板共享同一个 endpoint
+          (后端 buildXlsxTemplate 已经把当前矩阵数据写进 Data sheet) %>
+      <div class="mb-2 flex items-center justify-between gap-3 px-1">
+        <p class="text-xs text-slate-500">
+          共 <%= rows.length %> 行 × <%= columns.length %> 列 · 已填 <%= rows.filter(r => r.fields && Object.keys(r.fields).length > 0).length %> 行
+          <% const aiFilled = rows.filter(r => r.filled_by === 'ai').length
+             if (aiFilled > 0) { %> · 其中 <span class="text-emerald-700"><%= aiFilled %> 行 AI 抽取</span><% } %>
+        </p>
+        <a href="/projects/<%= project.id %>/matrix/template.xlsx"
+           class="inline-flex items-center gap-1.5 rounded-lg border-2 border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 transition"
+           title="导出当前矩阵到 .xlsx(含所有已填值 + metadata + 使用说明 + master prompt)。可在 Excel/Numbers 里继续编辑,改完上传回来覆盖。">
+          📥 导出已填矩阵(.xlsx)
+        </a>
+      </div>
       <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
         <table class="min-w-full text-sm" id="matrix-table">
           <thead class="border-b border-slate-200 bg-slate-50/80 text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -189,8 +760,21 @@
                     </a>
                   <% } %>
                 </td>
+                <%# 显示层兜底:把历史哨兵词(-1 / 0 / "N/A" / "Not reported" 等)一律渲染为空,
+                    避免在 cell 里看到 "-1"。新数据已经在 parseMatrixBatchOutput 入库前清掉,
+                    这里是 defense-in-depth + 老数据兼容。 %>
+                <% const __sentinels = new Set(['-1','-','—','n/a','na','none','null','undefined','not reported','not specified','not stated','未报告','未提及','未明确']) %>
                 <% columns.forEach((col) => {
-                     const val = row.fields[col.key] || ''
+                     let val = row.fields[col.key] || ''
+                     if (col.is_quantitative) {
+                       // 数字列:0 也算"无值"(我们新逻辑:有值就是正整数)
+                       const n = parseInt(val, 10)
+                       if (!Number.isFinite(n) || n <= 0) val = ''
+                       else val = String(n)
+                     } else if (val) {
+                       const lower = String(val).trim().toLowerCase()
+                       if (__sentinels.has(lower)) val = ''
+                     }
                 %>
                   <td class="px-2 py-2 align-top">
                     <% if (col.is_quantitative) { %>
@@ -265,6 +849,26 @@
   if (addBtn && addForm) {
     addBtn.addEventListener('click', () => { addForm.classList.remove('hidden'); addBtn.classList.add('hidden') })
     cancelBtn?.addEventListener('click', () => { addForm.classList.add('hidden'); addBtn.classList.remove('hidden') })
+  }
+
+  // ---------- 容缺原文勾选 → 实时消除红色边框警告 ----------
+  // 卡片初始为红色(data-pdf-warning=1);用户勾"容缺原文"就降为 indigo,提示"已接受打折跑"
+  const allowAbstractCb = document.getElementById('allow-abstract-cb')
+  if (allowAbstractCb) {
+    const card = allowAbstractCb.closest('[data-pdf-warning]')
+    const updateCard = () => {
+      if (!card) return
+      if (allowAbstractCb.checked) {
+        card.setAttribute('data-pdf-warning', '0')
+        card.classList.remove('border-rose-400', 'bg-rose-50/40')
+        card.classList.add('border-indigo-300', 'bg-indigo-50/40')
+      } else {
+        card.setAttribute('data-pdf-warning', '1')
+        card.classList.remove('border-indigo-300', 'bg-indigo-50/40')
+        card.classList.add('border-rose-400', 'bg-rose-50/40')
+      }
+    }
+    allowAbstractCb.addEventListener('change', updateCard)
   }
 
   // ---------- Prompt 弹层 ----------
@@ -402,86 +1006,488 @@
   }
 
   // ============================================================
-  // AI 定制专属列
+  // ⚙️ 一键优化总 prompt(meta-prompt 写作)— 长任务体验设计
+  //
+  // 这是 Opus 4.7 + ultrathink/think_harder 的 meta-prompt 调用,实测 3-8 分钟。
+  // 长任务有几个 UX 陷阱要避免:
+  //   - 浏览器在 5 分钟左右可能 abort 长 fetch(取决于 OS / 网络栈)→ 用户看到 catch
+  //   - 用户合上 laptop / 切 wifi → fetch 失败,但服务端 LLM 调用仍在跑
+  //   - 用户关页面 → fetch 中断,但 LLM 调用仍跑完写库(因为我们用 setImmediate 风格不依赖 res)
+  //
+  // 所以 UX 双轨:
+  //   1. fetch():试图拿同步响应,有就好。
+  //   2. 同时启动轮询 /status.json:每 10 秒查一次 DB 的 matrix_master_prompt_at_version,
+  //      ≥ 当前 protocol_version 就视为完成,立刻 reload 拿结果。
+  //   3. 显示活的 mm:ss 计时器,30 秒后提示"可离开页面",60 秒后再提示"如果离开了,
+  //      回来刷新即可看结果"。
+  // ============================================================
+  var optBtn = document.getElementById('btn-optimize-prompt')
+
+  // ─── 页面加载时,如果按钮已经是 "in-flight" 态(用户上次点了然后刷新)→ 自动续上 mm:ss 计时器 + 轮询完成 ───
+  if (optBtn && optBtn.getAttribute('data-in-flight') === '1') {
+    var startedSecAgo = parseInt(optBtn.getAttribute('data-in-flight-sec'), 10) || 0
+    var startEpoch = Date.now() - startedSecAgo * 1000
+    var elapsedSpan = document.getElementById('opt-elapsed')
+    function fmtMs(ms) {
+      var s = Math.round(ms / 1000)
+      return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0')
+    }
+    function tick() {
+      if (elapsedSpan) elapsedSpan.textContent = '(' + fmtMs(Date.now() - startEpoch) + ')'
+    }
+    setInterval(tick, 1000)
+    setInterval(function() {
+      fetch('/projects/<%= project.id %>/matrix/optimize-master-prompt/status.json', {
+        headers: { 'Accept': 'application/json' },
+      }).then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          // 完成(in_flight 变 false 且 has_fresh)→ reload 拿新状态
+          if (s.has_fresh && !s.in_flight) {
+            alert('✓ 上次启动的优化任务完成了(协议 v' + s.protocol_version + ',batch ' + s.batch_len + ' chars / copy ' + s.copy_len + ' chars)')
+            window.location.reload()
+          } else if (!s.in_flight) {
+            // 锁释放但 has_fresh 仍为 false → LLM 失败,刷新可重试
+            alert('✗ 上次启动的优化任务已结束(失败或被释放)。刷新页面可重试。')
+            window.location.reload()
+          }
+        }).catch(function() {})
+    }, 5000)
+  }
+
+  if (optBtn && !optBtn.disabled) {
+    optBtn.addEventListener('click', function() {
+      if (optBtn.getAttribute('data-locked') === '1') return
+      if (!confirm(
+        '让 AI 优化"一次性总 prompt"?\n\n' +
+        '【会做什么】\n' +
+        '· 用 Opus 4.7 + 最高推理强度,综合:协议 + AI 定制的矩阵列 + 4 篇代表性 include 论文样本\n' +
+        '· LLM 产出两份 prompt:批量抽取用的精细版(可含 few-shot)+ 用户复制版(简化)\n' +
+        '· 写入项目后,下一次「⚡ 启动批量抽取」会自动用优化版\n\n' +
+        '【时间】\n' +
+        '· Opus 4.7 + ultrathink 实测 3-8 分钟(meta-prompt 任务推理深)\n' +
+        '· 可以关页面 — 服务端会自己跑完写库,刷新页面即可看到结果\n\n' +
+        '【限制】\n' +
+        '· 每个协议版本只能调一次(改协议重审批后才能再调)\n\n' +
+        '继续吗?'
+      )) return
+
+      var origHtml = optBtn.innerHTML
+      var startMs = Date.now()
+      var pollTimer = null
+      var tickTimer = null
+      var settled = false   // 已经 reload 过 = 完成,不再重复触发
+
+      // 计时器 + 文案随时间变化
+      function fmtElapsed(ms) {
+        var s = Math.round(ms / 1000)
+        var mm = String(Math.floor(s / 60)).padStart(2, '0')
+        var ss = String(s % 60).padStart(2, '0')
+        return mm + ':' + ss
+      }
+      function updateBtn() {
+        if (settled) return
+        var elapsed = Date.now() - startMs
+        var t = fmtElapsed(elapsed)
+        var hint = ''
+        if (elapsed > 120_000) hint = ' · 通常 3-8 分钟,继续等或关页面后回来刷新'
+        else if (elapsed > 30_000) hint = ' · 可关页面,服务端会跑完(刷新即看结果)'
+        optBtn.innerHTML = '⏳ 优化中 ' + t + hint
+      }
+
+      optBtn.disabled = true
+      updateBtn()
+      tickTimer = setInterval(updateBtn, 1000)
+
+      function done(success, payload) {
+        if (settled) return
+        settled = true
+        if (tickTimer) clearInterval(tickTimer)
+        if (pollTimer) clearInterval(pollTimer)
+        if (success) {
+          var elapsedSec = Math.round((Date.now() - startMs) / 1000)
+          var msg = '✓ 总 prompt 已优化(协议 v' + (payload.protocol_version || '?') + ',耗时 ' + elapsedSec + ' 秒)'
+          if (payload.batch_len) msg += '\n· 批量版:' + payload.batch_len + ' chars'
+          if (payload.copy_len) msg += '\n· 复制版:' + payload.copy_len + ' chars'
+          if (payload.rationale) msg += '\n\nLLM 摘要:' + payload.rationale
+          msg += '\n\n下次跑批量就用优化版。'
+          alert(msg)
+          window.location.reload()
+        } else {
+          optBtn.disabled = false
+          optBtn.innerHTML = origHtml
+          alert('优化失败:' + (payload || 'unknown'))
+        }
+      }
+
+      // 轮询 status.json — 5 秒一次,fetch 不返回也能拿到结果
+      pollTimer = setInterval(function() {
+        if (settled) return
+        fetch('/projects/<%= project.id %>/matrix/optimize-master-prompt/status.json', {
+          headers: { 'Accept': 'application/json' },
+        }).then(function(r) { return r.ok ? r.json() : null })
+          .then(function(s) {
+            if (!s || !s.ok || settled) return
+            // has_fresh = 已对当前协议版本优化过 → 完成
+            if (s.has_fresh) {
+              done(true, {
+                protocol_version: s.protocol_version,
+                batch_len: s.batch_len,
+                copy_len: s.copy_len,
+                rationale: '(轮询检测到完成 — 详情在 audit log)',
+              })
+            }
+          })
+          .catch(function() { /* 静默,继续轮询 */ })
+      }, 5000)
+
+      // 主 fetch:试图拿同步响应
+      fetch('/projects/<%= project.id %>/matrix/optimize-master-prompt', {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+      }).then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d } }) })
+        .then(function(out) {
+          if (settled) return  // 轮询已经处理过了
+          if (!out.data || !out.data.ok) {
+            done(false, (out.data && (out.data.error || out.data.error_code)) || 'unknown')
+            return
+          }
+          done(true, {
+            protocol_version: out.data.protocol_version,
+            batch_len: out.data.batch_prompt_length,
+            copy_len: out.data.copy_prompt_length,
+            rationale: out.data.rationale,
+          })
+        })
+        .catch(function(e) {
+          // fetch 失败(网络断/浏览器 abort)— 不立刻报错,让轮询接管。
+          // 如果 LLM 真完成了,轮询会在 5-10 秒内检测到。
+          // 如果 LLM 真挂了 + 用户不刷新,按钮会卡在"⏳ 优化中"直到用户离开。
+          console.warn('[optimize] fetch failed, falling back to polling:', e && e.message)
+        })
+    })
+  }
+
+  // ============================================================
+  // ⚛ PDF 解析 — 表单走 AJAX(原生 POST 会跳到 JSON 响应页);
+  //   触发成功后 reload 页让 EJS 渲染 ⏳ 进度徽章 + 启动下面的轮询。
+  // ============================================================
+  var parsePdfsForm = document.getElementById('parse-pdfs-form')
+  var parsePdfsBtn = document.getElementById('parse-pdfs-btn')
+  if (parsePdfsForm && parsePdfsBtn) {
+    parsePdfsForm.addEventListener('submit', function(ev) {
+      ev.preventDefault()
+      if (parsePdfsBtn.disabled) return
+      parsePdfsBtn.disabled = true
+      parsePdfsBtn.textContent = '⏳ 启动中...'
+      fetch(parsePdfsForm.action, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.json().catch(function() { return { ok: false, error: 'bad response' } }) })
+        .then(function(j) {
+          if (j && j.ok) {
+            // 后端已起 job;reload 让顶部 chunk 状态条进入 ⏳ 解析中 状态 + 启动 5s 轮询
+            window.location.reload()
+          } else {
+            parsePdfsBtn.disabled = false
+            parsePdfsBtn.textContent = '⚛ 解析 PDF 出 chunks'
+            alert('启动 PDF 解析失败:' + ((j && j.error) || '未知错误') + '\n刷新页面重试')
+          }
+        }).catch(function(e) {
+          parsePdfsBtn.disabled = false
+          parsePdfsBtn.textContent = '⚛ 解析 PDF 出 chunks'
+          alert('启动 PDF 解析失败:' + (e && e.message || '网络错误') + '\n刷新页面重试')
+        })
+    })
+  }
+
+  // ============================================================
+  // ⚛ PDF 解析进度轮询 — 如果页面打开时已有 parse-pdfs job 在跑,定期拉 status.json 刷新进度。
+  //   跑完(in_progress=false)时 reload 页面让 chunk 状态条更新。
+  // ============================================================
+  var parseStatusBadge = document.getElementById('parse-pdfs-status')
+  if (parseStatusBadge) {
+    var parseTotal = parseInt(parseStatusBadge.getAttribute('data-total'), 10) || 0
+    var parseStatusTimer = setInterval(function() {
+      fetch('/projects/<%= project.id %>/matrix/parse-pdfs/status.json', {
+        headers: { 'Accept': 'application/json' },
+      }).then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          if (!s.job || s.job.status !== 'running') {
+            clearInterval(parseStatusTimer)
+            window.location.reload()
+            return
+          }
+          var done = s.job.done || 0
+          var pct = parseTotal ? Math.round((done / parseTotal) * 100) : 0
+          parseStatusBadge.textContent = '⏳ 解析中 ' + done + '/' + parseTotal + '(' + pct + '%)'
+        }).catch(function() { /* 静默续轮询 */ })
+    }, 5000)
+  }
+
+  // ============================================================
+  // AI 定制矩阵列(rewrites + suggestions)
+  //   - 立即显示 spinner + 计时,让用户知道 AI 在工作
+  //   - 每个协议版本只能调一次,服务端守门;前端按钮也按 data-locked 渲染
   // ============================================================
   var sugBtn = document.getElementById('btn-suggest-cols')
   var sugModal = document.getElementById('suggest-modal')
+  var sugLoading = document.getElementById('suggest-loading')
   var sugStatus = document.getElementById('suggest-status')
+  var sugTimer = document.getElementById('suggest-timer')
   var sugForm = document.getElementById('suggest-add-form')
   var sugList = document.getElementById('suggest-list')
+  var sugSection = document.getElementById('sug-section')
+  var rwList = document.getElementById('rewrite-list')
+  var rwSection = document.getElementById('rewrite-section')
   var sugReasoning = document.getElementById('suggest-reasoning')
   var sugPayload = document.getElementById('suggest-payload')
+  var rwPayload = document.getElementById('rewrite-payload')
   var sugClose = document.getElementById('suggest-close')
 
-  if (sugClose) {
-    sugClose.addEventListener('click', function() {
-      if (sugModal) sugModal.classList.add('hidden')
-    })
+  var sugTimerHandle = null
+  function startTimer() {
+    var t0 = Date.now()
+    if (sugTimer) sugTimer.textContent = '0s'
+    if (sugTimerHandle) clearInterval(sugTimerHandle)
+    sugTimerHandle = setInterval(function() {
+      if (sugTimer) sugTimer.textContent = Math.floor((Date.now() - t0) / 1000) + 's'
+    }, 1000)
   }
-  if (sugBtn) {
+  function stopTimer() {
+    if (sugTimerHandle) { clearInterval(sugTimerHandle); sugTimerHandle = null }
+  }
+
+  function closeSugModal() {
+    if (sugModal) sugModal.classList.add('hidden')
+    document.body.classList.remove('overflow-hidden')
+  }
+  function openSugModal() {
+    if (sugModal) sugModal.classList.remove('hidden')
+    document.body.classList.add('overflow-hidden')   // 锁住背景滚动
+  }
+  if (sugClose) sugClose.addEventListener('click', closeSugModal)
+  // 点遮罩关闭
+  var sugBackdrop = document.getElementById('suggest-backdrop')
+  if (sugBackdrop) sugBackdrop.addEventListener('click', closeSugModal)
+  // Esc 关闭
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && sugModal && !sugModal.classList.contains('hidden')) closeSugModal()
+  })
+
+  if (sugBtn && sugBtn.dataset.locked !== '1' && !sugBtn.disabled) {
     sugBtn.addEventListener('click', function() {
+      // ───── 立即反馈:按钮态 + 弹出 modal + spinner 转起来 ─────
       sugBtn.disabled = true
-      sugBtn.textContent = '🤖 AI 思考中…'
-      if (sugModal) sugModal.classList.remove('hidden')
-      if (sugStatus) sugStatus.textContent = 'AI 正在阅读你的协议并定制专属列…(10-30s)'
+      sugBtn.innerHTML = '<span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-purple-300 border-t-purple-700 align-middle"></span> AI 思考中…'
+      openSugModal()
+      if (sugLoading) sugLoading.classList.remove('hidden')
+      if (sugStatus) sugStatus.textContent = 'AI 正在阅读你的协议 + 现有列 + 学科背景…'
       if (sugForm) sugForm.classList.add('hidden')
+      if (rwSection) rwSection.classList.add('hidden')
+      if (sugSection) sugSection.classList.add('hidden')
+      if (sugReasoning) sugReasoning.textContent = ''
+      startTimer()
 
       fetch('/projects/<%= project.id %>/matrix/suggest-columns', {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
         body: '',
       })
-        .then(function(r) { return r.json().catch(function() { return { ok: false, error: 'HTTP ' + r.status } }) })
+        .then(function(r) {
+          var status = r.status
+          return r.json()
+            .catch(function() { return { ok: false, error: 'HTTP ' + status } })
+            .then(function(d) { d.__status = status; return d })
+        })
         .then(function(d) {
-          sugBtn.disabled = false
-          sugBtn.textContent = '🎯 让 AI 定制本项目专属列'
+          stopTimer()
+          if (sugLoading) sugLoading.classList.add('hidden')
+
           if (!d || !d.ok) {
-            if (sugStatus) sugStatus.textContent = '✗ ' + ((d && d.error) || '失败')
+            // 409 = already_customized:服务端已锁,把按钮永久锁掉
+            if (d && d.error_code === 'already_customized') {
+              sugBtn.disabled = true
+              sugBtn.className = 'rounded-lg border-2 border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-400 cursor-not-allowed transition'
+              sugBtn.innerHTML = '🔒 已定制(协议 v' + (d.customized_at_version || '?') + ')'
+              if (sugStatus) sugStatus.textContent = d.error || '本协议版本已定制过'
+              if (sugLoading) sugLoading.classList.remove('hidden')
+              return
+            }
+            sugBtn.disabled = false
+            sugBtn.innerHTML = '🎯 让 AI 定制本项目专属列'
+            if (sugLoading) sugLoading.classList.remove('hidden')
+            // 友好错误信息 — 502/504 通常是上游 LLM/服务重启,引导用户重试
+            var rawErr = (d && d.error) || ('HTTP ' + (d && d.__status || '?'))
+            var friendly = rawErr
+            if (d && d.__status === 502) friendly = '上游连接中断(可能是 LLM 超时或服务正在更新)— 等 30 秒再点一次即可。'
+            else if (d && d.__status === 504) friendly = 'LLM 响应超时(>3 分钟)— 稍后再试。'
+            else if (d && d.__status === 401) friendly = 'LLM 凭证已过期 — 请去 /account 重新绑定 Claude/Codex。'
+            else if (d && d.__status === 429) friendly = 'LLM 限速,稍后再试。'
+            if (sugStatus) {
+              sugStatus.innerHTML = '✗ ' + escapeHtml(friendly) +
+                ' <button id="suggest-retry" type="button" class="ml-2 rounded border border-purple-300 bg-white px-2 py-0.5 text-[11px] text-purple-700 hover:bg-purple-50">↻ 重试</button>'
+              var rt = document.getElementById('suggest-retry')
+              if (rt) rt.addEventListener('click', function() { sugBtn.click() })
+            }
             return
           }
-          var suggestions = d.suggestions || []
-          if (suggestions.length === 0) {
-            if (sugStatus) sugStatus.textContent = 'AI 觉得通用 21 列已经够你这个项目了 — 没建议新增列。'
+
+          var suggestions = Array.isArray(d.suggestions) ? d.suggestions : []
+          var rewrites = Array.isArray(d.rewrites) ? d.rewrites : []
+
+          if (suggestions.length === 0 && rewrites.length === 0) {
+            sugBtn.disabled = false
+            sugBtn.innerHTML = '🎯 让 AI 定制本项目专属列'
+            if (sugLoading) sugLoading.classList.remove('hidden')
+            if (sugStatus) sugStatus.textContent = 'AI 觉得通用列已经够贴合你这个项目了 — 没给任何改动建议。'
             return
           }
-          if (sugStatus) sugStatus.textContent = 'AI 建议加 ' + suggestions.length + ' 列(默认全选,可勾掉不要的):'
-          if (sugReasoning) sugReasoning.textContent = d.overall_reasoning || ''
-          if (sugList) sugList.innerHTML = ''
-          suggestions.forEach(function(s, i) {
-            var item = document.createElement('label')
-            item.className = 'flex items-start gap-2 rounded border border-purple-200 bg-white p-2 cursor-pointer hover:border-purple-400'
-            item.innerHTML =
-              '<input type="checkbox" data-sug-idx="' + i + '" checked class="mt-1" />' +
-              '<div class="flex-1 min-w-0">' +
-                '<p class="text-sm font-medium text-slate-900">' + escapeHtml(s.label) +
-                  ' <code class="ml-1 text-[10px] font-mono text-slate-500">' + escapeHtml(s.key) + '</code>' +
-                  (s.is_quantitative ? ' <span class="ml-1 rounded bg-blue-100 px-1 py-0 text-[9px] text-blue-700">数字</span>' : '') +
-                '</p>' +
-                '<p class="text-xs text-slate-600 mt-0.5">' + escapeHtml(s.description) + '</p>' +
-                (s.reasoning ? '<p class="text-[10px] text-purple-600 mt-1">推荐理由:' + escapeHtml(s.reasoning) + '</p>' : '') +
-                (s.ai_prompt_template ? '<details class="mt-1"><summary class="text-[10px] text-slate-500 cursor-pointer">AI prompt 模板</summary>' +
-                  '<pre class="mt-1 max-h-32 overflow-auto rounded bg-slate-50 p-1 text-[10px] whitespace-pre-wrap">' + escapeHtml(s.ai_prompt_template) + '</pre></details>' : '') +
-              '</div>'
-            if (sugList) sugList.appendChild(item)
-          })
-          // 监听复选 → 重写 hidden payload
-          function rebuildPayload() {
-            var selected = []
-            sugList.querySelectorAll('input[type=checkbox]').forEach(function(cb) {
-              if (cb.checked) selected.push(suggestions[parseInt(cb.dataset.sugIdx, 10)])
+
+          // 整体说明
+          if (sugReasoning) sugReasoning.textContent = (d.overall_reasoning || '').slice(0, 500)
+
+          // ───── 渲染 rewrites(展开可编辑 + diff)─────
+          if (rwList) rwList.innerHTML = ''
+          if (rewrites.length && rwList) {
+            if (rwSection) rwSection.classList.remove('hidden')
+            rewrites.forEach(function(rw, i) {
+              var item = document.createElement('div')
+              item.className = 'rounded-lg border border-amber-300 bg-amber-50/40 p-3'
+              var hasLabel = rw.label && rw.label.length
+              var hasDesc = rw.description && rw.description.length
+              var hasPrompt = rw.ai_prompt_template && rw.ai_prompt_template.length
+              item.innerHTML =
+                '<label class="flex items-start gap-2 cursor-pointer">' +
+                  '<input type="checkbox" data-rw-idx="' + i + '" checked class="mt-1" />' +
+                  '<div class="flex-1 min-w-0">' +
+                    '<p class="text-sm font-medium text-slate-900">' +
+                      '<code class="text-[10px] font-mono text-amber-700 mr-1">' + escapeHtml(rw.key) + '</code>' +
+                      (hasLabel ? '<span class="line-through text-slate-400 mr-1">' + escapeHtml(rw.current_label || '') + '</span>→ <span class="text-amber-900">' + escapeHtml(rw.label) + '</span>' : '<span class="text-slate-400">(label 不改)</span>') +
+                    '</p>' +
+                    (rw.reasoning ? '<p class="text-[10px] text-amber-700 mt-0.5">为什么调整:' + escapeHtml(rw.reasoning) + '</p>' : '') +
+                  '</div>' +
+                '</label>' +
+                '<div class="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2 text-[11px]">' +
+                  '<div>' +
+                    '<p class="text-slate-500 mb-0.5">说明 — 旧</p>' +
+                    '<pre class="rounded bg-slate-50 p-1 text-[10px] whitespace-pre-wrap text-slate-600 max-h-24 overflow-auto">' + escapeHtml(rw.current_description || '(无)') + '</pre>' +
+                  '</div>' +
+                  '<div>' +
+                    '<p class="text-amber-800 mb-0.5">说明 — 新(可改)</p>' +
+                    '<textarea data-rw-field="description" data-rw-idx="' + i + '" rows="2" class="w-full rounded border-amber-300 bg-white text-[11px] font-normal p-1">' + escapeHtml(hasDesc ? rw.description : (rw.current_description || '')) + '</textarea>' +
+                  '</div>' +
+                '</div>' +
+                '<div class="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2 text-[11px]">' +
+                  '<div>' +
+                    '<p class="text-slate-500 mb-0.5">prompt — 旧</p>' +
+                    '<pre class="rounded bg-slate-50 p-1 text-[10px] whitespace-pre-wrap text-slate-600 max-h-40 overflow-auto">' + escapeHtml(rw.current_ai_prompt_template || '(无)') + '</pre>' +
+                  '</div>' +
+                  '<div>' +
+                    '<p class="text-amber-800 mb-0.5">prompt — 新(可改;必含 <code>{{paper}}</code>)</p>' +
+                    '<textarea data-rw-field="ai_prompt_template" data-rw-idx="' + i + '" rows="6" class="w-full rounded border-amber-300 bg-white text-[10px] font-mono p-1">' + escapeHtml(hasPrompt ? rw.ai_prompt_template : (rw.current_ai_prompt_template || '')) + '</textarea>' +
+                  '</div>' +
+                '</div>'
+              rwList.appendChild(item)
             })
-            if (sugPayload) sugPayload.value = JSON.stringify(selected)
           }
-          sugList.querySelectorAll('input[type=checkbox]').forEach(function(cb) {
-            cb.addEventListener('change', rebuildPayload)
+
+          // ───── 渲染 suggestions(展开可编辑)─────
+          if (sugList) sugList.innerHTML = ''
+          if (suggestions.length && sugList) {
+            if (sugSection) sugSection.classList.remove('hidden')
+            suggestions.forEach(function(s, i) {
+              var item = document.createElement('div')
+              item.className = 'rounded-lg border border-purple-300 bg-white p-3'
+              item.innerHTML =
+                '<label class="flex items-start gap-2 cursor-pointer">' +
+                  '<input type="checkbox" data-sug-idx="' + i + '" checked class="mt-1" />' +
+                  '<div class="flex-1 min-w-0">' +
+                    '<p class="text-sm font-medium text-slate-900">' + escapeHtml(s.label) +
+                      ' <code class="ml-1 text-[10px] font-mono text-slate-500">' + escapeHtml(s.key) + '</code>' +
+                      (s.is_quantitative ? ' <span class="ml-1 rounded bg-blue-100 px-1 py-0 text-[9px] text-blue-700">数字列</span>' : ' <span class="ml-1 rounded bg-slate-100 px-1 py-0 text-[9px] text-slate-600">文本列</span>') +
+                    '</p>' +
+                    (s.reasoning ? '<p class="text-[10px] text-purple-600 mt-0.5">推荐理由:' + escapeHtml(s.reasoning) + '</p>' : '') +
+                  '</div>' +
+                '</label>' +
+                '<div class="mt-2 text-[11px]">' +
+                  '<p class="text-slate-500 mb-0.5">说明(可改)</p>' +
+                  '<textarea data-sug-field="description" data-sug-idx="' + i + '" rows="2" class="w-full rounded border-slate-300 bg-white text-[11px] p-1">' + escapeHtml(s.description || '') + '</textarea>' +
+                '</div>' +
+                '<div class="mt-2 text-[11px]">' +
+                  '<p class="text-slate-500 mb-0.5">AI prompt(可改;必含 <code>{{paper}}</code>)</p>' +
+                  '<textarea data-sug-field="ai_prompt_template" data-sug-idx="' + i + '" rows="6" class="w-full rounded border-slate-300 bg-white text-[10px] font-mono p-1">' + escapeHtml(s.ai_prompt_template || '') + '</textarea>' +
+                '</div>'
+              sugList.appendChild(item)
+            })
+          }
+
+          // 监听复选 + textarea 编辑 → 重写 hidden payload
+          // 提交时:从 textarea 读最新值,覆盖 AI 原始建议
+          function rebuildPayload() {
+            var selectedSug = []
+            if (sugList) sugList.querySelectorAll('input[type=checkbox]').forEach(function(cb) {
+              if (!cb.checked) return
+              var i = parseInt(cb.dataset.sugIdx, 10)
+              var orig = suggestions[i]
+              if (!orig) return
+              var item = cb.closest('.rounded-lg')
+              var descTa  = item ? item.querySelector('textarea[data-sug-field="description"]')         : null
+              var promptTa = item ? item.querySelector('textarea[data-sug-field="ai_prompt_template"]') : null
+              selectedSug.push({
+                key: orig.key,
+                label: orig.label,
+                is_quantitative: !!orig.is_quantitative,
+                description: descTa ? descTa.value.trim() : (orig.description || ''),
+                ai_prompt_template: promptTa ? promptTa.value.trim() : (orig.ai_prompt_template || ''),
+              })
+            })
+            var selectedRw = []
+            if (rwList) rwList.querySelectorAll('input[type=checkbox]').forEach(function(cb) {
+              if (!cb.checked) return
+              var i = parseInt(cb.dataset.rwIdx, 10)
+              var orig = rewrites[i]
+              if (!orig) return
+              var item = cb.closest('.rounded-lg')
+              var descTa  = item ? item.querySelector('textarea[data-rw-field="description"]')         : null
+              var promptTa = item ? item.querySelector('textarea[data-rw-field="ai_prompt_template"]') : null
+              selectedRw.push({
+                key: orig.key,
+                // label 不允许编辑(改了会动表头,先不放开,只接受 AI 给的)
+                label: orig.label || null,
+                description: descTa ? descTa.value.trim() : (orig.description || null),
+                ai_prompt_template: promptTa ? promptTa.value.trim() : (orig.ai_prompt_template || null),
+              })
+            })
+            if (sugPayload) sugPayload.value = JSON.stringify(selectedSug)
+            if (rwPayload) rwPayload.value = JSON.stringify(selectedRw)
+          }
+          var allInputs = []
+          if (sugList) sugList.querySelectorAll('input[type=checkbox],textarea').forEach(function(el) { allInputs.push(el) })
+          if (rwList) rwList.querySelectorAll('input[type=checkbox],textarea').forEach(function(el) { allInputs.push(el) })
+          allInputs.forEach(function(el) {
+            el.addEventListener(el.tagName === 'TEXTAREA' ? 'input' : 'change', rebuildPayload)
           })
           rebuildPayload()
+
+          // 提交后服务端会更新 matrix_ai_customized_at_version + 刷新页面 → 按钮自然锁住
           if (sugForm) sugForm.classList.remove('hidden')
+          // 注意:按钮先保持 disabled,直到表单提交完成或用户关闭 modal — 防止重复点
+          sugBtn.innerHTML = '🎯 等你选完应用…'
         })
         .catch(function(err) {
+          stopTimer()
           sugBtn.disabled = false
-          sugBtn.textContent = '🎯 让 AI 定制本项目专属列'
-          if (sugStatus) sugStatus.textContent = '✗ 网络错误:' + err.message
+          sugBtn.innerHTML = '🎯 让 AI 定制本项目专属列'
+          if (sugLoading) sugLoading.classList.remove('hidden')
+          if (sugStatus) {
+            sugStatus.innerHTML = '✗ 网络错误:' + escapeHtml(err.message || '未知') +
+              ' <button id="suggest-retry" type="button" class="ml-2 rounded border border-purple-300 bg-white px-2 py-0.5 text-[11px] text-purple-700 hover:bg-purple-50">↻ 重试</button>'
+            var rt2 = document.getElementById('suggest-retry')
+            if (rt2) rt2.addEventListener('click', function() { sugBtn.click() })
+          }
         })
     })
   }

@@ -1,5 +1,5 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
-<%- include('partials/project-header', { project }) %>
+<%- include('partials/project-header', { project, currentStep: 'extraction' }) %>
 
 <%
   // status → badge 配置(跟 prompts/extraction.js 的 EXTRACTION_STATUS_LABEL 同步)
@@ -28,16 +28,85 @@
     <!-- 顶部说明 -->
     <%- include('partials/step-banner', {
       stepNum: 4,
-      stepTitle: '从论文里提取数据',
-      stepIntro: '对你筛选通过的文献,让 AI 帮你读完整 PDF 抽取关键信息:研究设计 / 样本 / 方法 / 发现 / 局限。每条发现都会标出对应原文段落。',
+      stepTitle: '构建文献矩阵(历史数据)',
+      stepIntro: '本页保留是为浏览旧版抽取数据(研究设计 / 样本 / 方法 / 发现 / 局限 5 字段)。新版 Step 4 已统一至「文献矩阵」页,请前往使用。',
       prismaItems: '#10a Data collection · #10b Data items · #12 Effect measures · #18 Risk of bias data',
     }) %>
 
-    <!-- 替代视图入口:文献矩阵 -->
-    <a href="/projects/<%= project.id %>/matrix"
-       class="block rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-3 text-sm text-slate-700 hover:border-slate-400 hover:bg-white">
-      → 改用<strong class="text-slate-900">文献矩阵</strong>(用户主导填写,每列附可复制 prompt;适合自己拿 AI 整理后填扁平表)
-    </a>
+    <%
+      // toggle (advanced_extraction_enabled) = 单一权威源;仅 super admin 兜底放行
+const canAdvanced = !!(user && (user.advanced_extraction_enabled || user.is_super_admin))
+    %>
+
+    <!-- ★ 新版 Step 4 已统一到 /matrix —— 这里只是旧抽取数据的浏览/重跑入口 -->
+    <div class="rounded-xl border-2 border-indigo-300 bg-indigo-50 p-4">
+      <p class="text-sm font-semibold text-indigo-900">📊 Step 4 已重做 — 统一在「文献矩阵」页</p>
+      <p class="mt-1 text-xs text-indigo-800">
+        矩阵页有两条路径,殊途同归:① 下载 xlsx 模板手填上传(所有用户) ② AI 平台批量抽取(需高级抽取权限)。
+        结果都填进同一个矩阵,可在表格里直接编辑。
+      </p>
+      <a href="/projects/<%= project.id %>/matrix"
+         class="mt-3 inline-block rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">
+        → 去文献矩阵(推荐)
+      </a>
+      <p class="mt-2 text-[10px] text-indigo-600">本页保留是为了浏览/重跑历史 extractions 数据(老 schema:研究设计/样本/方法/发现/局限 5 字段)。</p>
+    </div>
+
+    <% if (!canAdvanced) { %>
+      <!-- 未开通高级功能时的友好提示 -->
+      <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
+        <p class="font-medium text-amber-900">🔒 AI 批量抽取 / PDF 上传 是高级功能</p>
+        <p class="mt-1 text-xs text-amber-800">
+          需要超级管理员为你单独开通。你现在仍可以使用<strong>文献矩阵</strong>路径完成抽取:
+        </p>
+        <ol class="mt-2 list-decimal pl-5 text-xs text-amber-800 space-y-0.5">
+          <li>去 <a class="underline" href="/projects/<%= project.id %>/matrix">文献矩阵</a> 页,点 🎯 让 AI 基于本项目协议定制专属列;</li>
+          <li>下载基于协议定制的 XLSX 模板(含一次性总 prompt 使用说明);</li>
+          <li>把模板里的总 prompt + 每篇论文原文 喂给 Claude / ChatGPT,粘贴回 Excel 即可。</li>
+        </ol>
+      </div>
+    <% } else { %>
+      <!-- 已开通高级功能:PDF 上传入口卡片 -->
+      <%
+        const pdfS = pdfStats || { withPdf: 0, noPdf: 0, total: 0 }
+        const pdfPct = pdfS.total ? Math.round((pdfS.withPdf / pdfS.total) * 100) : 0
+        const pdfBarCls = pdfS.noPdf === 0 ? 'bg-emerald-500' : (pdfPct >= 60 ? 'bg-blue-500' : 'bg-amber-500')
+      %>
+      <div class="rounded-xl border <%= pdfS.noPdf > 0 ? 'border-blue-200 bg-blue-50/40' : 'border-emerald-200 bg-emerald-50/40' %> p-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-sm font-medium <%= pdfS.noPdf > 0 ? 'text-blue-900' : 'text-emerald-900' %>">
+              📥 PDF 覆盖:<%= pdfS.withPdf %> / <%= pdfS.total %>
+              <% if (pdfS.noPdf > 0) { %>
+                <span class="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                  ⚠ 还有 <%= pdfS.noPdf %> 篇没传 PDF — AI 抽取会跳过这些
+                </span>
+              <% } else if (pdfS.total > 0) { %>
+                <span class="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">✓ 全员到齐</span>
+              <% } %>
+            </p>
+            <p class="mt-1 text-xs text-slate-600">
+              <% if (pdfS.noPdf > 0) { %>
+                通过 Zotero 导出 RDF + files,zip 上传:
+              <% } else { %>
+                所有纳入的论文都已带 PDF。
+              <% } %>
+              <a href="/projects/<%= project.id %>/zotero" class="font-medium text-blue-700 underline hover:text-blue-900">
+                → 去 Step 3 / Zotero 上传入口
+              </a>
+              <span class="ml-1 text-slate-400">·</span>
+              <a href="/projects/<%= project.id %>/records" class="text-slate-700 underline hover:text-slate-900">查看记录管理</a>
+            </p>
+          </div>
+          <div class="w-full sm:w-40">
+            <div class="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+              <div class="h-full <%= pdfBarCls %>" style="width: <%= pdfPct %>%"></div>
+            </div>
+            <p class="mt-1 text-right text-[10px] font-mono text-slate-500"><%= pdfPct %>%</p>
+          </div>
+        </div>
+      </div>
+    <% } %>
 
     <!-- 统计卡 -->
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -72,13 +141,19 @@
           </p>
         </div>
         <div class="flex gap-2">
-          <form method="post" action="/projects/<%= project.id %>/extraction/run-batch">
-            <button type="submit"
-                    <%= (batchJob && batchJob.status === 'running') ? 'disabled' : '' %>
-                    class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:bg-slate-300">
-              <%= (batchJob && batchJob.status === 'running') ? '运行中…' : `批量抽取 ${stats.pending} 条` %>
-            </button>
-          </form>
+          <% if (canAdvanced) { %>
+            <form method="post" action="/projects/<%= project.id %>/extraction/run-batch">
+              <button type="submit"
+                      <%= (batchJob && batchJob.status === 'running') ? 'disabled' : '' %>
+                      class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:bg-slate-300">
+                <%= (batchJob && batchJob.status === 'running') ? '运行中…' : `批量抽取 ${stats.pending} 条` %>
+              </button>
+            </form>
+          <% } else { %>
+            <span class="rounded-lg bg-slate-100 px-4 py-2 text-sm text-slate-400" title="此功能需要超级管理员开通">
+              🔒 批量抽取(未开通)
+            </span>
+          <% } %>
           <% if (stats.done > 0) { %>
             <a href="/projects/<%= project.id %>/extraction/export.json"
                class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">
@@ -272,13 +347,15 @@
                        class="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
                       审阅
                     </a>
-                    <% if (canExtract) { %>
+                    <% if (canExtract && canAdvanced) { %>
                       <form method="post" action="/projects/<%= project.id %>/extraction/run-one/<%= r.id %>" class="inline">
                         <button type="submit"
                                 class="rounded-md bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700">
                           <%= r.status === 'not_extracted' ? '抽取' : '重跑' %>
                         </button>
                       </form>
+                    <% } else if (canExtract && !canAdvanced) { %>
+                      <span class="text-[11px] text-slate-400" title="AI 抽取需要超级管理员开通">🔒</span>
                     <% } else { %>
                       <span class="text-[11px] text-slate-400" title="无 PDF">无 PDF</span>
                     <% } %>

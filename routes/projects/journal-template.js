@@ -113,7 +113,7 @@ router.get('/:id/journal-template', (req, res) => {
     template,
     progress,
     currentStep: 'report',
-    stepLabel: '8. 报告(Report)· 目标期刊模板',
+    stepLabel: '8. 综述初稿 · 目标期刊模板',
     stepItems,
     maxUploadMb: Math.round(MAX_TEMPLATE_PDF_BYTES / 1024 / 1024),
   })

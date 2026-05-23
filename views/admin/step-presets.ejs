@@ -136,7 +136,7 @@
 
         <div class="flex items-center justify-between pt-2 border-t border-slate-100">
           <p class="text-xs text-slate-500">
-            <% if (p.updated_at) { %>上次更新:<%= p.updated_at %><% } %>
+            <% if (p.updated_at) { %>上次更新:<%- include('../partials/_time', { value: p.updated_at }) %><% } %>
           </p>
           <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700">
             保存 <%= p.label %>

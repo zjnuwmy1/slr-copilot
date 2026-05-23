@@ -3,6 +3,8 @@
  * 让 LLM 提议 1..N 个 outcome,每个 outcome 给 5 维度评级 + 理由 + 最终 certainty。
  */
 
+import { cleanBilingualTitle } from '../citation-format.js'
+
 export const GRADE_SYSTEM = `你是循证医学方法学专家,熟练应用 GRADE(Grading of Recommendations Assessment, Development and Evaluation)框架评估证据可信度。
 
 任务:基于一个综述主题(theme)及其支撑的研究发现,提议 1-3 个**outcome(结局指标)**,并对每个 outcome 用 GRADE 5 维度评级 + 升级因素打分。
@@ -97,7 +99,7 @@ export function buildGradeUserPrompt({ theme, evidencePoints, recordSummaries })
   if (Array.isArray(recordSummaries) && recordSummaries.length) {
     lines.push(`关联研究的设计(共 ${recordSummaries.length} 篇):`)
     recordSummaries.slice(0, 20).forEach((r, i) => {
-      lines.push(`  [${r.id}] ${r.title || '(无题)'} | ${r.study_type || '类型未抽取'} | n=${r.sample_size || '?'}`)
+      lines.push(`  [${r.id}] ${cleanBilingualTitle(r.title).title || '(无题)'} | ${r.study_type || '类型未抽取'} | n=${r.sample_size || '?'}`)
     })
     lines.push('')
   }

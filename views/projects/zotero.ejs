@@ -1,19 +1,25 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
-<%- include('partials/project-header', { project }) %>
+<%- include('partials/project-header', { project, currentStep: 'extraction' }) %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
-  <%- include('partials/stepper', { project, progress, currentStep: 'screening' }) %>
+  <%- include('partials/stepper', { project, progress, currentStep: currentStep || 'extraction' }) %>
 
   <section class="space-y-6 min-w-0">
     <!-- 顶部介绍 -->
     <%- include('partials/step-banner', {
-      stepNum: 3,
-      stepTitle: '把检索结果导进来',
-      stepIntro: '在 Zotero 导出 RDF 包(含 PDF + 笔记),传到这里。系统自动解析元数据、关联 PDF、去重。',
+      stepNum: 4,
+      stepTitle: '导入参考文献库(Zotero · 路径 B 准备)',
+      stepIntro: '从 Zotero 导出 RDF 包(含 PDF 与笔记),上传至此。系统将自动解析元数据、关联 PDF 附件,并与已纳入文献做二次匹配合并 —— 为路径 B(AI 平台批量抽取)准备全文 PDF。',
       prismaItems: '#8 Search · #9a Selection process · #16a Study selection · #16b Reasons for exclusion',
     }) %>
+    <%# Zotero 导入是 Step 4 路径 B 的 PDF 准备。引导用户向回到 Step 4 矩阵,
+        而不是去 Step 3 筛选 — 否则用户会以为自己跳了步骤。 %>
     <p class="text-xs text-slate-500 px-1">
-      完成后进入 <a href="/projects/<%= project.id %>/records" class="text-slate-700 hover:underline">文献列表</a> 开始筛选。
+      包入库 + PDF 合并完成后,可回到
+      <a href="/projects/<%= project.id %>/matrix" class="font-medium text-indigo-700 hover:underline">Step 4 文献矩阵 →</a>
+      继续 AI 批量抽取;或进入
+      <a href="/projects/<%= project.id %>/records" class="text-slate-700 hover:underline">文献列表</a>
+      查看 PDF 状态。
     </p>
 
     <!-- 已有的包 -->
@@ -52,16 +58,28 @@
                     <% if (p.total_records != null) { %><span><%= p.total_records %> 条记录</span><% } %>
                     <% if (p.total_with_pdf != null) { %><span><%= p.total_with_pdf %> 含 PDF</span><% } %>
                     <% if (p.total_duplicates != null) { %><span><%= p.total_duplicates %> 重复</span><% } %>
-                    <span>创建于 <%= p.created_at %></span>
+                    <span>创建于 <%- include('../partials/_time', { value: p.created_at }) %></span>
                   </div>
                   <% if (p.error_message) { %>
                     <p class="mt-1 text-xs text-rose-600 truncate">错误:<%= p.error_message %></p>
                   <% } %>
                 </div>
-                <a href="/projects/<%= project.id %>/zotero/<%= p.id %>"
-                   class="flex-none rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
-                  查看详情
-                </a>
+                <div class="flex-none flex items-center gap-2">
+                  <a href="/projects/<%= project.id %>/zotero/<%= p.id %>"
+                     class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                    查看详情
+                  </a>
+                  <form method="post"
+                        action="/projects/<%= project.id %>/zotero/<%= p.id %>/delete"
+                        onsubmit="return confirm('确认删除「<%= (p.source_filename || p.id).replace(/[\'\"\\]/g, '') %>」?\n\n会清掉包文件 + DB 行 + 关联 attachments(records 行不动)。不可撤销。')"
+                        class="inline">
+                    <button type="submit"
+                            title="删除此包"
+                            class="rounded-lg border border-rose-200 bg-white px-2 py-1.5 text-xs text-rose-600 hover:bg-rose-50 hover:border-rose-300">
+                      ✕
+                    </button>
+                  </form>
+                </div>
               </div>
             </li>
           <% }) %>
@@ -97,7 +115,7 @@
           </a>
         </div>
       <% } else { %>
-        <p class="mt-3 text-xs text-emerald-700">✓ 检索方案已锁定(<%= project.search_locked_at %>),可以上传。</p>
+        <p class="mt-3 text-xs text-emerald-700">✓ 检索方案已锁定(<%- include('../partials/_time', { value: project.search_locked_at }) %>),可以上传。</p>
       <% } %>
 
       <form method="post"

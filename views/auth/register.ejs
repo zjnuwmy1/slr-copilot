@@ -6,7 +6,7 @@
     <p class="mt-1 text-sm text-slate-500">需要邀请码;没有的话请向管理员申请</p>
 
     <% if (error) { %>
-      <div class="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+      <div class="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
         <%= error %>
       </div>
     <% } %>
@@ -24,6 +24,9 @@
           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm uppercase tracking-wider focus:border-slate-900 focus:outline-none focus:ring-1 focus:ring-slate-900"
           placeholder="ABCDEFGH"
         >
+        <p class="mt-1 text-xs text-slate-500">
+          邀请码来自你所在团队的管理员;没有 → 暂无法注册,先找管理员索取。
+        </p>
       </div>
       <div>
         <label class="block text-sm font-medium text-slate-700">邮箱</label>

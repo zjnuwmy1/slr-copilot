@@ -19,6 +19,7 @@
 import express from 'express'
 import { audit } from '../../services/audit.js'
 import { getProjectProgress } from '../../services/prisma.js'
+import { canManageUser, visibleUserScope } from '../../services/admin-scope.js'
 
 const router = express.Router()
 
@@ -87,7 +88,7 @@ router.use((req, res, next) => {
 
 /**
  * 共享逻辑:列项目(可选 user_id 强 filter)
- * filters: { userQuery?, status?, q?, forcedUserId? }
+ * filters: { userQuery?, status?, q?, forcedUserId?, scopeIds?(强制 IN 限定) }
  */
 function listProjects(db, filters, limit = 100) {
   const where = []
@@ -104,6 +105,17 @@ function listProjects(db, filters, limit = 100) {
       params.push(userRow.id)
     } else {
       where.push('1=0')
+    }
+  }
+
+  // 范围限定:普通 admin 只看自己邀请的用户的项目
+  if (Array.isArray(filters.scopeIds)) {
+    if (filters.scopeIds.length === 0) {
+      where.push('1=0')
+    } else {
+      const ph = filters.scopeIds.map(() => '?').join(',')
+      where.push(`p.user_id IN (${ph})`)
+      params.push(...filters.scopeIds)
     }
   }
 
@@ -141,13 +153,15 @@ function listProjects(db, filters, limit = 100) {
   return rows
 }
 
-// ---------- GET / → 全平台项目列表 ----------
+// ---------- GET / → 全平台项目列表 (普通 admin 自动限定到自己邀请的用户) ----------
 router.get('/', (req, res) => {
   const db = req.app.locals.db
+  const scope = visibleUserScope(req, db)
   const filters = {
     userQuery: req.query.user ? String(req.query.user).slice(0, 200) : '',
     status: req.query.status ? String(req.query.status) : '',
     q: req.query.q ? String(req.query.q).slice(0, 200) : '',
+    scopeIds: scope.scope === 'all' ? null : scope.ids,
   }
   const rows = listProjects(db, filters, 100)
 
@@ -199,6 +213,13 @@ router.get('/:projectId', (req, res) => {
 
   if (!row) {
     return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
+  }
+  // 范围:普通 admin 只能看自己邀请的用户的项目
+  if (!canManageUser(req, db, row.user_id)) {
+    return res.status(403).render('error', {
+      title: 'Forbidden',
+      message: '该项目所属用户不在你的管理范围内 — 仅你邀请的用户(及你自己)的项目可查看。',
+    })
   }
   const project = parseProject(row)
 
@@ -317,6 +338,9 @@ router.get('/:projectId/records.json', (req, res) => {
   if (!project) {
     return res.status(404).json({ error: 'not_found' })
   }
+  if (!canManageUser(req, db, project.user_id)) {
+    return res.status(403).json({ error: 'out_of_scope', message: '该项目不在你的管理范围内' })
+  }
 
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 500, 1), 5000)
   const rows = db.prepare(`
@@ -353,6 +377,9 @@ router.get('/:projectId/audit.json', (req, res) => {
   const project = db.prepare('SELECT id, user_id, title FROM projects WHERE id = ?').get(projectId)
   if (!project) {
     return res.status(404).json({ error: 'not_found' })
+  }
+  if (!canManageUser(req, db, project.user_id)) {
+    return res.status(403).json({ error: 'out_of_scope', message: '该项目不在你的管理范围内' })
   }
 
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 500, 1), 5000)

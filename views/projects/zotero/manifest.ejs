@@ -1,8 +1,11 @@
 <%- include('../../partials/header', { title: project.title + ' · ' + stepLabel }) %>
-<%- include('../partials/project-header', { project }) %>
+<%- include('../partials/project-header', { project, currentStep: 'extraction' }) %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
-  <%- include('../partials/stepper', { project, progress, currentStep: 'screening' }) %>
+  <%# 用 route 传进来的 currentStep(extraction),不要硬编 'screening' — 否则 stepper 高亮 Step 3,
+      用户从 Step 4 点 "导 Zotero 包" 后看起来像跳回了 Step 3,业务逻辑混乱。
+      Zotero 导入是 Step 4 路径 B 的 PDF 准备,概念上属于 Step 4。 %>
+  <%- include('../partials/stepper', { project, progress, currentStep: currentStep || 'extraction' }) %>
 
   <section class="space-y-6 min-w-0">
     <!-- 顶部:面包屑 + 包标题 -->
@@ -26,7 +29,7 @@
             <% if (pkg.rdf_filename) { %>
               · RDF:<span class="font-mono"><%= pkg.rdf_filename %></span>
             <% } %>
-            · 创建于 <%= pkg.created_at %>
+            · 创建于 <%- include('../../partials/_time', { value: pkg.created_at }) %>
           </p>
         </div>
       </div>
@@ -132,6 +135,138 @@
       </div>
     </div>
 
+    <!-- 二次匹配报告(只在 reconciliation_json 已就绪时出现) -->
+    <% if (reconciliation) { %>
+      <%
+        const rc = reconciliation
+        const stats = rc.stats || { included_count: 0, zotero_count: 0, matched_count: 0, by_match_type: {} }
+        const matched = Array.isArray(rc.matched) ? rc.matched : []
+        const extraZ = Array.isArray(rc.extra_in_zotero) ? rc.extra_in_zotero : []
+        const extraS = Array.isArray(rc.extra_in_system) ? rc.extra_in_system : []
+        const merge = rc.merge || { updated_records: 0, pdfs_attached: 0, fields_merged_count: 0 }
+      %>
+      <div id="reconcile-card" class="rounded-2xl border border-blue-200 bg-blue-50/40 p-5">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-sm font-semibold text-blue-900">二次匹配报告</h2>
+            <p class="mt-1 text-xs text-blue-900/70">
+              系统里已 <strong>纳入(include)</strong> 的 <%= stats.included_count %> 条文献与
+              本次 Zotero 包里的 <%= stats.zotero_count %> 条文献做匹配 —
+              <strong>已匹配并合并 <%= stats.matched_count %> 条</strong>。
+              <span class="ml-1 text-blue-900/60">(只展示,不动 include/exclude 决定)</span>
+            </p>
+          </div>
+        </div>
+
+        <!-- merge 副作用统计 -->
+        <div class="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+          <div class="rounded-lg bg-white px-2 py-2">
+            <p class="text-slate-500">字段合并</p>
+            <p class="mt-0.5 text-base font-semibold text-slate-900"><%= merge.fields_merged_count %></p>
+          </div>
+          <div class="rounded-lg bg-white px-2 py-2">
+            <p class="text-slate-500">更新条数</p>
+            <p class="mt-0.5 text-base font-semibold text-slate-900"><%= merge.updated_records %></p>
+          </div>
+          <div class="rounded-lg bg-white px-2 py-2">
+            <p class="text-slate-500">新挂 PDF</p>
+            <p class="mt-0.5 text-base font-semibold text-slate-900"><%= merge.pdfs_attached %></p>
+          </div>
+        </div>
+
+        <!-- 三列折叠 -->
+        <div class="mt-4 grid gap-3 md:grid-cols-3">
+          <!-- 已匹配并合并 -->
+          <details class="rounded-xl border border-emerald-200 bg-white p-3">
+            <summary class="cursor-pointer text-sm font-medium text-emerald-800">
+              ✓ 已匹配并合并
+              <span class="ml-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700"><%= matched.length %></span>
+            </summary>
+            <% if (matched.length === 0) { %>
+              <p class="mt-2 text-xs text-slate-500">无</p>
+            <% } else { %>
+              <ul class="mt-2 max-h-72 overflow-auto divide-y divide-slate-100 text-xs">
+                <% matched.forEach(m => { %>
+                  <li class="py-1.5">
+                    <p class="text-slate-800 line-clamp-2"><%= m.zotero?.title || '(无题)' %></p>
+                    <p class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
+                      <% if (m.match_type === 'doi') { %>
+                        <span class="rounded bg-emerald-100 px-1 text-emerald-700">DOI 匹配</span>
+                      <% } else if (m.match_type === 'title_author') { %>
+                        <span class="rounded bg-blue-100 px-1 text-blue-700">题名+作者</span>
+                      <% } else if (m.match_type === 'title_year') { %>
+                        <span class="rounded bg-amber-100 px-1 text-amber-700">题名+年份</span>
+                      <% } else { %>
+                        <span class="rounded bg-slate-100 px-1 text-slate-700"><%= m.match_type %></span>
+                      <% } %>
+                      <% if (m.zotero?.year) { %><span><%= m.zotero.year %></span><% } %>
+                      <% if (m.zotero?.has_pdf) { %><span class="text-rose-600">PDF</span><% } %>
+                    </p>
+                  </li>
+                <% }) %>
+              </ul>
+            <% } %>
+          </details>
+
+          <!-- Zotero 有但系统没纳入 -->
+          <details class="rounded-xl border border-amber-200 bg-white p-3">
+            <summary class="cursor-pointer text-sm font-medium text-amber-800">
+              ⚠ Zotero 有,系统未纳入
+              <span class="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700"><%= extraZ.length %></span>
+            </summary>
+            <p class="mt-1 text-[11px] text-slate-500">这些论文出现在 Zotero 包里,但系统里没把它们标 include。可能你在 AI 初筛里漏放了,值得人工复核。</p>
+            <% if (extraZ.length === 0) { %>
+              <p class="mt-2 text-xs text-slate-500">无</p>
+            <% } else { %>
+              <ul class="mt-2 max-h-72 overflow-auto divide-y divide-slate-100 text-xs">
+                <% extraZ.forEach(z => { %>
+                  <li class="py-1.5">
+                    <p class="text-slate-800 line-clamp-2"><%= z.title || '(无题)' %></p>
+                    <p class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
+                      <% if (z.year) { %><span><%= z.year %></span><% } %>
+                      <% if (z.authors_text) { %><span class="truncate max-w-[140px]"><%= z.authors_text %></span><% } %>
+                      <% if (z.doi) { %><span class="font-mono truncate max-w-[160px]"><%= z.doi %></span><% } %>
+                      <% if (z.has_pdf) { %><span class="text-rose-600">PDF</span><% } %>
+                    </p>
+                  </li>
+                <% }) %>
+              </ul>
+            <% } %>
+          </details>
+
+          <!-- 系统纳入但 Zotero 没传 -->
+          <details class="rounded-xl border border-rose-200 bg-white p-3">
+            <summary class="cursor-pointer text-sm font-medium text-rose-800">
+              ⚠ 系统已纳入,Zotero 未传
+              <span class="ml-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700"><%= extraS.length %></span>
+            </summary>
+            <p class="mt-1 text-[11px] text-slate-500">系统里你标了 include,但这次 Zotero 包没覆盖。可能 Zotero 包不全 —— 检查是否漏导。</p>
+            <% if (extraS.length === 0) { %>
+              <p class="mt-2 text-xs text-slate-500">无</p>
+            <% } else { %>
+              <ul class="mt-2 max-h-72 overflow-auto divide-y divide-slate-100 text-xs">
+                <% extraS.forEach(s => { %>
+                  <li class="py-1.5">
+                    <p class="text-slate-800 line-clamp-2"><%= s.title || '(无题)' %></p>
+                    <p class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-500">
+                      <% if (s.year) { %><span><%= s.year %></span><% } %>
+                      <% if (s.authors_text) { %><span class="truncate max-w-[140px]"><%= s.authors_text %></span><% } %>
+                      <% if (s.doi) { %><span class="font-mono truncate max-w-[160px]"><%= s.doi %></span><% } %>
+                    </p>
+                  </li>
+                <% }) %>
+              </ul>
+            <% } %>
+          </details>
+        </div>
+      </div>
+    <% } else if (pkg.status === 'ingested') { %>
+      <!-- ingest 完了但还没拿到 reconciliation_json — 占位提示,前端 poll 完成会自动刷新 -->
+      <div id="reconcile-placeholder" class="rounded-2xl border border-dashed border-blue-200 bg-blue-50/30 p-4 text-xs text-blue-900/70">
+        正在跟系统已纳入的论文做二次匹配……(几秒钟内完成,刷新页面可见)
+      </div>
+    <% } %>
+
     <!-- 仍在解析时给一段提示 -->
     <div id="parsing-hint"
          class="<%= (pkg.status === 'uploaded' || pkg.status === 'parsing') ? '' : 'hidden' %> rounded-2xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-600">
@@ -139,7 +274,22 @@
       <p class="mt-1 text-xs text-slate-400">页面每 2 秒自动检查一次状态。</p>
     </div>
 
-    <a href="/projects/<%= project.id %>/zotero" class="text-xs text-slate-500 hover:text-slate-700">← 返回 Zotero 导入页</a>
+    <div class="flex items-center justify-between gap-3">
+      <div class="flex items-center gap-3 text-xs">
+        <a href="/projects/<%= project.id %>/zotero" class="text-slate-500 hover:text-slate-700">← Zotero 列表</a>
+        <span class="text-slate-300">·</span>
+        <a href="/projects/<%= project.id %>/matrix" class="font-medium text-indigo-700 hover:underline">回到 Step 4 矩阵 →</a>
+      </div>
+      <%# 删除按钮:任何状态都允许;失败包 + 成功包都能删(成功包删除会清掉对应 attachments 和 PDF 文件) %>
+      <form method="post"
+            action="/projects/<%= project.id %>/zotero/<%= pkg.id %>/delete"
+            onsubmit="return confirm('确认删除这个 Zotero 包?\n\n会清掉:\n· 包文件(extractDir 整个目录)\n· DB 中本包对应的 zotero_packages 行\n· 本包关联的 attachments(records 行不动)\n\n本操作不可撤销。')">
+        <button type="submit"
+                class="rounded-md border border-rose-300 bg-white px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50">
+          ✕ 删除此包
+        </button>
+      </form>
+    </div>
   </section>
 </div>
 
@@ -232,6 +382,9 @@
       }
     }
 
+    // 服务端渲染时已经有 reconciliation 区,这里就不需要重载;否则,等 ingest 完 + reconcile 完后刷一次。
+    const hadReconcileAtLoad = !!document.getElementById('reconcile-card');
+
     let stoppedReason = null;
     async function poll() {
       try {
@@ -242,7 +395,13 @@
         }
         const state = await resp.json();
         render(state);
-        if (state.status === 'ingested' || state.status === 'failed') {
+        // ingest 已完成且 reconciliation 也就绪 → 整页刷一下渲染二次匹配区。
+        if (state.status === 'ingested' && state.reconciliation_ready && !hadReconcileAtLoad) {
+          window.location.reload();
+          return;
+        }
+        // failed 直接停;ingested 但 reconcile 还没好继续轮询
+        if (state.status === 'failed') {
           stoppedReason = state.status;
           return;
         }
@@ -262,8 +421,14 @@
       error_message:    <%- JSON.stringify(pkg.error_message || null) %>,
     });
 
-    // 只在还没终态时启动轮询
-    if ('<%= pkg.status %>' !== 'ingested' && '<%= pkg.status %>' !== 'failed') {
+    // 启动轮询:
+    //   - 非终态(uploaded/parsing/parsed)→ 等 ingest 完
+    //   - 已 ingested 但本次渲染还没拿到 reconciliation_json → 等 reconcile 完
+    //   - failed 不轮
+    const initStatus = '<%= pkg.status %>';
+    if (initStatus === 'failed') {
+      // nothing
+    } else if (initStatus !== 'ingested' || !hadReconcileAtLoad) {
       setTimeout(poll, 2000);
     }
   })();

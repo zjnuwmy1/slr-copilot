@@ -7,8 +7,8 @@
   <section class="space-y-6">
     <%- include('partials/step-banner', {
       stepNum: 1,
-      stepTitle: '理清研究问题',
-      stepIntro: '把你想做的综述拆成研究问题(RQ)+ 纳入/排除标准 + 关键概念组。后面所有 step 都要靠这一步定下的基准。',
+      stepTitle: '确立研究方案',
+      stepIntro: '将选题转化为可操作的研究方案:明确研究问题(RQ)、设定纳入与排除标准、梳理核心概念框架。本步骤的产出是后续所有环节的方法学基准。',
       prismaItems: '#3 Rationale · #4 Objectives · #5 Eligibility · #24a-c Registration',
     }) %>
 
@@ -47,6 +47,30 @@
         <% } %>
       </dl>
     </div>
+
+    <!-- 新项目引导 CTA — 还没生成协议时显示,引导用户进入 Step 1 -->
+    <% if (!latestProtocol) { %>
+      <div class="rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-5 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <p class="text-base font-semibold text-emerald-900">✓ 项目已创建</p>
+            <p class="mt-1 text-sm text-emerald-800">
+              <strong>下一步:生成研究方案</strong> —
+              让 Claude 根据上面的项目信息(主题 / 学科 / 种子文献等)起草研究问题、纳排标准、概念组,你审阅后审批。
+            </p>
+            <p class="mt-1 text-[11px] text-emerald-700">通常需要 1-3 分钟,请保持页面打开。</p>
+          </div>
+          <form method="post" action="/projects/<%= project.id %>/protocol/generate"
+                onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='生成中…';"
+                class="flex-none">
+            <button type="submit"
+                    class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:bg-emerald-300 disabled:cursor-wait shadow">
+              → Step 1:让 Claude 生成方案
+            </button>
+          </form>
+        </div>
+      </div>
+    <% } %>
 
     <!-- 协议区 -->
     <div class="space-y-3">
@@ -191,12 +215,12 @@
             <tbody class="divide-y divide-slate-100 text-slate-600">
               <% recentUsage.forEach(u => { %>
                 <tr>
-                  <td class="px-2 py-1 font-mono"><%= u.started_at %></td>
+                  <td class="px-2 py-1"><%- include('../partials/_time', { value: u.started_at, mono: true }) %></td>
                   <td class="px-2 py-1"><%= u.action_type %></td>
                   <td class="px-2 py-1"><%= u.model || '—' %></td>
                   <td class="px-2 py-1 text-right font-mono"><%= u.duration_ms %>ms</td>
                   <td class="px-2 py-1">
-                    <% const cls = u.status === 'success' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700' %>
+                    <% const cls = u.status === 'success' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700' %>
                     <span class="rounded-full px-2 py-0.5 text-xs <%= cls %>"><%= u.status %></span>
                   </td>
                 </tr>

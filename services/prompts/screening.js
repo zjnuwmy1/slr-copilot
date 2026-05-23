@@ -122,6 +122,9 @@ SLR 方法学共识 —— 这一步的目标是"**不漏掉相关论文**",而�
  * @param {object} [args.projectInput]  可选:协议外的项目级信息(year_start / year_end / document_types / language_limits)
  * @param {number} [args.targetIncludePct]  可选:用户期望的初筛纳入率(0-100),作为边缘 case 的软目标
  */
+// 双语标题清洗(Scopus/WoS `; [<翻译>]` 拆开)— 共用 citation-format 的实现
+import { cleanBilingualTitle } from '../citation-format.js'
+
 export function buildScreeningUserPrompt({ protocol, record, projectInput, targetIncludePct }) {
   const p = protocol || {}
   const r = record || {}
@@ -192,7 +195,8 @@ export function buildScreeningUserPrompt({ protocol, record, projectInput, targe
   // ===== 待筛文献 =====
   lines.push('')
   lines.push('## 待筛文献')
-  lines.push(`- 标题: ${r.title || '(无标题)'}`)
+  // 双语标题清洗,避免 LLM 把"; [翻译]"误认为标题一部分
+  lines.push(`- 标题: ${cleanBilingualTitle(r.title).title || '(无标题)'}`)
   if (r.year) lines.push(`- 年份: ${r.year}`)
   if (r.journal) lines.push(`- 期刊: ${r.journal}`)
   if (r.authors_text) lines.push(`- 作者: ${String(r.authors_text).slice(0, 300)}`)

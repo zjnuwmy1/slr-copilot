@@ -161,6 +161,13 @@ export function clearDerivedData(db, projectId, { actorUserId, req = null } = {}
       } catch (e) { /* same */ }
       db.prepare('DELETE FROM records         WHERE project_id = ?').run(projectId)
       db.prepare('DELETE FROM zotero_packages WHERE project_id = ?').run(projectId)
+      // 协议升级 → 解除 AI 定制矩阵列的版本锁(让用户能基于新协议重新定制)
+      // 注意:这里只清"定制于哪个协议版本"标记,**不删** matrix_columns 自身,
+      //       否则用户改了 prompt / 加了自定义列会丢。matrix.ejs 会在
+      //       customizedAtVersion < protocolVersion 时显示"建议重新定制"卡。
+      try {
+        db.prepare(`UPDATE projects SET matrix_ai_customized_at_version = NULL WHERE id = ?`).run(projectId)
+      } catch (e) { /* 老库可能没这列 */ }
       // project 状态回退到 protocol_approved(刚审批新协议)
       db.prepare(`UPDATE projects SET status = 'protocol_approved', updated_at = datetime('now') WHERE id = ?`).run(projectId)
     })()

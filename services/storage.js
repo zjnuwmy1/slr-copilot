@@ -38,15 +38,29 @@ const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'db', 'slr.db')
 /**
  * 递归算目录总字节数 + 文件数。安全:不跟随 symlink,目录不存在返 0/0。
  * 限制:对超大目录(>100K 文件)会慢,接受。
+ *
+ * 注意 hard link 去重:Zotero 包里的 PDF 与 /pdfs/<rec>.pdf 是同一个 inode
+ *   (zotero-merge.js 用 fs.link 不是 copy)。这里按 ino 去重,只算第一次见到的;
+ *   这样跨目录扫(uploads + pdfs 同时算)不会把同一个 PDF 计两次。
+ *
+ * 调用方传 seenInodes(可选 Set)→ 跨多次调用共享去重;不传则每次新建,
+ *   单目录内部仍去重(双重 hardlink 极少见但理论存在)。
  */
-export function diskUsage(dir) {
+export function diskUsage(dir, seenInodes) {
   let bytes = 0
   let files = 0
+  const seen = seenInodes || new Set()
   function walk(p) {
     let st
     try { st = fs.lstatSync(p) } catch { return }
     if (st.isSymbolicLink()) return
     if (st.isFile()) {
+      // 同 inode 已计过(hard link 另一份路径)→ 不再加
+      if (st.nlink > 1) {
+        const key = `${st.dev}:${st.ino}`
+        if (seen.has(key)) return
+        seen.add(key)
+      }
       bytes += st.size
       files += 1
       return
@@ -116,6 +130,23 @@ export function getPlatformStorage(db) {
 }
 
 export function getProjectStorage(db, projectId) {
+  // hard-link 去重:attachments 里的 PDF 与 zotero_packages 里的同一文件是同一 inode
+  // (zotero-merge.js 用 fs.link)。共享 seenInodes Set,跨两块统计 → 只算第一次见到的字节。
+  const seenInodes = new Set()
+  const addByPath = (p) => {
+    if (!p) return 0
+    try {
+      const st = fs.lstatSync(p)
+      if (!st.isFile()) return 0
+      if (st.nlink > 1) {
+        const key = `${st.dev}:${st.ino}`
+        if (seenInodes.has(key)) return 0
+        seenInodes.add(key)
+      }
+      return st.size
+    } catch { return 0 }
+  }
+
   // 该项目所有附件文件(attachments 没 project_id 列,JOIN records)
   const attachments = db
     .prepare(`
@@ -127,18 +158,19 @@ export function getProjectStorage(db, projectId) {
   let attachBytes = 0, attachExisting = 0, attachMissing = 0
   for (const a of attachments) {
     if (!a.storage_path) { attachMissing++; continue }
-    const sz = fileSize(a.storage_path)
+    const sz = addByPath(a.storage_path)
     if (sz > 0) { attachBytes += sz; attachExisting++ } else { attachMissing++ }
   }
 
-  // 该项目所有 Zotero 包目录
+  // 该项目所有 Zotero 包目录 — 复用同一个 seenInodes,
+  // 包内 PDF 若已经被 attachments 算过(hardlink 到 /pdfs)就跳过。
   const packages = db
     .prepare(`SELECT id, storage_path, total_records, total_with_pdf, status FROM zotero_packages WHERE project_id = ?`)
     .all(projectId)
   let pkgBytes = 0, pkgFiles = 0
   for (const p of packages) {
     if (!p.storage_path) continue
-    const u = diskUsage(p.storage_path)
+    const u = diskUsage(p.storage_path, seenInodes)
     pkgBytes += u.bytes
     pkgFiles += u.files
   }
@@ -213,35 +245,53 @@ export function getUserStorage(db, userId) {
  */
 export function listOrphanFiles(db) {
   const orphans = []
+  // 跳过 mtime < 1 小时的目录:可能是用户正在上传 / ingest 还没插 DB 行,
+  //   不加这个会跟"清理孤儿"按钮和实时上传产生竞态(误删活数据)。
+  const MIN_AGE_MS = 60 * 60 * 1000
+  const now = Date.now()
 
-  // 1. uploads/packages 下的孤儿
-  const packagesDir = path.join(UPLOAD_ROOT, 'packages')
-  const knownPackagePaths = new Set(
-    db.prepare('SELECT storage_path FROM zotero_packages').all()
-      .map((r) => r.storage_path && path.resolve(r.storage_path))
-      .filter(Boolean)
-  )
+  // 1. UPLOAD_ROOT/pkg_xxx/ 下的孤儿
+  //    实际写盘路径是 UPLOAD_ROOT/<package_id>/extracted/(不是 UPLOAD_ROOT/packages/<id>),
+  //    需匹配 storage_path = ".../pkg_xxx/extracted",反推回上层 pkg_xxx 目录。
+  //    包含:
+  //      - 真孤儿(从未入过 DB 的 pkg_xxx 残留)
+  //      - 失败包(DB storage_path 已 NULL,但 pkg_xxx 目录还在)
+  //    跳过:同级的 staging / journal-templates 等系统子目录(非 pkg_ 开头)
+  const knownPkgParents = new Set()
+  for (const r of db.prepare('SELECT storage_path FROM zotero_packages').all()) {
+    if (!r.storage_path) continue
+    // 已 known 的"包根"是 storage_path 的上一级(extracted 的 parent = pkg_xxx)
+    knownPkgParents.add(path.resolve(path.dirname(r.storage_path)))
+  }
   try {
-    for (const sub of fs.readdirSync(packagesDir)) {
-      const p = path.resolve(packagesDir, sub)
-      if (!knownPackagePaths.has(p)) {
+    for (const sub of fs.readdirSync(UPLOAD_ROOT)) {
+      if (!sub.startsWith('pkg_')) continue   // 只看 pkg_ 前缀,跳过 staging / journal-templates 等
+      const p = path.resolve(UPLOAD_ROOT, sub)
+      let st; try { st = fs.statSync(p) } catch { continue }
+      if (!st.isDirectory()) continue
+      if (now - st.mtimeMs < MIN_AGE_MS) continue   // 还热乎,跳过
+      if (!knownPkgParents.has(p)) {
         const u = diskUsage(p)
-        orphans.push({ path: p, bytes: u.bytes, files: u.files, kind: 'package', reason: 'no_db_ref' })
+        orphans.push({ path: p, bytes: u.bytes, files: u.files, kind: 'package', reason: 'no_db_ref_or_failed' })
       }
     }
   } catch {}
 
-  // 2. uploads/records 下 project 不存在的
-  const recordsDir = path.join(UPLOAD_ROOT, 'records')
-  const knownProjectIds = new Set(
-    db.prepare('SELECT id FROM projects').all().map((r) => r.id)
+  // 2. PDF_ROOT 下没人引用的 <record_id>.pdf
+  //    单篇 PDF 补传 / Zotero merge 都写这里;record 删了 / attachment 行删了就成孤儿。
+  const PDF_ROOT = process.env.SLR_PDF_ROOT || '/var/lib/slr/pdfs'
+  const knownAttachmentPaths = new Set(
+    db.prepare('SELECT storage_path FROM attachments WHERE storage_path IS NOT NULL').all()
+      .map((r) => path.resolve(r.storage_path))
   )
   try {
-    for (const sub of fs.readdirSync(recordsDir)) {
-      if (!knownProjectIds.has(sub)) {
-        const p = path.resolve(recordsDir, sub)
-        const u = diskUsage(p)
-        orphans.push({ path: p, bytes: u.bytes, files: u.files, kind: 'records_project_dir', reason: 'project_deleted' })
+    for (const name of fs.readdirSync(PDF_ROOT)) {
+      const p = path.resolve(PDF_ROOT, name)
+      let st; try { st = fs.statSync(p) } catch { continue }
+      if (!st.isFile()) continue
+      if (now - st.mtimeMs < MIN_AGE_MS) continue
+      if (!knownAttachmentPaths.has(p)) {
+        orphans.push({ path: p, bytes: st.size, files: 1, kind: 'pdf_file', reason: 'no_attachment_row' })
       }
     }
   } catch {}

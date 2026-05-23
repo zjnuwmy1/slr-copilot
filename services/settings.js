@@ -92,6 +92,22 @@ export const STEP_SPECS = {
     defaultTier: 'flagship',
     defaultReasoning: 'high',
   },
+  matrix_suggest_columns: {
+    label: '矩阵列定制 (Matrix Suggest Columns)',
+    description: 'AI 基于协议改写默认列 + 反推专属新列 —— 结构化 JSON 输出',
+    // 兜底 tier(preset 没配时用):light。preset 优先级最高,3 套预设里都给配了:
+    // performance=opus-4-7 · balanced=sonnet-4-6 · economy=haiku-4-5
+    defaultTier: 'light',
+    defaultReasoning: 'minimal',
+  },
+  matrix_run_batch: {
+    label: '矩阵批量抽取 (Matrix Run Batch)',
+    description: 'Step 4 AI 路径:对每篇 include+PDF 论文跑 master prompt 一次出全列 JSON',
+    // 默认 flagship,因为是真正的抽取/读全文任务。preset 覆盖:
+    // performance=opus-4-7 · balanced=sonnet-4-6 · economy=sonnet-4-6
+    defaultTier: 'flagship',
+    defaultReasoning: 'high',
+  },
 }
 
 export const STEP_KEYS = Object.keys(STEP_SPECS)

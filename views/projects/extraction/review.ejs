@@ -1,5 +1,5 @@
 <%- include('../../partials/header', { title: '审阅抽取 · ' + record.title }) %>
-<%- include('../partials/project-header', { project }) %>
+<%- include('../partials/project-header', { project, currentStep: 'extraction' }) %>
 
 <%
   // 默认空 extraction(用于 failed / 未跑场景,前端 form 仍可初始化)
@@ -49,7 +49,7 @@
     </p>
     <% if (extRow) { %>
       <p class="mt-2 text-[11px] text-slate-400">
-        抽取于 <%= extRow.updated_at %>
+        抽取于 <%- include('../../partials/_time', { value: extRow.updated_at }) %>
         <% if (extRow.model) { %>· <%= extRow.model %><% } %>
         <% if (extRow.prompt_version) { %>· <%= extRow.prompt_version %><% } %>
         <% if (extRow.human_verified) { %>

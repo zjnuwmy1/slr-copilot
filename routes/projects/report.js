@@ -259,7 +259,7 @@ router.get('/:id/report', (req, res) => {
     project,
     progress,
     currentStep: 'report',
-    stepLabel: '8. 报告(Report)',
+    stepLabel: '8. 综述初稿',
     stepItems,
     prismaCounts,
     prismaMermaid: mermaid,

@@ -97,7 +97,7 @@ router.get('/:id/certainty', (req, res) => {
     progress,
     stepItems,
     currentStep: 'certainty',
-    stepLabel: '证据强度(Certainty)',
+    stepLabel: '7. 证据确定性评级',
     constants: {
       CERTAINTY_LEVELS,
       DOWNGRADE_ENUM,

@@ -17,7 +17,7 @@
     </div>
     <div class="rounded-xl border border-slate-200 bg-white p-5">
       <p class="text-xs font-medium uppercase text-slate-400">24h 错误</p>
-      <p class="mt-2 text-2xl font-semibold <%= (summary.d1_errors || 0) > 0 ? 'text-red-600' : '' %>"><%= summary.d1_errors || 0 %></p>
+      <p class="mt-2 text-2xl font-semibold <%= (summary.d1_errors || 0) > 0 ? 'text-rose-600' : '' %>"><%= summary.d1_errors || 0 %></p>
     </div>
     <div class="rounded-xl border border-slate-200 bg-white p-5">
       <p class="text-xs font-medium uppercase text-slate-400">7 天调用</p>
@@ -68,7 +68,7 @@
         <tbody class="divide-y divide-slate-100">
           <% rows.forEach(r => { %>
             <tr>
-              <td class="px-4 py-2 font-mono text-xs text-slate-500"><%= r.started_at %></td>
+              <td class="px-4 py-2 text-xs text-slate-500"><%- include('../partials/_time', { value: r.started_at, mono: true }) %></td>
               <td class="px-4 py-2"><%= r.user_email || r.user_id %></td>
               <td class="px-4 py-2"><%= r.action_type %></td>
               <td class="px-4 py-2 text-slate-600"><%= r.provider %> / <%= r.auth_type %></td>
@@ -83,7 +83,7 @@
                 <% const cls = r.status === 'success' ? 'bg-emerald-100 text-emerald-700' :
                                  r.status === 'rate_limited' ? 'bg-amber-100 text-amber-700' :
                                  r.status === 'quota_exceeded' ? 'bg-amber-100 text-amber-700' :
-                                 'bg-red-100 text-red-700' %>
+                                 'bg-rose-100 text-rose-700' %>
                 <span class="rounded-full px-2 py-0.5 text-xs <%= cls %>"><%= r.status %></span>
               </td>
             </tr>

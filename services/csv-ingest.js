@@ -22,7 +22,7 @@
  *           PMID,Title,Authors,Citation,First Author,Journal/Book,Publication Year,Create Date,PMCID,NIHMS ID,DOI
  */
 
-import { normalizeDoi, normalizeTitle } from './dedup.js'
+import { normalizeDoi, normalizeTitle, dedupProject } from './dedup.js'
 import { randomId } from './crypto.js'
 
 // ---------- BOM / 编码工具 ----------
@@ -498,10 +498,14 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
 
       if (!title && !doi) continue
 
-      // 找已有匹配(本批 + 历史)— DOI 优先
+      // 找已有匹配(本批 + 历史)— DOI 优先,标题兜底
+      // 旧 bug:旧逻辑只在 `!doi` 时做标题匹配 — 但常见场景"Zotero 已导无 DOI 的记录,
+      //         后来 CSV 拉到同一篇带 DOI"会被漏掉,导致两条记录共存。
+      //         真实病例:Miura 那篇,Zotero PDF 无 DOI / CSV 有 Scopus DOI,标题完全相同。
+      // 现在:DOI 不匹配时,继续 fallback 到 normalized_title 匹配
       let existing = null
       if (doi && existingByDoi.has(doi)) existing = existingByDoi.get(doi)
-      else if (!doi && normTitle && existingByTitle.has(normTitle)) existing = existingByTitle.get(normTitle)
+      else if (normTitle && existingByTitle.has(normTitle)) existing = existingByTitle.get(normTitle)
 
       if (existing) {
         // 重复:合并 source_databases
@@ -556,6 +560,18 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
     errors.push(`db transaction failed: ${e.message}`)
   }
 
+  // 兜底:全量重跑 dedupProject。
+  //   inline 去重只看一对一(incoming vs existing),无法回头补救"上次入库时还没被识别的对"。
+  //   比如 Zotero 先导无 DOI 的记录,CSV 后导有 DOI 的同篇 — 必须靠 Level 2(title+year+surname)
+  //   重新归组,并把后到的标 duplicate_of_record_id 让 screening 列表不再重复显示。
+  //   dedupProject 是 idempotent 的,先 reset 再分组,跑多遍没副作用。
+  let dedupSummary = null
+  try {
+    dedupSummary = dedupProject(db, { projectId })
+  } catch (e) {
+    errors.push(`dedup pass failed: ${e.message}`)
+  }
+
   return {
     format,
     total_parsed: totalParsed,
@@ -563,6 +579,7 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
     total_duplicates: totalMergedSameDb + totalMergedCrossDb, // 向后兼容
     total_merged_same_db: totalMergedSameDb,
     total_merged_cross_db: totalMergedCrossDb,
+    dedup: dedupSummary,
     errors,
     source_filename: sourceFilename || null,
   }

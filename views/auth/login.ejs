@@ -6,7 +6,7 @@
     <p class="mt-1 text-sm text-slate-500">使用你的邮箱和密码登录 SLR Copilot</p>
 
     <% if (error) { %>
-      <div class="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+      <div class="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
         <%= error %>
       </div>
     <% } %>
@@ -47,6 +47,9 @@
 
     <p class="mt-6 text-center text-xs text-slate-500">
       有邀请码?<a href="/register" class="text-slate-700 underline hover:text-slate-900">点此注册</a>
+    </p>
+    <p class="mt-2 text-center text-xs text-slate-400">
+      <a href="/forgot-password" class="hover:text-slate-700 hover:underline">忘记密码?</a>
     </p>
   </div>
 </section>

@@ -1,5 +1,5 @@
 <%- include('../partials/header', { title: project.title + ' · 证据强度' }) %>
-<%- include('partials/project-header', { project }) %>
+<%- include('partials/project-header', { project, currentStep: 'certainty' }) %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
   <%- include('partials/stepper', { project, progress, currentStep: 'certainty' }) %>
@@ -7,8 +7,8 @@
   <section class="space-y-6 min-w-0">
     <%- include('partials/step-banner', {
       stepNum: 7,
-      stepTitle: '证据有多可信',
-      stepIntro: '对每个主题里的结局指标(outcome)用 GRADE 五维度打分:研究内偏倚 / 不一致性 / 间接性 / 不精确性 / 发表偏倚。AI 给初评,你审阅 + 调整。导出 Summary of Findings 表给审稿人看。',
+      stepTitle: '证据确定性评级',
+      stepIntro: '对每个主题下的结局指标(outcome)依 GRADE 框架五维度评级:研究内偏倚 / 不一致性 / 间接性 / 不精确性 / 发表偏倚。AI 给出初评,由您审阅与调整;最终导出 Summary of Findings 表供审稿人参考。',
       prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
     }) %>
 

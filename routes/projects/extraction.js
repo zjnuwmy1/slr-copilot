@@ -28,6 +28,7 @@ import express from 'express'
 import { randomId } from '../../services/crypto.js'
 import { audit } from '../../services/audit.js'
 import { runLlm } from '../../services/llm.js'
+import { requireAdvancedExtraction } from '../../middleware/auth.js'
 import {
   EXTRACTION_SYSTEM,
   EXTRACTION_SCHEMA_VERSION,
@@ -451,6 +452,11 @@ function clearBatchJob(projectId) {
 // GET /:id/extraction — 列表页
 // ============================================================
 router.get('/:id/extraction', (req, res) => {
+  // 新版 Step 4 统一在 /matrix(两条路径殊途同归)。
+  // 旧的 /extraction 页面只在显式 ?legacy=1 时展示,作为老 extractions 数据浏览入口。
+  if (req.query.legacy !== '1') {
+    return res.redirect(`/projects/${req.params.id}/matrix`)
+  }
   const db = req.app.locals.db
   const project = ownProjectOr404(db, req.params.id, req.user.id)
   if (!project) return res.status(404).render('error', { title: 'Not Found', message: '项目不存在或无权访问' })
@@ -476,15 +482,20 @@ router.get('/:id/extraction', (req, res) => {
   const job = getBatchJob(project.id)
   const stepItems = getChecklistItems().filter((it) => it.workflow_step === 'extraction')
 
+  // 帮 UI 展示 PDF 覆盖率 → 引导用户回 /zotero/upload 上传缺失 PDF
+  const withPdf = records.filter((r) => r.has_pdf).length
+  const noPdf = records.length - withPdf
+
   res.render('projects/extraction', {
     title: `抽取 · ${project.title}`,
     project,
-    stepLabel: '4. 抽取(Extraction)',
+    stepLabel: '4. 文献矩阵(历史数据)',
     progress,
     currentStep: 'extraction',
     records: filtered,
     allRecordCount: records.length,
     stats,
+    pdfStats: { withPdf, noPdf, total: records.length },
     filterStatus,
     batchJob: job,
     stepItems,
@@ -494,7 +505,7 @@ router.get('/:id/extraction', (req, res) => {
 // ============================================================
 // POST /:id/extraction/run-one/:recordId
 // ============================================================
-router.post('/:id/extraction/run-one/:recordId', async (req, res) => {
+router.post('/:id/extraction/run-one/:recordId', requireAdvancedExtraction, async (req, res) => {
   const db = req.app.locals.db
   const project = ownProjectOr404(db, req.params.id, req.user.id)
   if (!project) return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
@@ -544,7 +555,7 @@ router.post('/:id/extraction/run-one/:recordId', async (req, res) => {
 // ============================================================
 // POST /:id/extraction/run-batch — 后台跑全部 pending
 // ============================================================
-router.post('/:id/extraction/run-batch', (req, res) => {
+router.post('/:id/extraction/run-batch', requireAdvancedExtraction, (req, res) => {
   const db = req.app.locals.db
   const project = ownProjectOr404(db, req.params.id, req.user.id)
   if (!project) return res.status(404).render('error', { title: 'Not Found', message: '项目不存在' })
@@ -780,7 +791,7 @@ router.get('/:id/extraction/:recordId/review', (req, res) => {
     chunkMap,
     progress,
     currentStep: 'extraction',
-    stepLabel: '4. 抽取(Extraction)',
+    stepLabel: '4. 文献矩阵(历史数据)',
   })
 })
 

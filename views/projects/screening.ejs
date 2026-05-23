@@ -50,8 +50,8 @@
   <section class="space-y-6 min-w-0">
     <%- include('partials/step-banner', {
       stepNum: 3,
-      stepTitle: '挑出真正相关的',
-      stepIntro: 'AI 读每篇的标题/摘要,按你的纳入排除标准给出 include / exclude / 待定建议。你做最终人工决定 — 这一步过滤掉大部分不相关的,后面只对纳入的细读。',
+      stepTitle: '题录筛选',
+      stepIntro: 'AI 依据您的纳排标准,对每篇文献的标题与摘要给出"纳入 / 排除 / 待定"建议;最终决定由您作出。本步骤滤除大量不相关文献,后续仅对"纳入"文献进行全文细读。',
       prismaItems: '#9a Selection process · #16a Study selection · #16b Reasons for exclusion',
     }) %>
 
@@ -115,11 +115,44 @@
 
     <!-- 协议状态 -->
     <% if (!protocol) { %>
-      <div class="rounded-2xl border border-amber-200 bg-amber-50 p-6">
-        <p class="text-sm font-medium text-amber-900">请先审批研究协议</p>
-        <p class="mt-1 text-sm text-amber-800">初筛必须依据已审批的纳入/排除标准。请回到第 1 步生成并审批协议。</p>
-        <a href="/projects/<%= project.id %>"
-           class="mt-3 inline-flex items-center rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white hover:bg-amber-500">前往协议步骤</a>
+      <%
+        // 区分两种 "无 protocol":
+        //   A. 完全没生成 → 引导生成
+        //   B. 生成了但没审批 → 引导审批
+        const stepProto = (progress && progress.stepStatus && progress.stepStatus.protocol) || {}
+        const hasUnapproved = stepProto.status === 'in_progress'
+      %>
+      <div class="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5">
+        <div class="flex items-start gap-3">
+          <span class="text-2xl flex-none" aria-hidden="true">⚠</span>
+          <div class="min-w-0 flex-1">
+            <p class="text-base font-semibold text-amber-900">
+              <% if (hasUnapproved) { %>
+                还没审批研究方案,无法初筛
+              <% } else { %>
+                还没生成研究方案,无法初筛
+              <% } %>
+            </p>
+            <p class="mt-1 text-sm text-amber-800">
+              <% if (hasUnapproved) { %>
+                AI 初筛必须依据<strong>已审批</strong>的纳排标准。
+                现有协议草稿还在待审批状态 — 请回 Step 1,审阅后点击「审批」让 v1 生效。
+              <% } else { %>
+                AI 初筛会逐篇拿你的纳入/排除标准去判断 — 没协议就没法跑。
+                请先回 Step 1,让 Claude 起草一份研究方案,再人工审批。
+              <% } %>
+            </p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <a href="/projects/<%= project.id %>/protocol"
+                 class="inline-flex items-center rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 shadow-sm">
+                → 回 Step 1 <%= hasUnapproved ? '审批协议' : '生成协议' %>
+              </a>
+              <span class="text-xs text-amber-700 self-center">
+                <% if (hasUnapproved) { %>(协议已生成,只差审批一步)<% } else { %>(生成约需 1-3 分钟)<% } %>
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
     <% } else { %>
       <div class="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
@@ -251,21 +284,33 @@
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <!-- 一键确认所有 AI 建议(仅管理员)— 把 AI include/exclude 全部应用为人工决定,uncertain 保留 -->
-            <% if (user && user.role === 'admin' && stats.ai_done > 0) { %>
-              <%
-                // 估算可一键确认的数量(只是给按钮 label 一个粗略提示;后端会重算精确数)
-                const bulkAcceptableEstimate = (stats.ai_include || 0) + (stats.ai_exclude || 0)
-                const uncertainEstimate = stats.ai_uncertain || 0
-              %>
+            <%# 一键确认 AI 建议 — 仅管理员;按钮可点条件:
+                  1. AI 跑过(ai_done > 0)
+                  2. 有可应用的(bulk_accept_eligible > 0:AI 给了 include/exclude 且人工还没决定)
+                eligible=0 时按钮置灰 → 防止按完后再按一次,误覆盖用户已经手动调整过的决定。
+                重新可点的途径:
+                  · Step 2 改检索式 + 重新导入论文(records 被清,有新条目)
+                  · 重新跑 AI(产出新建议)
+                  · 用户手动把某些 record 改回"未决定"(此时 eligible > 0,按钮自动恢复) %>
+            <% if (user && user.role === 'admin' && stats.ai_done > 0) {
+                 const eligible = stats.bulk_accept_eligible || 0
+                 const uncertainEstimate = stats.ai_uncertain || 0
+                 const buttonDisabled = (batch && batch.status === 'running') || eligible === 0
+                 const lockReason = eligible === 0 ? '已无 AI 建议待应用 — 改 Step 2 检索式后会重置,或重新跑 AI 产生新建议' : ''
+            %>
               <form method="post" action="<%= filterBase %>/bulk-accept-ai"
                     onsubmit="return confirm('⚡ 一键确认 AI 筛查结论(管理员操作)\n\n将把 AI 建议为 纳入 / 排除 的全部条目自动设为人工决定(只覆盖未决定过的)。\nAI 建议为 不确定 的将保留,需人工逐条复核。\n\n精确数量:服务端会重算并 audit。\n\n继续吗?');">
                 <input type="hidden" name="confirm" value="yes" />
                 <button type="submit"
-                        title="管理员专属:把 AI include/exclude 全部应用为人工决定;uncertain 保留待复核"
-                        class="rounded-lg border-2 border-purple-400 bg-purple-50 px-4 py-2 text-sm font-medium text-purple-800 hover:bg-purple-100"
-                        <%= (batch && batch.status === 'running') ? 'disabled' : '' %>>
-                  ⚡ 一键确认 AI(<%= bulkAcceptableEstimate %><% if (uncertainEstimate > 0) { %>,<%= uncertainEstimate %> 疑保留<% } %>)
+                        title="<%= lockReason || '管理员专属:把 AI include/exclude 全部应用为人工决定;uncertain 保留待复核' %>"
+                        class="rounded-lg border-2 px-4 py-2 text-sm font-medium <%=
+                          buttonDisabled
+                            ? 'border-slate-300 bg-slate-100 text-slate-400 cursor-not-allowed'
+                            : 'border-purple-400 bg-purple-50 text-purple-800 hover:bg-purple-100'
+                        %>"
+                        <%= buttonDisabled ? 'disabled' : '' %>>
+                  ⚡ 一键确认 AI(<%= eligible %><% if (uncertainEstimate > 0) { %>,<%= uncertainEstimate %> 疑保留<% } %>)
+                  <% if (eligible === 0) { %><span class="ml-1 text-[10px]">已处理完</span><% } %>
                 </button>
               </form>
             <% } %>
@@ -346,9 +391,17 @@
                    class="mt-1 w-24 rounded-lg border border-slate-300 px-2 py-2 text-sm focus:border-slate-500 focus:outline-none" />
           </div>
           <div class="flex flex-wrap items-center gap-3 text-sm">
-            <label class="inline-flex items-center gap-1.5">
+            <label class="inline-flex items-center gap-1.5" title="只看已经有 PDF 全文的">
               <input type="checkbox" name="has_pdf" value="1" <%= ff.has_pdf ? 'checked' : '' %> class="rounded border-slate-300" />
-              <span>仅含 PDF</span>
+              <span class="text-emerald-700">仅含 PDF</span>
+            </label>
+            <label class="inline-flex items-center gap-1.5" title="只看暂无 PDF 且未审过的 — 这批是 triage 待办,需要补传或确认容缺">
+              <input type="checkbox" name="missing_pdf" value="1" <%= ff.missing_pdf ? 'checked' : '' %> class="rounded border-slate-300" />
+              <span class="text-rose-700">仅暂无</span>
+            </label>
+            <label class="inline-flex items-center gap-1.5" title="只看用户已确认找不到原文(容缺) — Step 4 勾'容缺原文'后会跑这批">
+              <input type="checkbox" name="only_unavailable" value="1" <%= ff.only_unavailable ? 'checked' : '' %> class="rounded border-slate-300" />
+              <span class="text-slate-600">仅容缺</span>
             </label>
             <label class="inline-flex items-center gap-1.5">
               <input type="checkbox" name="has_doi" value="1" <%= ff.has_doi ? 'checked' : '' %> class="rounded border-slate-300" />
@@ -442,8 +495,9 @@
                   <% } %>
                 </div>
 
-                <!-- 第 2 行(关键!): 来源数据库 + PDF/DOI/多语言/非英文 等"线索"徽章 -->
-                <% if ((r.source_databases_list || []).length || r.has_pdf || r.has_doi || r.is_multi_language || r.is_non_english_only) { %>
+                <%# 第 2 行:来源数据库 + PDF/无PDF/DOI/多语言/非英文 等"线索"徽章。
+                    始终渲染(即使全空也展示"无 PDF"提醒,方便用户一眼看到哪些要补 PDF)。 %>
+                <% if (true) { %>
                   <div class="mt-1 flex flex-wrap items-center gap-1">
                     <% (r.source_databases_list || []).forEach(function(d) {
                          const dbBadgeCls = ({
@@ -461,9 +515,19 @@
                       <span class="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 ring-1 ring-violet-200"
                             title="同一篇论文在多个库都被检出 — 跨库交集证据,纳入可信度更高">跨库</span>
                     <% } %>
+                    <%# PDF 状态三态:
+                        - has_pdf=1 → 绿色 PDF
+                        - has_pdf=0 + pdf_status='unavailable' → 灰色 容缺(已确认找不到)
+                        - has_pdf=0 + pdf_status=null/pending → 红色 暂无(待 triage) %>
                     <% if (r.has_pdf) { %>
                       <span class="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-emerald-200"
-                            title="有 PDF 全文">PDF</span>
+                            title="有 PDF 全文 — Step 4 批量抽取默认会跑这批">PDF</span>
+                    <% } else if (r.pdf_status === 'unavailable') { %>
+                      <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-slate-300"
+                            title="用户已确认找不到原文 — Step 4 勾'容缺原文'后会用标题+摘要跑">容缺</span>
+                    <% } else { %>
+                      <span class="rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700 ring-1 ring-rose-200"
+                            title="暂无 PDF + 未审过 — 请去论文详情页补传,或确认找不到后标'容缺'">暂无</span>
                     <% } %>
                     <% if (r.has_doi) { %>
                       <span class="rounded bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-slate-200"
@@ -479,9 +543,15 @@
                   </div>
                 <% } %>
 
+                <%# Scopus/WoS 双语标题用 `; [<other-lang>]` 拼一起 — 列表里只显主标题(英文),
+                    省得卡片被翻译撑爆 + 看起来像重复。详情页会把翻译展示出来。 %>
+                <% const __sTitleRaw = r.title || '(无标题)'
+                   const __sMatch = __sTitleRaw.match(/^(.+?)\s*;\s*\[(.+)\]\s*$/s)
+                   const __sTitle = __sMatch ? __sMatch[1].trim() : __sTitleRaw %>
                 <a href="/projects/<%= project.id %>/records/<%= r.id %>"
-                   class="mt-1 block text-sm font-medium text-slate-900 hover:text-blue-700">
-                  <%= r.title || '(无标题)' %>
+                   class="mt-1 block text-sm font-medium text-slate-900 hover:text-blue-700"
+                   <% if (__sMatch) { %>title="双语标题:也叫 <%= __sMatch[2].trim() %>"<% } %>>
+                  <%= __sTitle %>
                 </a>
                 <% if (r.authors_text) { %>
                   <p class="mt-0.5 truncate text-xs text-slate-500"><%= r.authors_text %></p>
@@ -558,6 +628,41 @@
                 <% }) %>
                 <span class="ajax-feedback text-xs text-slate-500" aria-live="polite"></span>
               </form>
+
+              <%# PDF 状态快速操作:仅在 has_pdf=0 时显示 — 已有 PDF 不需要标"容缺"
+                  显示两个按钮:
+                    - pdf_status 'unavailable' → 显示"取消容缺"
+                    - pdf_status 'pending/null' → 显示"标记容缺(找不到)" + 提示"或去补传 PDF" %>
+              <% if (!r.has_pdf) { %>
+                <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span class="text-slate-400">PDF:</span>
+                  <% if (r.pdf_status === 'unavailable') { %>
+                    <span class="rounded bg-slate-100 px-2 py-0.5 text-slate-600 ring-1 ring-slate-300">已标:容缺(确认找不到)</span>
+                    <form method="post" action="/projects/<%= project.id %>/screening/pdf-status/<%= r.id %>" class="inline">
+                      <input type="hidden" name="status" value="pending" />
+                      <button type="submit"
+                              class="rounded border border-slate-300 bg-white px-2 py-0.5 text-slate-600 hover:bg-slate-50">
+                        取消容缺
+                      </button>
+                    </form>
+                  <% } else { %>
+                    <a href="/projects/<%= project.id %>/records/<%= r.id %>"
+                       class="rounded border border-emerald-300 bg-white px-2 py-0.5 text-emerald-700 hover:bg-emerald-50"
+                       title="去论文详情页补传 PDF">
+                      ↑ 去补传 PDF
+                    </a>
+                    <form method="post" action="/projects/<%= project.id %>/screening/pdf-status/<%= r.id %>"
+                          onsubmit="return confirm('确认找不到这篇的全文 PDF?\n\n标为「容缺」后:\n· Step 4 勾「容缺原文」时会用标题+摘要跑 AI 抽取\n· 不再出现在「仅暂无」筛选里(脱离 triage 待办)\n· 后续如果补到 PDF,容缺标记会自动清掉')"
+                          class="inline">
+                      <input type="hidden" name="status" value="unavailable" />
+                      <button type="submit"
+                              class="rounded border border-slate-300 bg-white px-2 py-0.5 text-slate-600 hover:bg-slate-50">
+                        ✕ 标记容缺(确实找不到)
+                      </button>
+                    </form>
+                  <% } %>
+                </div>
+              <% } %>
             </div>
           </article>
         <% }) %>

@@ -12,6 +12,7 @@ import { audit } from './audit.js'
 
 const DATA_DIR = process.env.DATA_DIR || '/var/lib/slr'
 const UPLOAD_ROOT = process.env.SLR_UPLOAD_ROOT || path.join(DATA_DIR, 'uploads')
+const PDF_ROOT    = process.env.SLR_PDF_ROOT    || path.join(DATA_DIR, 'pdfs')
 const SAFE_ROOT = path.resolve(DATA_DIR)
 
 /**
@@ -37,6 +38,31 @@ export function deleteProject(db, { projectId, actorUserId, req = null }) {
   const recordsDirExists = (() => {
     try { return fs.statSync(recordsProjectDir).isDirectory() } catch { return false }
   })()
+
+  // 1b. 收集所有 attachments 的 storage_path(包括单篇补传的 PDF、zotero-merge 的 PDF)+
+  //     该项目所有 records 在 /var/lib/slr/pdfs/<record_id>.pdf 的默认路径
+  const attachmentPaths = db
+    .prepare(`SELECT a.storage_path FROM attachments a
+              JOIN records r ON r.id = a.record_id
+              WHERE r.project_id = ?`)
+    .all(projectId)
+    .map((r) => r.storage_path)
+    .filter(Boolean)
+
+  // 同时收集 /var/lib/slr/pdfs/<record_id>.pdf 这种 convention 路径
+  //   (单篇补传 + zotero-merge 都用这个约定;DB 里 attachments.storage_path 也应该是这个,
+  //    但兜底:如果有遗漏的孤儿文件,按 record_id 推算路径再删一次)
+  const recordIds = db
+    .prepare('SELECT id FROM records WHERE project_id = ?')
+    .all(projectId)
+    .map((r) => r.id)
+  for (const rid of recordIds) {
+    attachmentPaths.push(path.join(PDF_ROOT, `${rid}.pdf`))
+  }
+
+  const safeAttachmentPaths = Array.from(new Set(attachmentPaths))
+    .map((p) => path.resolve(p))
+    .filter((p) => p.startsWith(SAFE_ROOT + path.sep))
 
   // 2. 提前统计行数(用于 audit / 反馈)
   const countSafe = (sql) => {
@@ -118,6 +144,8 @@ export function deleteProject(db, { projectId, actorUserId, req = null }) {
 
   for (const p of packagePaths) rmRecursive(p)
   if (recordsDirExists) rmRecursive(recordsProjectDir)
+  // 删 attachments(单篇 PDF 补传 + zotero-merge 拷过来的 PDF + 任何 attachments 表里的文件)
+  for (const p of safeAttachmentPaths) rmRecursive(p)
 
   // 5. audit
   const isAdminAction = actorUserId !== project.user_id

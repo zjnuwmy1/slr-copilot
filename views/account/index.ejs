@@ -9,6 +9,147 @@
     </p>
   </div>
 
+  <!-- === Plan / 高级抽取 / 本月用量 === -->
+  <%
+    const planObj = (typeof plan !== 'undefined') ? plan : null
+    const planAccent = !planObj ? 'border-slate-200 bg-white'
+                     : planObj.id === 'performance' ? 'border-purple-200 bg-purple-50/40'
+                     : planObj.id === 'balanced'    ? 'border-blue-200 bg-blue-50/40'
+                     : planObj.id === 'economy'     ? 'border-emerald-200 bg-emerald-50/40'
+                     : 'border-slate-200 bg-white'
+    const planTextCls = !planObj ? 'text-slate-700'
+                      : planObj.id === 'performance' ? 'text-purple-900'
+                      : planObj.id === 'balanced'    ? 'text-blue-900'
+                      : planObj.id === 'economy'     ? 'text-emerald-900'
+                      : 'text-slate-900'
+    const advEnabled = (typeof advancedExtractionEnabled !== 'undefined') && advancedExtractionEnabled
+    const u = (typeof usageThisMonth !== 'undefined' && usageThisMonth) ? usageThisMonth : { total: 0, success: 0, error: 0, timeout: 0, rate_limited: 0, quota_exceeded: 0 }
+    const uFailed = (u.error || 0) + (u.timeout || 0) + (u.rate_limited || 0) + (u.quota_exceeded || 0)
+  %>
+  <div class="grid gap-4 md:grid-cols-3">
+    <!-- 当前 plan -->
+    <div class="rounded-2xl border <%= planAccent %> p-5">
+      <p class="text-xs font-medium uppercase text-slate-500">当前 Plan</p>
+      <% if (planObj) { %>
+        <p class="mt-2 text-xl font-semibold <%= planTextCls %>"><%= planObj.label %></p>
+        <p class="mt-1 text-xs text-slate-500">
+          <% if (planObj.isUserChosen) { %>已为你单独配置<% } else { %>跟随系统默认<% } %>
+        </p>
+        <% if (planObj.description) { %>
+          <p class="mt-2 line-clamp-2 text-xs text-slate-600"><%= planObj.description %></p>
+        <% } %>
+      <% } else { %>
+        <p class="mt-2 text-xl font-semibold text-slate-400">—</p>
+        <p class="mt-1 text-xs text-slate-500">未配置 preset</p>
+      <% } %>
+      <p class="mt-3 text-[11px] text-slate-500">
+        由超管在 <span class="font-mono">/admin/users</span> 配置,你无法自改。
+      </p>
+    </div>
+
+    <!-- 高级抽取权限 -->
+    <div class="rounded-2xl border <%= advEnabled ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200 bg-white' %> p-5">
+      <p class="text-xs font-medium uppercase text-slate-500">高级抽取</p>
+      <% if (advEnabled) { %>
+        <p class="mt-2 text-xl font-semibold text-emerald-700">✓ 已开通</p>
+        <p class="mt-1 text-xs text-emerald-700/80">可使用矩阵 / master prompt 等高级抽取功能。</p>
+      <% } else { %>
+        <p class="mt-2 text-xl font-semibold text-slate-500">🔒 未开通</p>
+        <p class="mt-1 text-xs text-slate-500">需超管在用户详情页开启。</p>
+      <% } %>
+    </div>
+
+    <!-- 本月 LLM 用量 -->
+    <%
+      const usageIsLink = (typeof user !== 'undefined' && user && user.role === 'admin')
+      const usageTag = usageIsLink ? 'a' : 'div'
+      const usageAttrs = usageIsLink ? 'href="/admin/usage"' : ''
+      const usageCls = 'block rounded-2xl border border-slate-200 bg-white p-5' + (usageIsLink ? ' transition hover:border-slate-400 hover:shadow-sm' : '')
+    %>
+    <<%= usageTag %> <%- usageAttrs %> class="<%= usageCls %>">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-xs font-medium uppercase text-slate-500">本月 LLM 调用</p>
+          <p class="mt-2 text-2xl font-semibold text-slate-800"><%= u.total %></p>
+        </div>
+        <% if (u.total > 0) { %>
+          <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-wider text-slate-500">
+            <%= Math.round(((u.success || 0) / u.total) * 100) %>% 成功
+          </span>
+        <% } %>
+      </div>
+      <div class="mt-3 flex flex-wrap gap-1.5 text-[11px]">
+        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">成功 <%= u.success || 0 %></span>
+        <% if ((u.error || 0) > 0) { %>
+          <span class="rounded-full bg-rose-100 px-2 py-0.5 text-rose-700">错误 <%= u.error %></span>
+        <% } %>
+        <% if ((u.timeout || 0) > 0) { %>
+          <span class="rounded-full bg-blue-100 px-2 py-0.5 text-blue-700">超时 <%= u.timeout %></span>
+        <% } %>
+        <% if ((u.rate_limited || 0) > 0) { %>
+          <span class="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">限速 <%= u.rate_limited %></span>
+        <% } %>
+        <% if ((u.quota_exceeded || 0) > 0) { %>
+          <span class="rounded-full bg-purple-100 px-2 py-0.5 text-purple-700">配额耗尽 <%= u.quota_exceeded %></span>
+        <% } %>
+        <% if (uFailed === 0 && (u.success || 0) === 0) { %>
+          <span class="text-slate-400">本月暂无调用</span>
+        <% } %>
+      </div>
+    </<%= usageTag %>>
+  </div>
+
+  <!-- === 存储配额 === -->
+  <% if (typeof storage !== 'undefined' && storage) {
+       const sBarCls = storage.pct >= 90 ? 'bg-rose-500' : (storage.pct >= 70 ? 'bg-amber-500' : 'bg-emerald-500')
+  %>
+    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <% if (storage.quota === 0) { %>
+        <%# 未开通"高级抽取" — 不显示进度条(全 0 没意义),只显示一行灰色解释 %>
+        <p class="text-xs font-medium uppercase text-slate-500">存储配额</p>
+        <p class="mt-2 text-sm text-slate-600">
+          配额未开通(0 GB) — 联系超管开通"高级抽取"后将自动获得 1 GB。
+        </p>
+        <p class="mt-1 text-[11px] text-slate-400">
+          ⓘ 统计范围:zotero 上传包 + 论文 PDF 附件,你名下所有项目合计。
+        </p>
+      <% } else { %>
+        <div class="flex flex-wrap items-baseline justify-between gap-2">
+          <div>
+            <p class="text-xs font-medium uppercase text-slate-500">存储配额</p>
+            <p class="mt-1 text-sm text-slate-700">
+              已用 <strong class="text-slate-900"><%= storage.usedLabel %></strong>
+              / 配额 <strong class="text-slate-900"><%= storage.quotaLabel %></strong>
+              · 剩 <span class="text-slate-700"><%= storage.remainingLabel %></span>
+            </p>
+          </div>
+          <span class="font-mono text-xs text-slate-500"><%= storage.pct %>%</span>
+        </div>
+        <div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+          <div class="h-full <%= sBarCls %>" style="width: <%= Math.min(storage.pct, 100) %>%"></div>
+        </div>
+        <p class="mt-2 text-[11px] text-slate-500">
+          <% if (storage.isExplicit) { %>
+            ⓘ 此配额由超级管理员显式分配。如需调整请联系超管。
+          <% } else { %>
+            ⓘ 默认配额 = 1 GB(开通"高级抽取"自动获得)。如需更多请联系超管。
+          <% } %>
+          统计范围:zotero 上传包 + 论文 PDF 附件,你名下所有项目合计。
+        </p>
+      <% } %>
+    </div>
+  <% } %>
+
+  <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+    Plan / 高级抽取权限你无法自改 — 如需调整请联系超管。
+    凭证 / 偏好可自助管理:
+    <a href="/account/credentials" class="text-blue-600 underline hover:no-underline">LLM 凭证</a>
+    <% if (typeof user !== 'undefined' && user) { %>
+      ·
+      <a href="/account/preferences" class="text-blue-600 underline hover:no-underline">偏好</a>
+    <% } %>
+  </div>
+
   <div class="grid gap-4 md:grid-cols-2">
     <a href="/account/credentials" class="group rounded-2xl border border-slate-200 bg-white p-6 transition hover:border-slate-400 hover:shadow-sm">
       <div class="flex items-center justify-between">

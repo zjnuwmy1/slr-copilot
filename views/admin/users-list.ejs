@@ -17,7 +17,14 @@ try {
     <div>
       <p class="text-xs font-medium uppercase tracking-wider text-amber-600">Admin</p>
       <h1 class="mt-1 text-2xl font-semibold tracking-tight">用户管理</h1>
-      <p class="mt-1 text-sm text-slate-500">共 <%= users.length %> 个账号</p>
+      <p class="mt-1 text-sm text-slate-500">
+        <% if (visibilityNote && visibilityNote.mode === 'admin') { %>
+          可管理 <strong><%= visibilityNote.count %></strong> 个账号(你邀请的 + 你自己)
+          <span class="ml-1 text-[11px] text-slate-400">· 平台总计 <%= visibilityNote.total %>;查看全部需超级管理员</span>
+        <% } else { %>
+          共 <%= users.length %> 个账号 <span class="ml-1 text-[11px] text-purple-600">· 超级管理员视图</span>
+        <% } %>
+      </p>
     </div>
     <a
       href="/admin/users/new"
@@ -25,15 +32,23 @@ try {
     >+ 生成邀请码</a>
   </div>
 
-  <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-    <table class="min-w-full divide-y divide-slate-200 text-sm">
+  <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+    <% const showInviter = !!(user && user.is_super_admin) %>
+    <table class="w-full <%= showInviter ? 'min-w-[1100px]' : 'min-w-[960px]' %> divide-y divide-slate-200 text-sm">
       <thead class="bg-slate-50 text-xs uppercase text-slate-500">
         <tr>
           <th class="px-4 py-3 text-left font-medium">邮箱</th>
           <th class="px-4 py-3 text-left font-medium">显示名</th>
           <th class="px-4 py-3 text-left font-medium">角色</th>
           <th class="px-4 py-3 text-left font-medium">状态</th>
+          <% if (showInviter) { %>
+            <th class="px-4 py-3 text-left font-medium" title="该用户注册时用了谁创建的邀请码">邀请人</th>
+          <% } %>
+          <% if (showInviter) { %>
+            <th class="px-4 py-3 text-left font-medium" title="zotero 包 + 附件占用 vs. 用户配额">存储</th>
+          <% } %>
           <th class="px-4 py-3 text-left font-medium">Plan(模型方案)</th>
+          <th class="px-4 py-3 text-left font-medium" title="开通后该用户可使用 AI 批量抽取 + 上传 PDF;否则只能下载 xlsx 模板手填">高级抽取</th>
           <th class="px-4 py-3 text-left font-medium">创建</th>
           <th class="px-4 py-3 text-left font-medium">最后登录</th>
           <th class="px-4 py-3 text-right font-medium">项目</th>
@@ -65,6 +80,50 @@ try {
                 </span>
               <% } %>
             </td>
+            <% if (showInviter) { %>
+              <td class="px-4 py-3 text-xs">
+                <% if (u.inviter_email) { %>
+                  <% if (u.inviter_is_super) { %>
+                    <span class="inline-flex items-center gap-1 rounded bg-purple-50 px-1.5 py-0.5 text-purple-700"
+                          title="此用户被超级管理员 <%= u.inviter_email %> 邀请">
+                      👑 <%= u.inviter_display_name || u.inviter_email %>
+                    </span>
+                  <% } else { %>
+                    <a href="/admin/users/<%= encodeURIComponent(u.inviter_id) %>"
+                       class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-amber-800 hover:bg-amber-100"
+                       title="此用户被管理员 <%= u.inviter_email %> 邀请 · 点击查看邀请人详情">
+                      <%= u.inviter_display_name || u.inviter_email %>
+                    </a>
+                  <% } %>
+                <% } else if (u.invite_code_used) { %>
+                  <span class="text-slate-400" title="邀请码 <%= u.invite_code_used %> 已失效或被删除">
+                    码已删 <code class="text-[10px] font-mono"><%= u.invite_code_used %></code>
+                  </span>
+                <% } else { %>
+                  <span class="text-slate-400" title="无邀请码记录(可能是 bootstrap 创建的超管,或注册前 schema 未启用此字段)">—</span>
+                <% } %>
+              </td>
+              <!-- 存储 列 -->
+              <td class="px-4 py-3 text-xs">
+                <% if (u.storage && u.storage.quota > 0) {
+                     const pct = u.storage.pct
+                     const barCls = pct >= 90 ? 'bg-rose-500' : (pct >= 70 ? 'bg-amber-500' : 'bg-emerald-500')
+                %>
+                  <div class="flex flex-col gap-0.5">
+                    <span class="text-slate-700"
+                          title="<%= u.storage.isExplicit ? '超管显式配额' : '默认配额(开通高级抽取自动 1 GB)' %>">
+                      <%= u.storage.usedLabel %> / <%= u.storage.quotaLabel %>
+                      <% if (u.storage.isExplicit) { %><span class="text-[10px] text-purple-600">·自</span><% } %>
+                    </span>
+                    <div class="h-1 w-20 overflow-hidden rounded-full bg-slate-100">
+                      <div class="h-full <%= barCls %>" style="width: <%= pct %>%"></div>
+                    </div>
+                  </div>
+                <% } else { %>
+                  <span class="text-slate-400">— <span class="text-[10px]">(无配额)</span></span>
+                <% } %>
+              </td>
+            <% } %>
             <td class="px-4 py-3">
               <%
                 const effective = u.step_model_preset || defaultPresetId
@@ -97,8 +156,25 @@ try {
                 </span>
               <% } %>
             </td>
-            <td class="px-4 py-3 text-xs text-slate-500"><%= u.created_at %></td>
-            <td class="px-4 py-3 text-xs text-slate-500"><%= u.last_login_at || '—' %></td>
+            <td class="px-4 py-3">
+              <% if (user && user.is_super_admin) { %>
+                <!-- 超管:toggle -->
+                <form method="post" action="/admin/users/<%= encodeURIComponent(u.id) %>/advanced" class="inline">
+                  <input type="hidden" name="enabled" value="<%= u.advanced_extraction_enabled ? '0' : '1' %>" />
+                  <button type="submit"
+                          class="rounded-full px-2 py-0.5 text-xs font-medium <%= u.advanced_extraction_enabled ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-slate-100 text-slate-500 hover:bg-slate-200' %>"
+                          title="点击切换">
+                    <%= u.advanced_extraction_enabled ? '✓ 开通' : '— 未开通' %>
+                  </button>
+                </form>
+              <% } else { %>
+                <span class="text-xs <%= u.advanced_extraction_enabled ? 'text-emerald-700' : 'text-slate-400' %>">
+                  <%= u.advanced_extraction_enabled ? '✓' : '—' %>
+                </span>
+              <% } %>
+            </td>
+            <td class="px-4 py-3 text-xs text-slate-500"><%- include('../partials/_time', { value: u.created_at }) %></td>
+            <td class="px-4 py-3 text-xs text-slate-500"><%- include('../partials/_time', { value: u.last_login_at }) %></td>
             <td class="px-4 py-3 text-right font-mono text-xs text-slate-700">
               <% const pc = projectCountByUser.get(u.id) || 0 %>
               <% if (pc > 0) { %>
@@ -114,6 +190,11 @@ try {
         <% }) %>
       </tbody>
     </table>
+    <% if (!(user && user.is_super_admin)) { %>
+      <p class="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400">
+        ⓘ 「邀请人」「存储」等列仅超级管理员可见。
+      </p>
+    <% } %>
   </div>
 
   <% if (invites && invites.length) { %>
@@ -139,7 +220,7 @@ try {
             </div>
             <div class="flex items-center gap-3">
               <span class="text-xs text-slate-500">
-                <% if (inv.expires_at) { %>过期:<%= inv.expires_at %><% } else { %>永不过期<% } %>
+                <% if (inv.expires_at) { %>过期:<%- include('../partials/_time', { value: inv.expires_at }) %><% } else { %>永不过期<% } %>
               </span>
               <button type="button"
                       onclick="navigator.clipboard.writeText(location.origin + '/register?code=' + '<%= inv.code %>').then(()=>{this.textContent='✓ 已复制';setTimeout(()=>this.textContent='复制链接',1200)})"

@@ -85,7 +85,31 @@ router.get('/:id/iterate', (req, res) => {
 // ============================================================
 // POST /:id/iterate/diagnose — 跑 AI 诊断
 // ============================================================
-router.post('/:id/iterate/diagnose', async (req, res) => {
+// 防双击锁:同一 projectId 已在跑就拒绝(避免连点烧 LLM)
+const inFlightDiagnose = new Set()
+
+router.post('/:id/iterate/diagnose', async (req, res, next) => {
+  const projectId = req.params.id
+  if (inFlightDiagnose.has(projectId)) {
+    if ((req.get('Accept') || '').includes('application/json')) {
+      return res.status(409).json({ ok: false, error: '该项目已有诊断在跑,等完成再试' })
+    }
+    req.session.flash = { type: 'error', message: '该项目已有诊断在跑(可能 5-10 分钟),完成后再试' }
+    return res.redirect(`/projects/${projectId}/iterate`)
+  }
+  inFlightDiagnose.add(projectId)
+
+  // 整体 try/finally — 任何阶段抛错都正常释放锁,且不让 unhandled rejection 崩进程
+  try {
+    await doDiagnose(req, res)
+  } catch (e) {
+    return next(e)
+  } finally {
+    inFlightDiagnose.delete(projectId)
+  }
+})
+
+async function doDiagnose(req, res) {
   const db = req.app.locals.db
   const project = ownProjectOr404(db, req.params.id, req.user.id)
   if (!project) {
@@ -204,7 +228,7 @@ router.post('/:id/iterate/diagnose', async (req, res) => {
   })
 
   res.redirect(`/projects/${project.id}/iterate/review`)
-})
+}   // doDiagnose end
 
 // ============================================================
 // GET /:id/iterate/review — 审阅诊断 + 新协议

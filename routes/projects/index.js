@@ -31,6 +31,15 @@ const router = express.Router()
 router.use('/', synthesisRouter)
 router.use('/', reportRouter)
 
+// /draft 别名 → 重定向到 /report(早期设计文档叫 draft,实现叫 report)
+router.get('/:id/draft', (req, res) => res.redirect(301, `/projects/${req.params.id}/report`))
+router.get('/:id/draft/*', (req, res) => res.redirect(301, `/projects/${req.params.id}/report/${req.params[0]}`))
+
+// /protocol 别名 → 重定向到详情页(Step 1 协议视图就长在 /:id 上)
+// stepper / 列表徽章 / 矩阵前置检查卡都用 /projects/:id/protocol 这个语义化路径,
+// 这里统一兜底成详情页,避免出现 404 + 也方便以后真正拆出独立路由时无缝迁移
+router.get('/:id/protocol', (req, res) => res.redirect(307, `/projects/${req.params.id}`))
+
 // ---------- 工具:解析 JSON 字段(项目/协议表里多列是 JSON 字符串) ----------
 function parseJsonArrayField(v) {
   if (!v) return []
@@ -170,7 +179,10 @@ router.post('/', (req, res) => {
     payload: { title, topic_snippet: topic.slice(0, 200) },
   })
 
-  req.session.flash = { type: 'success', message: '项目已创建,接下来生成研究协议。' }
+  req.session.flash = {
+    type: 'success',
+    message: `项目「${title}」已创建。下一步:在 Step 1 让 Claude 生成研究方案 — 点页面顶部的绿色 CTA 即可。`,
+  }
   res.redirect(`/projects/${id}`)
 })
 
@@ -217,7 +229,7 @@ router.get('/:id', (req, res) => {
     recentUsage,
     progress: getProjectProgress(db, project.id),
     currentStep: 'protocol',
-    stepLabel: '1. 协议(Protocol)',
+    stepLabel: '1. 研究方案',
   })
 })
 
@@ -561,9 +573,9 @@ router.post('/:id/protocol/:protocolId/edit', (req, res) => {
 // Phase 4+ 会接入真正的内容,现在只渲染 stepper + "即将开放" 提示 + 当前 step 覆盖的 PRISMA 项
 // 注意:synthesis 与 report 由 ./synthesis.js / ./report.js 接管,这里只留占位 step
 const STEP_LABELS = {
-  screening:  '3. 筛选(Screening)',
-  extraction: '4. 抽取(Extraction)',
-  rob:        '5. 偏倚风险(Risk of Bias)',
+  screening:  '3. 题录筛选',
+  extraction: '4. 文献矩阵(历史数据)',
+  rob:        '5. 偏倚风险评估',
   // certainty 由 ./certainty.js 接管(Phase 6.5 GRADE 详细评估)
 }
 for (const stepId of Object.keys(STEP_LABELS)) {
@@ -585,6 +597,33 @@ for (const stepId of Object.keys(STEP_LABELS)) {
     })
   })
 }
+
+// ---------- POST /:id/rob/mark-done — 用户在外部完成 RoB 后自报告 ----------
+//   写 projects.rob_marked_done_at,stepStatus.rob 据此变 done,8/8 进度可达
+router.post('/:id/rob/mark-done', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    req.session.flash = { type: 'error', message: '项目不存在' }
+    return res.redirect('/projects')
+  }
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19)
+  db.prepare(`UPDATE projects SET rob_marked_done_at = ? WHERE id = ?`).run(now, project.id)
+  req.session.flash = { type: 'success', message: '已标记偏倚风险评估为"已外部完成"' }
+  res.redirect(`/projects/${project.id}/rob`)
+})
+
+router.post('/:id/rob/unmark', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    req.session.flash = { type: 'error', message: '项目不存在' }
+    return res.redirect('/projects')
+  }
+  db.prepare(`UPDATE projects SET rob_marked_done_at = NULL WHERE id = ?`).run(project.id)
+  req.session.flash = { type: 'success', message: '已取消"已外部完成"标记' }
+  res.redirect(`/projects/${project.id}/rob`)
+})
 
 // ---------- POST /:id/delete ----------
 // 用户删自己的项目(admin 删别人的走 /admin/projects 的同 endpoint — 见下)

@@ -372,9 +372,14 @@
                   <input type="checkbox" data-rec-cb value="<%= r.id %>" class="rounded border-slate-300" />
                 </td>
                 <td class="px-3 py-3 align-top">
+                  <%# 双语标题(Scopus/WoS `; [...]` 格式)只显主标题,翻译进 tooltip 详情页再展开 %>
+                  <% const __lTitleRaw = r.title || ''
+                     const __lMatch = __lTitleRaw.match(/^(.+?)\s*;\s*\[(.+)\]\s*$/s)
+                     const __lTitle = __lMatch ? __lMatch[1].trim() : __lTitleRaw %>
                   <a href="/projects/<%= project.id %>/records/<%= r.id %>"
-                     class="font-medium text-slate-900 hover:text-blue-700 hover:underline">
-                    <%= r.title %>
+                     class="font-medium text-slate-900 hover:text-blue-700 hover:underline"
+                     <% if (__lMatch) { %>title="双语标题:也叫 <%= __lMatch[2].trim() %>"<% } %>>
+                    <%= __lTitle %>
                   </a>
                   <% if (r.authors_short) { %>
                     <p class="mt-0.5 text-xs text-slate-500"><%= r.authors_short %></p>

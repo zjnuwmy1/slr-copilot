@@ -39,22 +39,28 @@ export const DEFAULT_PRESETS = {
     is_default: 0,
     config: {
       step_model: {
-        protocol_gen:    'claude-opus-4-7',
-        search_strategy: 'claude-opus-4-7',
-        screening:       'claude-opus-4-7',
-        extraction:      'claude-opus-4-7',
-        synthesis:       'claude-opus-4-7',
-        drafting:        'claude-opus-4-7',
-        iteration:       'claude-opus-4-7',
+        protocol_gen:           'claude-opus-4-7',
+        search_strategy:        'claude-opus-4-7',
+        screening:              'claude-opus-4-7',
+        extraction:             'claude-opus-4-7',
+        synthesis:              'claude-opus-4-7',
+        drafting:               'claude-opus-4-7',
+        iteration:              'claude-opus-4-7',
+        matrix_suggest_columns:        'claude-opus-4-7',     // 改写默认列 + 反推专属列
+        matrix_run_batch:              'claude-opus-4-7',     // master prompt 一篇一调
+        matrix_optimize_master_prompt: 'claude-opus-4-7',     // 一次性 meta-prompt 优化,质量优先
       },
       step_reasoning: {
-        protocol_gen:    'ultrathink',
-        search_strategy: 'ultrathink',
-        screening:       'think_hard',     // 批量,ultrathink 太慢
-        extraction:      'ultrathink',
-        synthesis:       'ultrathink',
-        drafting:        'think_harder',
-        iteration:       'ultrathink',
+        protocol_gen:           'ultrathink',
+        search_strategy:        'ultrathink',
+        screening:              'think_hard',
+        extraction:             'ultrathink',
+        synthesis:              'ultrathink',
+        drafting:               'think_harder',
+        iteration:              'ultrathink',
+        matrix_suggest_columns:        'think_hard',          // JSON 结构生成,think_hard 够
+        matrix_run_batch:              'ultrathink',          // 每篇深度抽取
+        matrix_optimize_master_prompt: 'ultrathink',          // meta-prompt 写作,最高推理
       },
     },
   },
@@ -65,22 +71,28 @@ export const DEFAULT_PRESETS = {
     is_default: 1,
     config: {
       step_model: {
-        protocol_gen:    'claude-opus-4-7',
-        search_strategy: 'claude-opus-4-7',
-        screening:       'claude-sonnet-4-6',
-        extraction:      'claude-opus-4-7',
-        synthesis:       'claude-opus-4-7',
-        drafting:        'claude-opus-4-7',
-        iteration:       'claude-opus-4-7',
+        protocol_gen:           'claude-opus-4-7',
+        search_strategy:        'claude-opus-4-7',
+        screening:              'claude-sonnet-4-6',
+        extraction:             'claude-opus-4-7',
+        synthesis:              'claude-opus-4-7',
+        drafting:               'claude-opus-4-7',
+        iteration:              'claude-opus-4-7',
+        matrix_suggest_columns:        'claude-sonnet-4-6',
+        matrix_run_batch:              'claude-sonnet-4-6',   // 批量,Sonnet 速度 + 质量平衡
+        matrix_optimize_master_prompt: 'claude-opus-4-7',     // 一次性 meta-prompt,即使 balanced 也上 Opus
       },
       step_reasoning: {
-        protocol_gen:    'ultrathink',
-        search_strategy: 'think_harder',
-        screening:       'think',
-        extraction:      'think_harder',
-        synthesis:       'ultrathink',
-        drafting:        'think_harder',
-        iteration:       'ultrathink',
+        protocol_gen:           'ultrathink',
+        search_strategy:        'think_harder',
+        screening:              'think',
+        extraction:             'think_harder',
+        synthesis:              'ultrathink',
+        drafting:               'think_harder',
+        iteration:              'ultrathink',
+        matrix_suggest_columns:        'think',
+        matrix_run_batch:              'think_harder',
+        matrix_optimize_master_prompt: 'think_harder',         // 比 columns 重,但比 ultrathink 省 token
       },
     },
   },
@@ -91,41 +103,63 @@ export const DEFAULT_PRESETS = {
     is_default: 0,
     config: {
       step_model: {
-        protocol_gen:    'claude-sonnet-4-6',
-        search_strategy: 'claude-sonnet-4-6',
-        screening:       'claude-haiku-4-5',
-        extraction:      'claude-sonnet-4-6',
-        synthesis:       'claude-opus-4-7',   // 综合还是上 Opus,影响整篇质量
-        drafting:        'claude-sonnet-4-6',
-        iteration:       'claude-opus-4-7',   // 复盘也上 Opus,频率低
+        protocol_gen:           'claude-sonnet-4-6',
+        search_strategy:        'claude-sonnet-4-6',
+        screening:              'claude-haiku-4-5',
+        extraction:             'claude-sonnet-4-6',
+        synthesis:              'claude-opus-4-7',
+        drafting:               'claude-sonnet-4-6',
+        iteration:              'claude-opus-4-7',
+        matrix_suggest_columns:        'claude-haiku-4-5',    // 经济档用 Haiku,~15s
+        matrix_run_batch:              'claude-sonnet-4-6',
+        matrix_optimize_master_prompt: 'claude-opus-4-7',     // 即使 economy 也用 Opus — 一次定终身,省这一次不值
       },
       step_reasoning: {
-        protocol_gen:    'think_hard',
-        search_strategy: 'think_hard',
-        screening:       'off',
-        extraction:      'think_hard',
-        synthesis:       'think_harder',
-        drafting:        'think_hard',
-        iteration:       'think_harder',
+        protocol_gen:           'think_hard',
+        search_strategy:        'think_hard',
+        screening:              'off',
+        extraction:             'think_hard',
+        synthesis:              'think_harder',
+        drafting:               'think_hard',
+        iteration:              'think_harder',
+        matrix_suggest_columns:        'off',
+        matrix_run_batch:              'think',
+        matrix_optimize_master_prompt: 'think_hard',           // economy 用 think_hard 而非 ultrathink,省一点 token
       },
     },
   },
 }
 
 /**
- * Bootstrap:确保 3 个预设都在表里。已存在不动(可能超管改过)。
+ * Bootstrap:确保 3 个预设都在表里。
+ *   - 不存在 → INSERT 完整默认
+ *   - 已存在 → 只 merge 缺失的 step keys(给老版本数据库升级用,例如新增 matrix_suggest_columns
+ *     不会覆盖超管已经手改过的 step,只是把缺的补上)。
+ *
  * 也保证恰好一条 is_default = 1(数据被人手动篡改时兜底)。
  */
 export function seedDefaultPresets(db) {
   for (const id of PRESET_IDS) {
-    const existing = db.prepare('SELECT id FROM step_model_presets WHERE id = ?').get(id)
+    const def = DEFAULT_PRESETS[id]
+    if (!def) continue
+    const existing = db.prepare(
+      'SELECT id, config_json FROM step_model_presets WHERE id = ?'
+    ).get(id)
     if (!existing) {
-      const def = DEFAULT_PRESETS[id]
-      if (!def) continue
+      // 新装:INSERT 完整默认
       db.prepare(
         `INSERT INTO step_model_presets (id, label, description, config_json, is_default)
          VALUES (?, ?, ?, ?, ?)`
       ).run(id, def.label, def.description, JSON.stringify(def.config), def.is_default || 0)
+    } else {
+      // 已存在:只补缺 — 不覆盖超管已改过的 step。
+      let cfg = {}
+      try { cfg = JSON.parse(existing.config_json || '{}') } catch { cfg = {} }
+      const merged = mergeMissingSteps(cfg, def.config)
+      if (merged.changed) {
+        db.prepare(`UPDATE step_model_presets SET config_json = ?, updated_at = datetime('now') WHERE id = ?`)
+          .run(JSON.stringify(merged.config), id)
+      }
     }
   }
   // 保证恰好一个 default,没有就给 balanced
@@ -133,6 +167,23 @@ export function seedDefaultPresets(db) {
   if (!defRow) {
     db.prepare(`UPDATE step_model_presets SET is_default = 1 WHERE id = 'balanced'`).run()
   }
+}
+
+// 把 default config 里缺的 step key(model + reasoning)merge 进现有 cfg,
+// 不覆盖已有 step。返回 { config, changed: bool }。
+function mergeMissingSteps(cfg, def) {
+  const out = {
+    step_model: { ...(cfg.step_model || {}) },
+    step_reasoning: { ...(cfg.step_reasoning || {}) },
+  }
+  let changed = false
+  for (const k of Object.keys(def.step_model || {})) {
+    if (out.step_model[k] == null) { out.step_model[k] = def.step_model[k]; changed = true }
+  }
+  for (const k of Object.keys(def.step_reasoning || {})) {
+    if (out.step_reasoning[k] == null) { out.step_reasoning[k] = def.step_reasoning[k]; changed = true }
+  }
+  return { config: out, changed }
 }
 
 /**

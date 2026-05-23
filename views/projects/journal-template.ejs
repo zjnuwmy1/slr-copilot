@@ -1,16 +1,16 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
-<%- include('partials/project-header', { project }) %>
+<%- include('partials/project-header', { project, currentStep: 'report' }) %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
   <%- include('partials/stepper', { project, progress, currentStep: 'report' }) %>
 
   <section class="space-y-6 min-w-0">
     <div class="rounded-xl border border-indigo-200 bg-indigo-50/60 px-4 py-3">
-      <p class="text-xs font-medium uppercase tracking-wider text-indigo-700">第 8 步 / 期刊模板</p>
+      <p class="text-xs font-medium uppercase tracking-wider text-indigo-700">第 8 步 · 目标期刊模板</p>
       <h1 class="mt-1 text-lg font-semibold text-slate-900">目标期刊结构模板</h1>
       <p class="mt-1 text-sm text-slate-600">
-        上传一篇"我想投这本期刊"的代表性论文 PDF,系统会抽出它的章节结构、字数分布、写作 moves、引用密度,
-        作为后续 AI 起草 9 章节时的风格基准。可选 — 不上传也能生成,但带模板的草稿会更贴近目标刊风格。
+        上传一篇"目标期刊"的代表性论文 PDF,系统将自动提取其章节结构、字数分布、写作范式、引用密度,
+        作为 AI 起草九章节时的风格基准。本步骤为可选项 —— 未上传也可生成草稿,但应用模板后的初稿将更贴合目标刊的发表规范。
       </p>
     </div>
 

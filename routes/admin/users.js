@@ -24,6 +24,16 @@ import { Router } from 'express'
 import { generateInviteCode } from '../../services/crypto.js'
 import { audit } from '../../services/audit.js'
 import { listProjectsForUser } from './projects.js'
+import { getPlatformStorage, formatBytes } from '../../services/storage.js'
+import { PRESET_IDS, getDefaultPresetId, getPreset } from '../../services/step-presets.js'
+import { canManageUser, visibleUserScope } from '../../services/admin-scope.js'
+import {
+  getUserQuotaSummary,
+  effectiveQuotaForUser,
+  parseGbToBytes,
+  formatBytes as fmtBytes,
+  ONE_GB,
+} from '../../services/storage-quota.js'
 
 const router = Router()
 
@@ -34,6 +44,20 @@ function requireSuperAdminInline(req, res, redirectTo = '/admin/users') {
     return false
   }
   return true
+}
+
+// 邀请码列表 SQL 片段(普通 admin 只看自己创建的)
+function inviteScopeWhere(req) {
+  if (req.user?.is_super_admin) return { sql: '', params: [] }
+  return { sql: ' AND created_by_user_id = ?', params: [req.user.id] }
+}
+
+// 在 POST 路由里统一校验,失败 flash + redirect false
+function ensureCanManageUser(req, res, db, targetUserId, redirectTo = '/admin/users') {
+  if (canManageUser(req, db, targetUserId)) return true
+  flash(req, 'error', '该用户不在你的管理范围内(仅你邀请的用户可管)')
+  res.redirect(redirectTo)
+  return false
 }
 
 function flash(req, type, message) {
@@ -70,14 +94,133 @@ function parseIntOrNull(v) {
 
 router.get('/', (req, res) => {
   const db = req.app.locals.db
-  const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c
-  const activeCount = db.prepare('SELECT COUNT(*) AS c FROM users WHERE is_active = 1').get().c
-  const inviteCount = db
-    .prepare('SELECT COUNT(*) AS c FROM invite_codes WHERE used_by_user_id IS NULL')
-    .get().c
+  const scope = visibleUserScope(req, db)
+
+  // 用户计数 — 按 viewer 可见范围
+  let userCount, activeCount, inviteCount
+  if (scope.scope === 'all') {
+    userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c
+    activeCount = db.prepare('SELECT COUNT(*) AS c FROM users WHERE is_active = 1').get().c
+    inviteCount = db.prepare(
+      'SELECT COUNT(*) AS c FROM invite_codes WHERE used_by_user_id IS NULL'
+    ).get().c
+  } else if (scope.ids.length === 0) {
+    userCount = 0; activeCount = 0
+    inviteCount = db.prepare(
+      'SELECT COUNT(*) AS c FROM invite_codes WHERE used_by_user_id IS NULL AND created_by_user_id = ?'
+    ).get(req.user.id).c
+  } else {
+    const ph = scope.ids.map(() => '?').join(',')
+    userCount = db.prepare(`SELECT COUNT(*) AS c FROM users WHERE id IN (${ph})`).get(...scope.ids).c
+    activeCount = db.prepare(`SELECT COUNT(*) AS c FROM users WHERE id IN (${ph}) AND is_active = 1`).get(...scope.ids).c
+    inviteCount = db.prepare(
+      'SELECT COUNT(*) AS c FROM invite_codes WHERE used_by_user_id IS NULL AND created_by_user_id = ?'
+    ).get(req.user.id).c
+  }
+
+  // === 新增 widget 数据 ===
+
+  // 1) 近 24h LLM 错误数(含错误类型拆分)
+  let llmErrors24h = { total: 0, byStatus: [] }
+  try {
+    const total = db.prepare(`
+      SELECT COUNT(*) AS c FROM usage_logs
+      WHERE status IN ('error','timeout','rate_limited','quota_exceeded')
+        AND started_at >= datetime('now','-1 day')
+    `).get().c
+    const byStatus = db.prepare(`
+      SELECT status, COUNT(*) AS c FROM usage_logs
+      WHERE status IN ('error','timeout','rate_limited','quota_exceeded')
+        AND started_at >= datetime('now','-1 day')
+      GROUP BY status
+      ORDER BY c DESC
+    `).all()
+    llmErrors24h = { total, byStatus }
+  } catch { /* usage_logs 缺失 */ }
+
+  // 2) 各 plan 用户数(NULL 算 default preset)
+  const defaultPresetId = getDefaultPresetId(db)
+  let presetCounts = []
+  try {
+    const rows = db.prepare(`
+      SELECT step_model_preset AS preset, COUNT(*) AS c
+      FROM users
+      WHERE is_active = 1
+      GROUP BY step_model_preset
+    `).all()
+    // 把 NULL 折叠到 default
+    const map = new Map()
+    for (const id of PRESET_IDS) map.set(id, 0)
+    for (const r of rows) {
+      const id = r.preset || defaultPresetId
+      if (!map.has(id)) map.set(id, 0)
+      map.set(id, map.get(id) + r.c)
+    }
+    presetCounts = PRESET_IDS.map((id) => {
+      const p = getPreset(db, id)
+      return {
+        id,
+        label: p?.label || id,
+        count: map.get(id) || 0,
+        isDefault: id === defaultPresetId,
+      }
+    })
+  } catch { /* preset 表缺失 */ }
+
+  // 3) 磁盘 + DB 大小(复用 services/storage.js)
+  let storageSummary = null
+  try {
+    const ps = getPlatformStorage(db)
+    storageSummary = {
+      totalLabel:    formatBytes(ps.total_bytes),
+      dbLabel:       formatBytes(ps.breakdown.db.bytes),
+      uploadsLabel:  formatBytes(ps.breakdown.uploads.bytes),
+      userHomesLabel:formatBytes(ps.breakdown.user_homes.bytes),
+    }
+  } catch { /* 文件系统读不到时跳过 */ }
+
+  // 4) 最近 10 个 audit event(JOIN users 拿 email)
+  let recentAudit = []
+  try {
+    recentAudit = db.prepare(`
+      SELECT ae.id, ae.event_type, ae.created_at, ae.ip_address,
+             ae.user_id, ae.actor_user_id, ae.target_user_id,
+             u_user.email   AS user_email,
+             u_actor.email  AS actor_email,
+             u_target.email AS target_email
+      FROM audit_events ae
+      LEFT JOIN users u_user   ON u_user.id   = ae.user_id
+      LEFT JOIN users u_actor  ON u_actor.id  = ae.actor_user_id
+      LEFT JOIN users u_target ON u_target.id = ae.target_user_id
+      ORDER BY ae.created_at DESC
+      LIMIT 10
+    `).all()
+  } catch { /* audit_events 缺失 */ }
+
+  // 5) 未处理的密码重置请求(B4.5)— MVP 阶段无邮件,超管需要把链接转给用户
+  //    只列未用 + 未过期的;按申请时间倒序
+  let pendingResets = []
+  try {
+    pendingResets = db.prepare(`
+      SELECT prt.token, prt.expires_at, prt.created_at, prt.requested_ip,
+             u.email, u.display_name
+      FROM password_reset_tokens prt
+      JOIN users u ON u.id = prt.user_id
+      WHERE prt.used_at IS NULL
+        AND prt.expires_at > datetime('now')
+      ORDER BY prt.created_at DESC
+      LIMIT 10
+    `).all()
+  } catch { /* password_reset_tokens 缺失 */ }
+
   res.render('admin/dashboard', {
     title: '管理后台',
     stats: { userCount, activeCount, inviteCount },
+    llmErrors24h,
+    presetCounts,
+    storageSummary,
+    recentAudit,
+    pendingResets,
   })
 })
 
@@ -85,34 +228,111 @@ router.get('/', (req, res) => {
 
 router.get('/users', (req, res) => {
   const db = req.app.locals.db
-  const users = db
-    .prepare(
-      `SELECT id, email, display_name, role, is_active, is_super_admin,
-              step_model_preset,
-              created_at, last_login_at
-       FROM users
-       ORDER BY created_at DESC`
-    )
-    .all()
-  const invites = db
-    .prepare(
-      `SELECT code, preset_role, note, expires_at, created_at
+  const scope = visibleUserScope(req, db)
+
+  // 用户列表 — 按 scope 过滤
+  // LEFT JOIN invite_codes + 邀请人 users — 拿到"是被谁邀请来的"(超管列表里展示)
+  // 同 user 可能历史上用过多个邀请码,取最近用过的那条(MAX(used_at))
+  const baseSelect = `
+    SELECT u.id, u.email, u.display_name, u.role, u.is_active, u.is_super_admin,
+           u.step_model_preset, u.advanced_extraction_enabled,
+           u.storage_quota_bytes,
+           u.created_at, u.last_login_at,
+           u.invite_code_used,
+           ic.created_by_user_id AS inviter_id,
+           inviter.email         AS inviter_email,
+           inviter.display_name  AS inviter_display_name,
+           inviter.is_super_admin AS inviter_is_super
+      FROM users u
+      LEFT JOIN invite_codes ic ON ic.code = u.invite_code_used
+      LEFT JOIN users inviter   ON inviter.id = ic.created_by_user_id
+  `
+  let users
+  if (scope.scope === 'all') {
+    users = db.prepare(`${baseSelect} ORDER BY u.created_at DESC`).all()
+  } else if (scope.ids.length === 0) {
+    users = []
+  } else {
+    const placeholders = scope.ids.map(() => '?').join(',')
+    users = db.prepare(
+      `${baseSelect} WHERE u.id IN (${placeholders}) ORDER BY u.created_at DESC`
+    ).all(...scope.ids)
+  }
+
+  // B2.7:N+1 → 单查询。原代码对 N 个用户跑 2N 次 SUM 子查询,
+  //         50 个用户 = 100 次 DB 往返,慢且锁竞争。
+  //         现一次 UNION ALL + GROUP BY user_id 取所有用户的合计 bytes。
+  //         注意:zotero 的 size_bytes 是 user_id 直接归属,attachments 要
+  //         经 records → projects → user_id 三跳。
+  // B2.6 也在这里生效:非超管的列表 viewer 不需要存储数据,跳过计算节流量。
+  if (req.user.is_super_admin && users.length > 0) {
+    const usageMap = new Map()
+    try {
+      const rows = db.prepare(`
+        SELECT user_id, SUM(b) AS total FROM (
+          SELECT user_id, COALESCE(SUM(size_bytes), 0) AS b
+            FROM zotero_packages
+           WHERE status != 'failed' AND size_bytes IS NOT NULL
+           GROUP BY user_id
+          UNION ALL
+          SELECT p.user_id, COALESCE(SUM(a.size_bytes), 0) AS b
+            FROM attachments a
+            JOIN records  r ON r.id = a.record_id
+            JOIN projects p ON p.id = r.project_id
+           WHERE a.size_bytes IS NOT NULL
+           GROUP BY p.user_id
+        )
+        GROUP BY user_id
+      `).all()
+      for (const r of rows) usageMap.set(r.user_id, Number(r.total) || 0)
+    } catch (e) {
+      console.error('[admin/users] bulk storage usage failed:', e.message)
+    }
+    for (const u of users) {
+      const quota = effectiveQuotaForUser(u)
+      const used = usageMap.get(u.id) || 0
+      u.storage = {
+        quota,
+        used,
+        pct: quota > 0 ? Math.min(100, Math.round(used / quota * 100)) : 0,
+        quotaLabel: fmtBytes(quota),
+        usedLabel: fmtBytes(used),
+        isExplicit: u.storage_quota_bytes != null,
+      }
+    }
+  }
+
+  // 邀请码 — admin 只看自己创建的
+  const inviteW = inviteScopeWhere(req)
+  const invites = db.prepare(
+    `SELECT code, preset_role, note, expires_at, created_at, created_by_user_id
        FROM invite_codes
-       WHERE used_by_user_id IS NULL
+       WHERE used_by_user_id IS NULL ${inviteW.sql}
        ORDER BY created_at DESC
        LIMIT 20`
-    )
-    .all()
+  ).all(...inviteW.params)
+
   // 默认 preset(列表渲染时用,显示"跟随默认 → X")
   const defaultPresetRow = db
     .prepare(`SELECT id FROM step_model_presets WHERE is_default = 1 LIMIT 1`)
     .get()
+
+  // 给 UI 展示"作用域"说明
+  const visibilityNote = req.user.is_super_admin
+    ? { mode: 'super', count: users.length, total: users.length }
+    : {
+        mode: 'admin',
+        count: users.length,
+        total: db.prepare('SELECT COUNT(*) AS c FROM users').get().c,
+      }
+
   res.render('admin/users-list', {
     title: '用户管理',
     users,
     invites,
     defaultPresetId: defaultPresetRow ? defaultPresetRow.id : 'balanced',
     presetIds: ['performance', 'balanced', 'economy'],
+    visibilityNote,
   })
 })
 
@@ -221,7 +441,7 @@ router.post('/users/invites/:code/delete', (req, res) => {
     return res.redirect('/admin/users')
   }
   const row = db.prepare(
-    'SELECT code, used_by_user_id, preset_role FROM invite_codes WHERE code = ?'
+    'SELECT code, used_by_user_id, preset_role, created_by_user_id FROM invite_codes WHERE code = ?'
   ).get(code)
   if (!row) {
     flash(req, 'error', '邀请码不存在')
@@ -234,6 +454,11 @@ router.post('/users/invites/:code/delete', (req, res) => {
   // 守卫:admin 邀请码只有超管能删(普通 admin 也不能签发,自然不能删)
   if (row.preset_role === 'admin' && !req.user.is_super_admin) {
     flash(req, 'error', '只有超级管理员可以删除管理员邀请码')
+    return res.redirect('/admin/users')
+  }
+  // 守卫:普通 admin 只能删自己创建的邀请码(super admin 可删任意)
+  if (!req.user.is_super_admin && row.created_by_user_id !== req.user.id) {
+    flash(req, 'error', '只能删除自己创建的邀请码')
     return res.redirect('/admin/users')
   }
   db.prepare('DELETE FROM invite_codes WHERE code = ?').run(code)
@@ -252,6 +477,12 @@ router.post('/users/invites/:code/delete', (req, res) => {
 router.get('/users/:id', (req, res) => {
   const db = req.app.locals.db
   const id = String(req.params.id)
+  if (!canManageUser(req, db, id)) {
+    return res.status(403).render('error', {
+      title: 'Forbidden',
+      message: '该用户不在你的管理范围内 — 仅你邀请的用户(及你自己)可查看。请联系超级管理员。',
+    })
+  }
   const user = db
     .prepare(
       `SELECT id, email, display_name, role, is_active, created_at, last_login_at, invite_code_used
@@ -277,17 +508,72 @@ router.get('/users/:id', (req, res) => {
       allowedAuthTypes = null
     }
   }
-  // 把 is_super_admin 也带到 view
-  const fullUser = db.prepare('SELECT is_super_admin FROM users WHERE id = ?').get(id)
+  // 把 is_super_admin + advanced_extraction_enabled + storage_quota_bytes 也带过去
+  const fullUser = db.prepare(
+    'SELECT is_super_admin, advanced_extraction_enabled, storage_quota_bytes FROM users WHERE id = ?'
+  ).get(id)
+  const targetEnriched = {
+    ...user,
+    is_super_admin: !!fullUser?.is_super_admin,
+    advanced_extraction_enabled: !!fullUser?.advanced_extraction_enabled,
+    storage_quota_bytes: fullUser?.storage_quota_bytes ?? null,
+  }
+  // B2.6:存储用量/配额是敏感数据(尤其超管显式 quota),仅超管 viewer 可见。
+  // 普通 admin 看自己邀请的用户时不算 + 不渲染该卡。
+  const viewerIsSuper = !!req.user.is_super_admin
+  const storageSummary = viewerIsSuper ? getUserQuotaSummary(db, targetEnriched) : null
   res.render('admin/user-detail', {
     title: `用户:${user.display_name || user.email}`,
-    target: { ...user, is_super_admin: !!fullUser?.is_super_admin },
+    target: targetEnriched,
     quota,
     allowedProviders,
     allowedAuthTypes,
     isSelf: req.user.id === user.id,
-    viewerIsSuperAdmin: !!req.user.is_super_admin,
+    viewerIsSuperAdmin: viewerIsSuper,
+    storageSummary,
+    storageQuotaGb: (storageSummary && storageSummary.quota > 0) ? (storageSummary.quota / ONE_GB) : 0,
+    fmtBytes,
   })
+})
+
+// ============== 改用户的存储配额 — 超管专用 ==============
+// POST /users/:id/storage-quota
+//   body.quota_gb: 数字(GB,可小数) | 'default' | '' → NULL(走默认)
+router.post('/users/:id/storage-quota', (req, res) => {
+  if (!requireSuperAdminInline(req, res)) return
+  const db = req.app.locals.db
+  const id = String(req.params.id)
+  const u = db.prepare('SELECT id, email FROM users WHERE id = ?').get(id)
+  if (!u) {
+    flash(req, 'error', '用户不存在')
+    return res.redirect('/admin/users')
+  }
+  const raw = String(req.body.quota_gb || '').trim()
+  let bytes = null
+  if (raw === '' || raw === 'default') {
+    bytes = null   // 重置为默认
+  } else {
+    bytes = parseGbToBytes(raw)
+    if (bytes == null) {
+      flash(req, 'error', '配额值无效(请输入非负数字,单位 GB,留空 = 重置为默认)')
+      return res.redirect(`/admin/users/${encodeURIComponent(id)}`)
+    }
+  }
+  db.prepare(`UPDATE users SET storage_quota_bytes = ? WHERE id = ?`).run(bytes, id)
+  audit(db, req, {
+    eventType: 'admin_user_storage_quota_changed',
+    userId: req.user.id, actorUserId: req.user.id, targetUserId: id,
+    payload: {
+      user_id: id,
+      email: u.email,
+      new_quota_bytes: bytes,
+      new_quota_gb: bytes != null ? +(bytes / ONE_GB).toFixed(3) : null,
+    },
+  })
+  flash(req, 'success', bytes == null
+    ? `${u.email} 的存储配额已重置为默认(开通高级抽取 = 1 GB,否则 0)`
+    : `${u.email} 的存储配额已设为 ${fmtBytes(bytes)}`)
+  res.redirect(`/admin/users/${encodeURIComponent(id)}`)
 })
 
 // ============== 启用 / 停用 ==============
@@ -295,6 +581,7 @@ router.get('/users/:id', (req, res) => {
 router.post('/users/:id/activate', (req, res) => {
   const db = req.app.locals.db
   const id = String(req.params.id)
+  if (!ensureCanManageUser(req, res, db, id)) return
   const u = db.prepare('SELECT id FROM users WHERE id = ?').get(id)
   if (!u) {
     flash(req, 'error', '用户不存在')
@@ -314,6 +601,7 @@ router.post('/users/:id/activate', (req, res) => {
 router.post('/users/:id/deactivate', (req, res) => {
   const db = req.app.locals.db
   const id = String(req.params.id)
+  if (!ensureCanManageUser(req, res, db, id)) return
   if (id === req.user.id) {
     flash(req, 'error', '不能停用自己,请让另一个 admin 操作')
     return res.redirect(`/admin/users/${encodeURIComponent(id)}`)
@@ -391,6 +679,7 @@ router.post('/users/:id/role', (req, res) => {
 router.post('/users/:id/quota', (req, res) => {
   const db = req.app.locals.db
   const id = String(req.params.id)
+  if (!ensureCanManageUser(req, res, db, id)) return
   const u = db.prepare('SELECT id FROM users WHERE id = ?').get(id)
   if (!u) {
     flash(req, 'error', '用户不存在')
@@ -442,6 +731,32 @@ router.post('/users/:id/quota', (req, res) => {
 
   flash(req, 'success', '配额已更新')
   res.redirect(`/admin/users/${encodeURIComponent(id)}`)
+})
+
+// ============== 改用户的 "高级抽取" 权限位 — 超管专用 ==============
+// POST /users/:id/advanced
+//   body.enabled: '1' / '' (空 = 关)
+router.post('/users/:id/advanced', (req, res) => {
+  if (!requireSuperAdminInline(req, res)) return
+  const db = req.app.locals.db
+  const id = String(req.params.id)
+  const u = db.prepare('SELECT id, email FROM users WHERE id = ?').get(id)
+  if (!u) {
+    flash(req, 'error', '用户不存在')
+    return res.redirect('/admin/users')
+  }
+  const enabled = String(req.body.enabled || '').trim() === '1' ? 1 : 0
+  db.prepare(`UPDATE users SET advanced_extraction_enabled = ? WHERE id = ?`).run(enabled, id)
+  audit(db, req, {
+    eventType: 'admin_user_advanced_toggled',
+    userId: req.user.id, actorUserId: req.user.id, targetUserId: id,
+    payload: { user_id: id, email: u.email, advanced: enabled },
+  })
+  flash(req, 'success', enabled
+    ? `已为 ${u.email} 开通"高级抽取"(可批量 AI 抽取 + 上传 PDF)`
+    : `已关闭 ${u.email} 的"高级抽取"(回到 xlsx 手填流程)`)
+  const ref = (req.get('Referer') || '').endsWith('/admin/users') ? '/admin/users' : `/admin/users/${encodeURIComponent(id)}`
+  res.redirect(ref)
 })
 
 // ============== 改用户的 plan(step_model_preset)— 超管专用 ==============
@@ -496,6 +811,14 @@ router.get('/users/:id/projects', (req, res) => {
     .get(id)
   if (!user) {
     return res.status(404).render('error', { title: 'Not Found', message: '用户不存在' })
+  }
+  // B2.1:真 IDOR 修复 — 之前任意普通 admin 都能 GET 此路由看其他用户项目。
+  // 现按 canManageUser:超管全通,普通 admin 只能看自己邀请的用户。
+  if (!canManageUser(req, db, id)) {
+    return res.status(403).render('error', {
+      title: 'Forbidden',
+      message: '该用户不在你的管理范围内(仅你邀请的用户可管)',
+    })
   }
 
   const filters = {

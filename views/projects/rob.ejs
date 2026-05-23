@@ -1,5 +1,5 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
-<%- include('partials/project-header', { project }) %>
+<%- include('partials/project-header', { project, currentStep: 'rob' }) %>
 
 <div class="grid gap-6 lg:grid-cols-[260px_1fr]">
   <%- include('partials/stepper', { project, progress, currentStep: 'rob' }) %>
@@ -7,26 +7,54 @@
   <section class="space-y-6">
     <%- include('partials/step-banner', {
       stepNum: 5,
-      stepTitle: '看每篇论文质量如何',
-      stepIntro: '评估每篇文献的研究质量 / 偏倚风险 — 一篇质量低的论文不该跟一篇 RCT 同等权重。RoB 2 / ROBINS-I 工具支持中。',
+      stepTitle: '偏倚风险评估',
+      stepIntro: '评估每篇纳入研究的方法学质量与偏倚风险 —— 低质量研究不应与高质量 RCT 同等权重。站内 RoB 2 / ROBINS-I 工具开发中,当前可在外部完成评估后回到本步标记完成。',
       prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
     }) %>
 
-    <div class="rounded-2xl border border-slate-200 bg-white p-8">
+    <% const robDone = project.rob_marked_done_at %>
+    <div class="rounded-2xl border <%= robDone ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200 bg-white' %> p-8">
       <div class="flex flex-wrap items-start gap-6">
         <div class="flex-1 min-w-0">
-          <h2 class="text-lg font-semibold text-slate-900">偏倚风险评估</h2>
+          <h2 class="text-lg font-semibold text-slate-900">
+            偏倚风险评估
+            <% if (robDone) { %>
+              <span class="ml-2 rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">✓ 已外部完成</span>
+            <% } %>
+          </h2>
           <p class="mt-2 text-sm leading-relaxed text-slate-600">
-            站内的偏倚风险工具暂未开放。对当前工作流没有阻断 —— 你可以:
+            站内的偏倚风险工具暂未开放(Phase 7+ 接入 RoB 2 / ROBINS-I)。当前可以:
           </p>
           <ul class="mt-2 space-y-1 text-sm text-slate-600 list-disc pl-5">
             <li>在 <a href="/projects/<%= project.id %>/synthesis" class="text-slate-900 underline hover:no-underline">综合</a> 阶段把"研究质量"作为主题维度讨论;</li>
             <li>在 <a href="/projects/<%= project.id %>/certainty" class="text-slate-900 underline hover:no-underline">证据强度</a> 步骤的 risk_of_bias 维度里填整体评级 + 理由;</li>
             <li>在外部用 Cochrane RoB 2 / ROBINS-I / Newcastle-Ottawa 完成评估后,在最终报告的"方法"章节注明评估方式与结论。</li>
           </ul>
+
+          <!-- 自报告"已外部完成" — 让 8/8 进度可达 -->
+          <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+            <% if (robDone) { %>
+              <p class="text-xs text-emerald-800">
+                ✓ 你已于 <code class="font-mono"><%= robDone %></code> 标记为外部完成。stepper 上 Step 5 已计入进度。
+              </p>
+              <form method="post" action="/projects/<%= project.id %>/rob/unmark" class="mt-2 inline"
+                    onsubmit="return confirm('取消'已外部完成'标记?Step 5 进度会变回未开始。');">
+                <button type="submit" class="text-xs text-slate-500 underline hover:text-slate-700">↻ 取消标记</button>
+              </form>
+            <% } else { %>
+              <p class="text-xs text-slate-600">
+                完成外部 RoB 评估后,标记此步骤,stepper 进度才能到 8/8。
+              </p>
+              <form method="post" action="/projects/<%= project.id %>/rob/mark-done" class="mt-2 inline">
+                <button type="submit" class="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500">
+                  ✓ 我已在外部完成 RoB
+                </button>
+              </form>
+            <% } %>
+          </div>
         </div>
         <div class="flex flex-none flex-col gap-2">
-          <a href="/projects/<%= project.id %>/extraction" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition">← 返回矩阵</a>
+          <a href="/projects/<%= project.id %>/matrix" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition">← 返回矩阵</a>
           <a href="/projects/<%= project.id %>/synthesis" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 transition">下一步:综合 →</a>
         </div>
       </div>

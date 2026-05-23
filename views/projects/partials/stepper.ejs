@@ -7,39 +7,96 @@
                     { stepStatus: { protocol: {status, summary}, ... }, prismaProgress: { donePct, done, total } }
     currentStep   : 'protocol' | 'search' | 'screening' | 'extraction' | 'rob' | 'synthesis' | 'certainty' | 'report'
 %>
-<aside class="space-y-3">
-  <%
-    // 8 步 — 以"你正在做什么"为主线,不再以 PRISMA 术语开头。
-    // PRISMA 在 Step 8 报告时再前台展示(本文件最下方的 PRISMA 链接保留入口)。
-    const steps = [
-      { id: 'protocol',   label: '理清研究问题',     sub: '研究目标 / 纳入排除标准' },
-      { id: 'search',     label: '准备检索关键词',   sub: 'WoS / Scopus / PubMed' },
-      { id: 'screening',  label: '挑出真正相关的',   sub: '看标题摘要决定要不要细读' },
-      { id: 'extraction', label: '从论文里提取数据', sub: '研究设计 / 样本 / 发现' },
-      { id: 'rob',        label: '看每篇质量如何',   sub: '偏倚 / 局限' },
-      { id: 'synthesis',  label: '整合发现成主题',   sub: '一致 / 矛盾 / 空白' },
-      { id: 'certainty',  label: '证据有多可信',     sub: '强 / 中 / 弱' },
-      { id: 'report',     label: '写成可投稿的综述', sub: 'Markdown 全文 + PRISMA flow' },
-    ]
-    const prismaProgress = (progress && progress.prismaProgress) || { donePct: 0, done: 0, total: 42 }
-    const stepStatus = (progress && progress.stepStatus) || {}
-    function badgeFor(status) {
-      switch (status) {
-        case 'done':        return ['bg-emerald-100 text-emerald-700', '已完成']
-        case 'in_progress': return ['bg-amber-100 text-amber-700',   '进行中']
-        case 'locked':      return ['bg-slate-100 text-slate-400',   '🔒 锁定']
-        default:            return ['bg-slate-100 text-slate-500',   '未开始']
-      }
+<%
+  // 8 步 — 以"你正在做什么"为主线,不再以 PRISMA 术语开头。
+  // PRISMA 在 Step 8 报告时再前台展示(本文件最下方的 PRISMA 链接保留入口)。
+  const steps = [
+    { id: 'protocol',   label: '确立研究方案',     sub: '研究问题 · 纳排标准 · 概念框架', short: '研究方案' },
+    { id: 'search',     label: '构建检索策略',     sub: 'WoS / Scopus / PubMed 三库检索式', short: '检索策略' },
+    { id: 'screening',  label: '题录筛选',         sub: '依标题摘要判定纳入或排除', short: '题录筛选' },
+    { id: 'extraction', label: '构建文献矩阵',     sub: '逐篇抽取关键数据(手工 / AI 批量)', short: '矩阵抽取' },
+    { id: 'rob',        label: '偏倚风险评估',     sub: '评估各研究的方法学质量', short: '偏倚评估' },
+    { id: 'synthesis',  label: '主题综合',         sub: '跨研究归纳:一致 · 矛盾 · 空白', short: '主题综合' },
+    { id: 'certainty',  label: '证据确定性评级',   sub: 'GRADE 框架:高 / 中 / 低 / 极低', short: 'GRADE' },
+    { id: 'report',     label: '撰写综述初稿',     sub: '全文初稿 · PRISMA 流程图 · 投稿就绪', short: '综述初稿' },
+  ]
+  const prismaProgress = (progress && progress.prismaProgress) || { donePct: 0, done: 0, total: 42 }
+  const stepStatus = (progress && progress.stepStatus) || {}
+  function badgeFor(status) {
+    switch (status) {
+      case 'done':        return ['bg-emerald-100 text-emerald-700', '已完成']
+      case 'in_progress': return ['bg-amber-100 text-amber-700',   '进行中']
+      case 'locked':      return ['bg-slate-100 text-slate-400',   '🔒 锁定']
+      default:            return ['bg-slate-100 text-slate-500',   '未开始']
     }
-  %>
+  }
+  const stepsTotal = 8
+  const stepsDone = ['protocol','search','screening','extraction','rob','synthesis','certainty','report']
+    .filter((k) => (stepStatus[k] && stepStatus[k].status === 'done')).length
+  const stepPct = Math.round(stepsDone / stepsTotal * 100)
+%>
 
+<!-- ============================================================
+     移动端 sticky tabs:<lg 显示;横向滚动 chip 列表,当前 step 高亮
+     ============================================================ -->
+<div class="lg:hidden sticky top-0 z-30 -mx-4 sm:-mx-6 mb-3 border-b border-slate-200 bg-white/95 backdrop-blur px-3 py-2 shadow-sm">
+  <div class="flex items-center justify-between text-[11px] text-slate-500 mb-1.5 px-1">
+    <span class="font-mono"><%= stepsDone %>/<%= stepsTotal %> 步 · <%= stepPct %>%</span>
+    <a href="/projects/<%= project.id %>/prisma" class="text-slate-400 underline decoration-dotted">PRISMA <%= prismaProgress.done %>/<%= prismaProgress.total %></a>
+  </div>
+  <div class="overflow-x-auto -mx-1 px-1 scrollbar-thin">
+    <div class="flex items-center gap-1.5 whitespace-nowrap pb-1">
+      <% steps.forEach((s, idx) => {
+           const st = stepStatus[s.id] || { status: 'not_started', summary: '' }
+           const isCurrent = (currentStep === s.id)
+           const isLocked  = (st.status === 'locked')
+           const href = s.id === 'extraction'
+             ? `/projects/${project.id}/matrix`
+             : `/projects/${project.id}/${s.id}`
+           const chipCls = isCurrent
+             ? 'border-blue-500 bg-blue-50 text-blue-900 ring-2 ring-blue-200'
+             : st.status === 'done'
+               ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+               : isLocked
+                 ? 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
+                 : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+           const numCls = st.status === 'done'
+             ? 'bg-emerald-500 text-white'
+             : (isCurrent ? 'bg-blue-500 text-white' : (isLocked ? 'bg-slate-300 text-slate-400' : 'bg-slate-200 text-slate-600'))
+      %>
+        <% if (isLocked) { %>
+          <span class="inline-flex flex-none items-center gap-1.5 rounded-full border <%= chipCls %> px-2.5 py-1 text-xs font-medium">
+            <span class="<%= numCls %> flex h-4 w-4 items-center justify-center rounded-full text-[10px]"><%= st.status === 'done' ? '✓' : (idx + 1) %></span>
+            <%= s.short %>
+          </span>
+        <% } else { %>
+          <a href="<%= href %>"
+             id="step-chip-<%= s.id %>"
+             class="inline-flex flex-none items-center gap-1.5 rounded-full border <%= chipCls %> px-2.5 py-1 text-xs font-medium transition">
+            <span class="<%= numCls %> flex h-4 w-4 items-center justify-center rounded-full text-[10px]"><%= st.status === 'done' ? '✓' : (idx + 1) %></span>
+            <%= s.short %>
+          </a>
+        <% } %>
+      <% }) %>
+    </div>
+  </div>
+</div>
+<!-- 滚动让当前 chip 进入视野 -->
+<script>
+(function() {
+  var current = document.getElementById('step-chip-<%= currentStep %>')
+  if (current && typeof current.scrollIntoView === 'function') {
+    try { current.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'instant' }) }
+    catch (e) { current.scrollIntoView() }
+  }
+})()
+</script>
+
+<!-- ============================================================
+     桌面端左侧 stepper:≥lg 显示
+     ============================================================ -->
+<aside class="hidden lg:block space-y-3">
   <!-- 顶部:你的进度(以"做完几步"为主,PRISMA 缩为脚注链接) -->
-  <%
-    const stepsTotal = 8
-    const stepsDone = ['protocol','search','screening','extraction','rob','synthesis','certainty','report']
-      .filter((k) => (stepStatus[k] && stepStatus[k].status === 'done')).length
-    const stepPct = Math.round(stepsDone / stepsTotal * 100)
-  %>
   <div class="rounded-2xl border border-slate-200 bg-white p-4">
     <div class="flex items-center justify-between text-xs">
       <span class="font-medium uppercase tracking-wider text-slate-400">进度</span>
@@ -68,7 +125,10 @@
          const numCls = st.status === 'done'
            ? 'bg-emerald-500 text-white'
            : (isCurrent ? 'bg-blue-500 text-white' : (isLocked ? 'bg-slate-200 text-slate-400' : 'bg-slate-100 text-slate-600'))
-         const href = `/projects/${project.id}/${s.id}`
+         // Step 4 统一指 /matrix(extraction 页保留为 legacy 视图)
+         const href = s.id === 'extraction'
+           ? `/projects/${project.id}/matrix`
+           : `/projects/${project.id}/${s.id}`
     %>
       <% if (isLocked) { %>
         <div class="<%= baseCls %> flex cursor-not-allowed items-start gap-3 rounded-xl p-3 opacity-70">

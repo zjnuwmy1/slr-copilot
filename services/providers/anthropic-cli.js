@@ -123,6 +123,8 @@ export async function sendMessage({
         cwd: homePath,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
+        // detached + 自成进程组 → timeout 时 kill(-pid) 杀整组,防 wrapper 的子子进程僵尸吃配额
+        detached: true,
       })
     } catch (e) {
       return reject(new Error(`spawn_failed: ${e.message}`))
@@ -132,21 +134,19 @@ export async function sendMessage({
     let stderr = ''
     let settled = false
 
+    // 杀整个进程组(detached spawn 时 pid 就是 pgid)
+    function killTree(sig) {
+      try { process.kill(-proc.pid, sig) }
+      catch {
+        try { proc.kill(sig) } catch {}
+      }
+    }
+
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
-      try {
-        proc.kill('SIGTERM')
-      } catch {
-        // ignore
-      }
-      setTimeout(() => {
-        try {
-          proc.kill('SIGKILL')
-        } catch {
-          // ignore
-        }
-      }, 2000)
+      killTree('SIGTERM')
+      setTimeout(() => killTree('SIGKILL'), 2000)
       reject(new Error('timeout'))
     }, timeoutMs)
 
