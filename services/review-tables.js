@@ -70,154 +70,256 @@ function shortAuthors(authors_text) {
 //   }
 // rows[i] = { record_id, study, country, design, sample, intervention, comparator, outcomes, key_findings }
 
+// #250 (2026-05-31) 表格瘦身:正文 per-theme Table 1 从 8 列 → 5 列(去掉
+//   Intervention / Comparator / Outcomes —— Outcomes 已由 Table 2 SoF 覆盖,
+//   Intervention/Comparator 完整信息保留在附录全表 Table S1)。
 const TABLE1_COLUMNS = [
-  { key: 'study',         label: 'Study',             width_em: 14 },
-  { key: 'country',       label: 'Country / Setting', width_em: 10 },
+  { key: 'study',         label: 'Study',             width_em: 16 },
+  { key: 'country',       label: 'Country / Setting', width_em: 12 },
   { key: 'design',        label: 'Design',            width_em: 14 },
-  { key: 'sample',        label: 'Sample (N)',        width_em: 12 },
-  { key: 'intervention',  label: 'Intervention',      width_em: 14 },
-  { key: 'comparator',    label: 'Comparator',        width_em: 10 },
-  { key: 'outcomes',      label: 'Outcomes',          width_em: 12 },
-  { key: 'key_findings',  label: 'Key Findings',      width_em: 18 },
+  { key: 'sample',        label: 'Sample (N)',        width_em: 14 },
+  { key: 'key_findings',  label: 'Key Findings',      width_em: 24 },
 ]
 
-export function buildCharacteristicsTablesByTheme(db, projectId) {
-  // 1) 拉所有 include 的 record(去 dup) — 与 services/prisma-flow.js 同源一致
-  // 2026-05-26 加 r.rob_excluded_at IS NULL:跟 listIncludedRecords / prisma-flow.js
-  //   的 studies_included 一致。之前漏过滤 → RoB 剔除的研究还在 Table 1(尤其
-  //   "Unassigned to any theme" 子表),但它们不在 references 集合里,所以
-  //   citation_map 找不到 [rec_xxx] → preview 端 chip 渲染成红色 unknown / raw 字面。
+// 附录全表(Table S1)列:单张扁平表列"全部纳入研究",含 Theme + RoB 列,
+//   满足 PRISMA/Cochrane "列出所有纳入研究" 的惯例(正文只放核心研究)。
+const TABLE1_FULL_COLUMNS = [
+  { key: 'study',         label: 'Study',             width_em: 16 },
+  { key: 'theme',         label: 'Theme(s)',          width_em: 12 },
+  { key: 'country',       label: 'Country / Setting', width_em: 10 },
+  { key: 'design',        label: 'Design',            width_em: 12 },
+  { key: 'sample',        label: 'Sample (N)',        width_em: 12 },
+  { key: 'rob',           label: 'RoB / Quality',     width_em: 10 },
+  { key: 'key_findings',  label: 'Key Findings',      width_em: 20 },
+]
+
+// #250 配置(可由 admin 在 system_settings 覆盖,默认值如下):
+//   table1_core_max_rows   每主题正文表最多列几篇核心研究(默认 8)
+//   table1_exclude_weak    正文表是否剔除 RoB 弱(weak)的研究(默认 '1' = 剔除,仅进附录)
+const TABLE1_CORE_MAX_DEFAULT = 8
+
+function getStrSetting(db, key, fallback) {
+  try {
+    const r = db.prepare('SELECT value FROM system_settings WHERE key = ?').get(key)
+    return (r && r.value != null) ? String(r.value) : fallback
+  } catch { return fallback }
+}
+
+// 按 RoB 工具把 overall_rating 归一成质量桶:good | moderate | weak | unrated。
+//   注意各工具极性不同('high' 对 RoB2 = 高偏倚=weak,对 JBI/MMAT = 高质量=good)。
+function robOverallQuality(tool, rating) {
+  if (rating == null) return 'unrated'
+  const s = String(rating).toLowerCase().trim()
+  if (tool === 'rob2') {
+    if (s === 'low') return 'good'
+    if (s === 'some_concerns') return 'moderate'
+    if (s === 'high') return 'weak'
+    return 'unrated'
+  }
+  if (tool === 'robins_i') {
+    if (s === 'low') return 'good'
+    if (s === 'moderate') return 'moderate'
+    if (s === 'serious' || s === 'critical') return 'weak'
+    return 'unrated'   // no_information / screening_failed
+  }
+  if (tool === 'nos') {
+    if (s === 'high_quality') return 'good'
+    if (s === 'moderate_quality') return 'moderate'
+    if (s === 'low_quality') return 'weak'
+    return 'unrated'
+  }
+  if (tool === 'jbi_cs' || tool === 'mmat') {
+    if (s === 'high') return 'good'
+    if (s === 'moderate') return 'moderate'
+    if (s === 'low') return 'weak'
+    return 'unrated'
+  }
+  return 'unrated'
+}
+
+// 质量桶 → 给附录 RoB 列显示的短标签
+const QUALITY_LABEL = { good: 'Low risk / High', moderate: 'Moderate', weak: 'High risk / Low', unrated: '—' }
+// 排序优先级:good 最前,weak 最后
+const QUALITY_RANK = { good: 0, moderate: 1, unrated: 2, weak: 3 }
+
+// 共享数据加载:include records(去 dup,排除 post-RoB)+ matrix + themes 归属 + RoB 质量。
+//   供 buildCharacteristicsTablesByTheme(正文核心表)与 buildFullCharacteristicsAppendix(附录全表)复用。
+function _loadCharacteristicsData(db, projectId) {
   let records = []
   try {
     records = db.prepare(
       `SELECT DISTINCT r.id, r.title, r.authors_text, r.year
          FROM records r
          JOIN screening_decisions sd ON sd.record_id = r.id
-        WHERE sd.project_id = ?
-          AND sd.stage         = 'full_text'
-          AND sd.human_decision = 'include'
+        WHERE sd.project_id = ? AND sd.stage = 'full_text' AND sd.human_decision = 'include'
           AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')
           AND r.rob_excluded_at IS NULL
         ORDER BY r.year DESC, r.authors_text ASC`
     ).all(projectId)
   } catch {}
   if (records.length === 0) {
-    // 退而求其次:title_abstract include 数(项目可能没分两阶段)
     try {
       records = db.prepare(
         `SELECT DISTINCT r.id, r.title, r.authors_text, r.year
            FROM records r
            JOIN screening_decisions sd ON sd.record_id = r.id
-          WHERE sd.project_id = ?
-            AND sd.stage          = 'title_abstract'
-            AND sd.human_decision = 'include'
+          WHERE sd.project_id = ? AND sd.stage = 'title_abstract' AND sd.human_decision = 'include'
             AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')
             AND r.rob_excluded_at IS NULL
           ORDER BY r.year DESC, r.authors_text ASC`
       ).all(projectId)
     } catch {}
   }
+  const recById = new Map(records.map((r) => [r.id, r]))
 
-  // 2) 拉 matrix
-  const matrixRows = db.prepare(
-    `SELECT record_id, fields FROM literature_matrix WHERE project_id = ?`
-  ).all(projectId)
   const matrixByRid = new Map()
-  for (const m of matrixRows) {
-    matrixByRid.set(m.record_id, tryParseObj(m.fields))
-  }
+  try {
+    for (const m of db.prepare(`SELECT record_id, fields FROM literature_matrix WHERE project_id = ?`).all(projectId)) {
+      matrixByRid.set(m.record_id, tryParseObj(m.fields))
+    }
+  } catch {}
 
-  // 3) 拉所有主题(含 supporting_record_ids)
+  // RoB 质量(rater_pass=1)→ 归一桶
+  const robQualityByRid = new Map()
+  let anyRob = false
+  try {
+    for (const a of db.prepare(`SELECT record_id, tool, overall_rating FROM rob_assessments WHERE project_id = ? AND rater_pass = 1`).all(projectId)) {
+      anyRob = true
+      robQualityByRid.set(a.record_id, robOverallQuality(a.tool, a.overall_rating))
+    }
+  } catch {}
+
   const themes = db.prepare(
     `SELECT id, name, display_order, supporting_record_ids
-       FROM themes
-      WHERE project_id = ?
+       FROM themes WHERE project_id = ?
       ORDER BY COALESCE(display_order, 9999) ASC, created_at ASC`
   ).all(projectId)
 
-  // 4) 把每篇 record 装进每个它支持的主题(一篇可属多主题)
-  // 同时记录哪些 record 没属于任何主题(Unassigned 子表)
   const inAnyTheme = new Set()
+  const themeNamesByRid = new Map()
   const themeBuckets = themes.map((t) => {
-    const supporting = tryParseArr(t.supporting_record_ids)
     const recordIds = []
-    for (const rid of supporting) {
+    for (const rid of tryParseArr(t.supporting_record_ids)) {
       const ridStr = String(rid).trim()
       if (!ridStr) continue
       inAnyTheme.add(ridStr)
       recordIds.push(ridStr)
+      const arr = themeNamesByRid.get(ridStr) || []
+      arr.push(t.name)
+      themeNamesByRid.set(ridStr, arr)
     }
     return { theme_id: t.id, theme_name: t.name, record_ids: recordIds }
   })
+  const unassigned = records.filter((r) => !inAnyTheme.has(r.id)).map((r) => r.id)
 
-  // 主题外的 record
-  const unassigned = []
-  for (const r of records) {
-    if (!inAnyTheme.has(r.id)) unassigned.push(r.id)
-  }
+  return { records, recById, matrixByRid, themeBuckets, unassigned, robQualityByRid, anyRob, themeNamesByRid }
+}
 
-  // 5) 构造子表
-  // 2026-05-26 修:Study 列嵌 [rec_<id>] 引用占位,让导出 markdown 端的
-  //   preview.ejs post-processor 把它渲染成 citation chip,LaTeX 端的
-  //   renderTableLatex 把它转 \citep{rec_xxx},report 页 review-table.ejs
-  //   把它渲染成内联 "cite" badge — 三处皆可点引用,不再丢链接关系。
+export function buildCharacteristicsTablesByTheme(db, projectId) {
+  const { recById, matrixByRid, themeBuckets, unassigned, robQualityByRid } = _loadCharacteristicsData(db, projectId)
+
+  // #250 配置
+  const CORE_MAX = parseInt(getStrSetting(db, 'table1_core_max_rows', String(TABLE1_CORE_MAX_DEFAULT)), 10) || TABLE1_CORE_MAX_DEFAULT
+  const EXCLUDE_WEAK = getStrSetting(db, 'table1_exclude_weak', '1') !== '0'
+
+  // 构造行(slim 5 列;Study 列嵌 [rec_xxx] 引用占位,三端渲染保持可点)
   function buildRow(rid) {
-    const r = records.find((x) => x.id === rid)
+    const r = recById.get(rid)
     if (!r) return null
     const m = matrixByRid.get(rid) || {}
     const yearTxt = r.year ? String(r.year) : 'n.d.'
-    // 2026-05-26 修双前缀 bug:r.id 已经是 "rec_xxx" 格式,直接 [${r.id}] 即可,
-    //   之前写 [rec_${r.id}] → "[rec_rec_xxx]" → citation post-processor 不识别 → 红色 unknown chip
     const study = `${shortAuthors(r.authors_text)}, ${yearTxt} [${r.id}]`
     const sample = m.sample_size_total
       ? `N=${m.sample_size_total}${m.population ? ` · ${truncate(m.population, 60)}` : ''}`
       : truncate(m.population || '—', 80)
+    const quality = robQualityByRid.get(rid) || 'unrated'
     return {
       record_id: r.id,
       study,
       country:      truncate(m.country_region || '—', 60),
       design:       truncate(m.study_design || '—', 100),
       sample,
-      intervention: truncate(m.intervention || '—', 100),
-      comparator:   truncate(m.comparator || '—', 60),
-      outcomes:     truncate(m.outcomes || '—', 80),
       key_findings: truncate(m.key_findings || '—', 180),
+      rob_quality:  quality,             // 非列,用于筛选/排序
+      _year:        Number(r.year) || 0, // 非列,用于排序
     }
+  }
+
+  // 每主题:挑 RoB 强的核心研究(剔 weak,按 good→moderate→unrated 排,同档年份新→旧),封顶 CORE_MAX。
+  //   全 weak / 无 RoB 的主题:回退展示全部(仍封顶),不出空表。
+  function selectCore(recordIds) {
+    let rows = recordIds.map(buildRow).filter(Boolean)
+    const total = rows.length
+    rows.sort((a, b) => {
+      const qa = QUALITY_RANK[a.rob_quality] ?? 2, qb = QUALITY_RANK[b.rob_quality] ?? 2
+      if (qa !== qb) return qa - qb
+      return b._year - a._year
+    })
+    let eligible = EXCLUDE_WEAK ? rows.filter((r) => r.rob_quality !== 'weak') : rows
+    if (eligible.length === 0) eligible = rows
+    const core = eligible.slice(0, CORE_MAX)
+    return { core, total, omitted: total - core.length }
   }
 
   const subtables = []
-  themeBuckets.forEach((bucket, i) => {
-    const rows = bucket.record_ids.map(buildRow).filter(Boolean)
-    if (rows.length === 0) return                    // 跳过空主题
+  function pushSubtable(themeId, themeName, recordIds) {
+    const { core, total, omitted } = selectCore(recordIds)
+    if (core.length === 0) return
     subtables.push({
-      theme_id:    bucket.theme_id,
-      theme_label: `Table 1${String.fromCharCode(97 + subtables.length)}`,   // 1a, 1b, 1c...
-      theme_name:  bucket.theme_name,
-      theme_count: rows.length,
+      theme_id:    themeId,
+      theme_label: `Table 1${String.fromCharCode(97 + subtables.length)}`,   // 1a, 1b, ...
+      theme_name:  themeName,
+      theme_count: core.length,
+      total_in_theme: total,
+      omitted_count: omitted,
+      // 给渲染端的提示:正文是核心子集,全表见附录 Table S1
+      note: omitted > 0
+        ? `Showing ${core.length} of ${total} studies (highest methodological quality first; full list of all ${total} in Supplementary Table S1).`
+        : null,
       columns:     TABLE1_COLUMNS,
-      rows,
+      rows:        core,
     })
-  })
-
-  // Unassigned 子表(若有)
-  if (unassigned.length > 0) {
-    const rows = unassigned.map(buildRow).filter(Boolean)
-    if (rows.length > 0) {
-      subtables.push({
-        theme_id:    '__unassigned__',
-        theme_label: `Table 1${String.fromCharCode(97 + subtables.length)}`,
-        theme_name:  'Studies not assigned to any theme',
-        theme_count: rows.length,
-        columns:     TABLE1_COLUMNS,
-        rows,
-      })
-    }
   }
+
+  themeBuckets.forEach((b) => pushSubtable(b.theme_id, b.theme_name, b.record_ids))
+  if (unassigned.length > 0) pushSubtable('__unassigned__', 'Studies not assigned to any theme', unassigned)
 
   return {
     subtables,
-    total_studies: records.length,
+    total_studies: recById.size,
     columns: TABLE1_COLUMNS,
+    core_max: CORE_MAX,
+    exclude_weak: EXCLUDE_WEAK,
+  }
+}
+
+// #250 附录全表 Table S1 —— 单张扁平表,列"全部纳入研究"(满足 PRISMA/Cochrane 惯例)。
+//   含 Theme(s) + RoB/Quality 列。不分主题、不筛选、不封顶。
+export function buildFullCharacteristicsAppendix(db, projectId) {
+  const { records, matrixByRid, robQualityByRid, themeNamesByRid } = _loadCharacteristicsData(db, projectId)
+  const rows = records.map((r) => {
+    const m = matrixByRid.get(r.id) || {}
+    const yearTxt = r.year ? String(r.year) : 'n.d.'
+    const sample = m.sample_size_total
+      ? `N=${m.sample_size_total}${m.population ? ` · ${truncate(m.population, 50)}` : ''}`
+      : truncate(m.population || '—', 70)
+    const themeNames = themeNamesByRid.get(r.id) || []
+    const quality = robQualityByRid.get(r.id) || 'unrated'
+    return {
+      record_id: r.id,
+      study:        `${shortAuthors(r.authors_text)}, ${yearTxt} [${r.id}]`,
+      theme:        themeNames.length ? truncate(themeNames.join('; '), 60) : '—',
+      country:      truncate(m.country_region || '—', 50),
+      design:       truncate(m.study_design || '—', 80),
+      sample,
+      rob:          QUALITY_LABEL[quality] || '—',
+      key_findings: truncate(m.key_findings || '—', 160),
+    }
+  })
+  return {
+    columns: TABLE1_FULL_COLUMNS,
+    rows,
+    total_studies: rows.length,
   }
 }
 
@@ -1736,9 +1838,15 @@ export function renderTableExport(tables, tableKey, format, opts = {}) {
     const parts = []
     tables.table1.subtables.forEach((sub, i) => {
       const letter = String.fromCharCode(97 + i)   // a, b, c, ...
+      // #250:正文是核心子集 —— caption 注明 "X of Y shown; full list in Table S1"
+      const shown = (sub.rows || []).length
+      const total = sub.total_in_theme || shown
+      const countTxt = (sub.omitted_count > 0)
+        ? `${shown} of ${total} studies shown — full list in Supplementary Table S1`
+        : `N=${total}`
       const title = numberPrefix
-        ? `${sub.theme_label}. Characteristics of studies in theme: ${sub.theme_name} (N=${sub.theme_count})`
-        : `(${letter}) ${sub.theme_name} (N=${sub.theme_count})`
+        ? `${sub.theme_label}. Characteristics of core studies in theme: ${sub.theme_name} (${countTxt})`
+        : `(${letter}) ${sub.theme_name} (${countTxt})`
       parts.push(r({ columns: sub.columns, rows: sub.rows }, format, title, subHeading))
     })
     if (format === 'csv') return parts.join('\n\n')
@@ -1814,6 +1922,7 @@ export function renderTableExport(tables, tableKey, format, opts = {}) {
   const td = tables[tableKey]
   if (!td || !td.columns || !td.rows) return ''
   const labelMap = {
+    table1_full: 'Table S1. Characteristics of All Included Studies (Supplementary)',
     table5:  'Table 5. Geographic Distribution',
     table6:  'Table 6. Timeline / Year Trend',
     table7:  'Table 7. Theoretical Framework Usage',

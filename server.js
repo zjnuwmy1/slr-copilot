@@ -8,10 +8,11 @@ import { execSync } from 'node:child_process'
 import { initDb } from './db/index.js'
 import { bootstrapAdmin } from './services/bootstrap.js'
 import { seedDefaultPresets } from './services/step-presets.js'
-import { loadUser, requireUser, requireAdmin, requireSuperAdmin } from './middleware/auth.js'
+import { loadUser, requireUser, requireAdmin, requireSuperAdmin, requireApiOrUser } from './middleware/auth.js'
 import { getEffectivePresetIdForUser, getPreset } from './services/step-presets.js'
 import { getUserQuotaSummary as getStorageQuotaSummary, formatBytes as fmtStorageBytes } from './services/storage-quota.js'
 import { randomId } from './services/crypto.js'
+import { audit } from './services/audit.js'
 
 // B2.3:本次启动的 boot UUID。systemd 重启后 process.pid 可能复用,boot_id 不会。
 //        在 initDb 之前注入到 env,M20 reset 会按这个 id 判定"上次留下的 running 是孤儿"。
@@ -31,10 +32,12 @@ import adminStorageRouter from './routes/admin/storage.js'
 import adminPlatformCredsRouter from './routes/admin/platform-credentials.js'
 import adminStepPresetsRouter from './routes/admin/step-presets.js'
 import accountPreferencesRouter from './routes/account/preferences.js'
+import accountApiTokensRouter from './routes/account/api-tokens.js'
 import credentialsRouter from './routes/account/credentials.js'
 import oauthRouter from './routes/account/oauth.js'
 import llmRouter from './routes/account/llm.js'
 import projectsRouter from './routes/projects/index.js'
+import apiRouter from './routes/api/index.js'
 import projectSearchRouter from './routes/projects/search.js'
 import projectPrismaRouter from './routes/projects/prisma.js'
 import projectZoteroRouter from './routes/projects/zotero.js'
@@ -91,11 +94,22 @@ app.use(
     maxAge: 30 * 24 * 60 * 60 * 1000,
   })
 )
+// P0.4 (2026-05-31):每个请求分配 request-id,贯穿日志 / 错误页 / JSON 响应 /
+//   audit,便于把"用户/agent 看到的报错"与服务器日志对上号。优先用上游(nginx)
+//   传的 X-Request-Id,否则自生成。回写响应头让客户端/agent 能拿到。
+app.use((req, res, next) => {
+  const incoming = req.get('X-Request-Id')
+  req.id = (incoming && /^[\w.-]{1,64}$/.test(incoming)) ? incoming : randomId('req')
+  res.setHeader('X-Request-Id', req.id)
+  next()
+})
+
 app.use(loadUser(db))
 
 // 让所有视图都能访问 req 和 flash
 app.use((req, res, next) => {
   res.locals.req = req
+  res.locals.requestId = req.id || null
   res.locals.flash = req.session?.flash
   if (req.session) delete req.session.flash
   next()
@@ -197,21 +211,31 @@ app.use('/', passwordResetRouter)
 app.use('/account/credentials', requireUser, credentialsRouter)
 app.use('/account/oauth', requireUser, oauthRouter)
 app.use('/account/llm', requireUser, llmRouter)
+// P1.1:个人 API token 管理(给本地 agent / CLI 程序化驱动用)
+app.use('/account/api-tokens', requireUser, accountApiTokensRouter)
 // 项目子路由:E 的 router 内部用 /:id/search/* 前缀,挂在 /projects;
 // F 的 router 用 mergeParams 模式,挂在 /projects/:id/prisma。先具体后通用。
-app.use('/projects/:id/prisma', requireUser, projectPrismaRouter)
-app.use('/projects/:id/zotero', requireUser, projectZoteroRouter)
-app.use('/projects', requireUser, projectSearchRouter)
-app.use('/projects', requireUser, projectRecordsRouter)
-app.use('/projects', requireUser, projectScreeningRouter)
-app.use('/projects', requireUser, projectExtractionRouter)
-app.use('/projects', requireUser, projectCertaintyRouter)
-app.use('/projects/:id/import/csv', requireUser, projectImportCsvRouter)
-app.use('/projects', requireUser, projectMatrixRouter)
-app.use('/projects', requireUser, projectRobRouter)
-app.use('/projects', requireUser, projectJournalTemplateRouter)
-app.use('/projects', requireUser, projectIterateRouter)
-app.use('/projects', requireUser, projectsRouter)  // 主路由(含 synthesis + report 自挂)放最后
+// P1.4:全部用 requireApiOrUser(db) —— Bearer token(agent / 编排器自调用)或回退
+//   cookie-session(浏览器,行为与旧 requireUser 完全一致:未登录 → /login)。
+//   这让本地 agent 能用 token 直接驱动任何项目步骤端点,编排器也靠它进程内自调用复用逻辑。
+const projGuard = requireApiOrUser(db)
+app.use('/projects/:id/prisma', projGuard, projectPrismaRouter)
+app.use('/projects/:id/zotero', projGuard, projectZoteroRouter)
+app.use('/projects', projGuard, projectSearchRouter)
+app.use('/projects', projGuard, projectRecordsRouter)
+app.use('/projects', projGuard, projectScreeningRouter)
+app.use('/projects', projGuard, projectExtractionRouter)
+app.use('/projects', projGuard, projectCertaintyRouter)
+app.use('/projects/:id/import/csv', projGuard, projectImportCsvRouter)
+app.use('/projects', projGuard, projectMatrixRouter)
+app.use('/projects', projGuard, projectRobRouter)
+app.use('/projects', projGuard, projectJournalTemplateRouter)
+app.use('/projects', projGuard, projectIterateRouter)
+app.use('/projects', projGuard, projectsRouter)  // 主路由(含 synthesis + report 自挂)放最后
+
+// P1.3:程序化 JSON API(本地 agent / CLI)。requireApiOrUser = Bearer token 或 session。
+//   挂在 /api,与网页 /projects 完全分离;统一 JSON 信封。
+app.use('/api', requireApiOrUser(db), apiRouter)
 
 // /account 仪表盘:登录用户的快速总览
 app.get('/account', requireUser, (req, res) => {
@@ -292,9 +316,45 @@ app.use((req, res) => {
   res.status(404).render('error', { title: 'Not Found', message: '页面不存在' })
 })
 
+// P0.4:全局错误兜底 —— 带 request-id 落日志 + 写 audit(尽力而为),并按客户端
+//   期望返回 JSON(agent / AJAX)或错误页(浏览器)。request-id 同时回给客户端,
+//   用户/agent 报错时报这个 id 就能在日志里精确定位。
 app.use((err, req, res, _next) => {
-  console.error('[unhandled]', err)
-  res.status(500).render('error', { title: 'Server Error', message: '服务器内部错误' })
+  const reqId = req?.id || 'no-req-id'
+  console.error(`[unhandled][${reqId}] ${req?.method || '?'} ${req?.originalUrl || req?.url || '?'} —`, err)
+
+  // 写 audit(独立 try,审计失败绝不能盖住原始错误)。复用 audit() helper:
+  //   它内部 setImmediate + 吞异常 + payload 长度兜底,正好适合错误兜底场景。
+  try {
+    const auditDb = req?.app?.locals?.db
+    if (auditDb) {
+      audit(auditDb, req, {
+        eventType: 'unhandled_error',
+        userId: req?.user?.id || null,
+        projectId: req?.params?.id || null,
+        payload: {
+          request_id: reqId,
+          method: req?.method || null,
+          path: (req?.originalUrl || req?.url || '').slice(0, 300),
+          message: (err?.message || String(err)).slice(0, 500),
+          stack: (err?.stack || '').slice(0, 1500),
+        },
+      })
+    }
+  } catch (e) {
+    console.error(`[unhandled][${reqId}] audit write failed:`, e?.message)
+  }
+
+  if (res.headersSent) return  // 响应已开始 → 交给 express 默认处理,避免二次写头崩
+
+  const wantsJson =
+    (req.get?.('Accept') || '').includes('application/json') ||
+    req.get?.('X-Requested-With') === 'XMLHttpRequest' ||
+    (req.path || '').startsWith('/api/')
+  if (wantsJson) {
+    return res.status(500).json({ ok: false, error: 'internal_error', request_id: reqId })
+  }
+  res.status(500).render('error', { title: 'Server Error', message: '服务器内部错误', requestId: reqId })
 })
 
 app.listen(PORT, '127.0.0.1', () => {

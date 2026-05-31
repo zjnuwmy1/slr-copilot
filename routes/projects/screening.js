@@ -19,6 +19,7 @@ import express from 'express'
 import { randomId } from '../../services/crypto.js'
 import { audit } from '../../services/audit.js'
 import { runLlm } from '../../services/llm.js'
+import * as batchJobsSvc from '../../services/batch-jobs.js'
 import {
   SCREENING_SYSTEM,
   buildScreeningUserPrompt,
@@ -147,37 +148,35 @@ function ensureScreeningRow(db, { recordId, projectId }) {
 }
 
 // ============================================================
-// 批量任务进度(in-memory,Node 进程重启会丢)
+// 批量任务进度 — 2026-05-31 迁到 batch_jobs 表(可断电恢复 + 并发 gate 走 DB)。
+//   之前是进程内 Map/Set,重启即丢进度 + 无 aborted_by_restart 标记。
+//   kind='screening_batch';对齐 matrix/rob 模式。
 // ============================================================
-const batchProgress = new Map()
-// key = projectId,value = { total, done, errors, started_at, finished_at, current_title, status }
+const SCREENING_KIND = 'screening_batch'
 
-function progressGet(projectId) {
-  return batchProgress.get(projectId) || null
-}
-
-function progressInit(projectId, total) {
-  const p = {
-    total,
-    done: 0,
-    errors: 0,
-    started_at: new Date().toISOString(),
-    finished_at: null,
-    current_title: null,
-    status: total > 0 ? 'running' : 'finished',
+// 把 batch_jobs 的 getActiveJob 输出映射成前端/视图期望的形状:
+//   { status, total, done, errors, current_title, started_at, finished_at }
+function screeningBatchView(db, projectId) {
+  let job = null
+  try { job = batchJobsSvc.getActiveJob(db, projectId, SCREENING_KIND) } catch {}
+  if (!job) return null
+  return {
+    status: job.status === 'running' ? 'running' : 'finished',
+    total: job.total || 0,
+    done: job.done || 0,
+    errors: job.failed || 0,
+    current_title: job.current?.title || null,
+    started_at: job.startedAt || null,
+    finished_at: job.finishedAt || null,
   }
-  batchProgress.set(projectId, p)
-  return p
 }
 
-function progressUpdate(projectId, patch) {
-  const cur = batchProgress.get(projectId)
-  if (!cur) return
-  Object.assign(cur, patch)
+function screeningBatchRunning(db, projectId) {
+  try {
+    const job = batchJobsSvc.getActiveJob(db, projectId, SCREENING_KIND)
+    return !!(job && job.status === 'running')
+  } catch { return false }
 }
-
-// 项目级互斥锁:同一个项目同时只能跑一个批量任务
-const runningBatches = new Set()
 
 // ============================================================
 // AI 单条调用 — 跑完写库
@@ -220,6 +219,8 @@ async function runScreeningOnce(db, {
       system: SCREENING_SYSTEM,
       prompt: userPrompt,
       expectJson: true,
+      expectShape: 'object',   // P0.3:期望单条决策对象;返回数组等错误形状 → 走 json_parse_failed 兜底
+
       model: 'light',     // haiku 4.5 — 便宜快,适合 176 条批量
       maxTokens: 1024,
       timeoutMs: 60_000,
@@ -589,7 +590,7 @@ router.get('/:id/screening', (req, res) => {
     pageSize: PAGE_SIZE,
     pageHref,
     buildHref,
-    batch: progressGet(project.id),
+    batch: screeningBatchView(db, project.id),
     progress,
     targetIncludePct,
     actualIncludePct,
@@ -770,16 +771,14 @@ router.post('/:id/screening/run-batch', (req, res) => {
     return res.redirect(redirectUrl)
   }
 
-  // 已有任务在跑:不允许重入
-  if (runningBatches.has(project.id)) {
-    req.session.flash = {
-      type: 'error',
-      message: '已有批量任务在跑,请等它跑完再启动新一批(或刷新页面查看进度)。',
-    }
-    return res.redirect(redirectUrl)
-  }
-
-  // 找出 ai_suggestion = 'not_run' 或者还没建 screening_decisions 行的 records
+  // 找出还没成功跑过 AI 初筛的 records:
+  //   (a) 没建 screening_decisions 行 / ai_suggestion IS NULL / 'not_run'(从没跑过),OR
+  //   (b) P0.5 (2026-05-31):上次 LLM 调用失败的(ai_reason 以错误前缀开头)。
+  //       失败时代码会把 ai_suggestion 置 'uncertain' + ai_reason='llm_error...',
+  //       老逻辑下这种条目不会被 run-batch 重新拾取(只能走 run-failed),导致无人值守
+  //       重跑收敛不彻底。现在 run-batch 也覆盖失败条目 —— 与 matrix/rob 的
+  //       "再点一次批量 = 跳过已成功、补跑未成功" 语义统一。真正人工/AI 判定的
+  //       uncertain(ai_reason 是正常解释,非错误前缀)不受影响,不会被重跑。
   const targets = db
     .prepare(
       `SELECT r.id
@@ -788,7 +787,16 @@ router.post('/:id/screening/run-batch', (req, res) => {
          ON sd.record_id = r.id AND sd.stage = 'title_abstract'
        WHERE r.project_id = ?
          AND r.duplicate_of_record_id IS NULL
-         AND (sd.ai_suggestion IS NULL OR sd.ai_suggestion = 'not_run')
+         AND (
+           sd.ai_suggestion IS NULL
+           OR sd.ai_suggestion = 'not_run'
+           OR sd.ai_reason LIKE 'llm_%'
+           OR sd.ai_reason LIKE 'codex_%'
+           OR sd.ai_reason LIKE 'json_parse_failed%'
+           OR sd.ai_reason LIKE 'json_shape_failed%'
+           OR sd.ai_reason LIKE 'spawn_%'
+           OR sd.ai_reason LIKE 'proc_%'
+         )
        ORDER BY r.title`
     )
     .all(project.id)
@@ -798,72 +806,66 @@ router.post('/:id/screening/run-batch', (req, res) => {
     return res.redirect(redirectUrl)
   }
 
-  runningBatches.add(project.id)
-  progressInit(project.id, targets.length)
-
   const userId = req.user.id
+  // 已有任务在跑:startJob 会抛(并发 gate 走 DB,重启安全)
+  let job
+  try {
+    job = batchJobsSvc.startJob(db, { projectId: project.id, userId, kind: SCREENING_KIND, total: targets.length })
+  } catch (e) {
+    req.session.flash = {
+      type: 'error',
+      message: '已有批量任务在跑,请等它跑完再启动新一批(或刷新页面查看进度)。',
+    }
+    return res.redirect(redirectUrl)
+  }
+  const jobId = job.id
 
   // 给批量任务造一个最简的 req-like 对象给 audit 用(原 req 在响应之后会被回收)
-  const fakeReq = {
-    ip: req.ip,
-    get: (h) => req.get(h),
-  }
+  const fakeReq = { ip: req.ip, get: (h) => req.get(h) }
 
   audit(db, req, {
     eventType: 'screening_batch_started',
     userId,
     projectId: project.id,
-    payload: { total: targets.length },
+    payload: { total: targets.length, job_id: jobId },
   })
 
   // 立刻响应,后台串行跑
   req.session.flash = {
     type: 'success',
-    message: `已启动批量 AI 初筛:${targets.length} 条。请保持页面打开,进度会实时刷新(关闭页面 / 进程重启会丢进度)。`,
+    message: `已启动批量 AI 初筛:${targets.length} 条。进度已持久化(关页面 / 进程重启都不丢,可随时回来看)。`,
   }
   res.redirect(redirectUrl)
 
   // 在响应后跑(setImmediate 让 res.end 真正发出去)
   setImmediate(async () => {
+    let done = 0, errors = 0
     try {
       for (const t of targets) {
         const record = getRecordInProject(db, project.id, t.id)
         if (!record) {
-          progressUpdate(project.id, {
-            done: (batchProgress.get(project.id)?.done || 0) + 1,
-            errors: (batchProgress.get(project.id)?.errors || 0) + 1,
-          })
+          done++; errors++
+          batchJobsSvc.updateJobProgress(db, jobId, { done, failed: errors })
           continue
         }
-        progressUpdate(project.id, { current_title: (record.title || '').slice(0, 80) })
-        const r = await runScreeningOnce(db, {
-          userId,
-          project,
-          protocol,
-          record,
-          req: fakeReq,
+        batchJobsSvc.updateJobProgress(db, jobId, {
+          current: { id: record.id, title: (record.title || '').slice(0, 80) },
         })
-        const cur = batchProgress.get(project.id) || { done: 0, errors: 0 }
-        progressUpdate(project.id, {
-          done: cur.done + 1,
-          errors: cur.errors + (r.ok ? 0 : 1),
-        })
+        const r = await runScreeningOnce(db, { userId, project, protocol, record, req: fakeReq })
+        done++
+        if (!r.ok) errors++
+        batchJobsSvc.updateJobProgress(db, jobId, { done, failed: errors, current: { id: record.id, title: (record.title || '').slice(0, 80) } })
       }
     } catch (e) {
       console.error('[screening] batch loop crashed:', e)
     } finally {
-      progressUpdate(project.id, {
-        status: 'finished',
-        current_title: null,
-        finished_at: new Date().toISOString(),
-      })
-      runningBatches.delete(project.id)
-      const final = progressGet(project.id) || {}
+      batchJobsSvc.updateJobProgress(db, jobId, { done, failed: errors, current: null })
+      batchJobsSvc.finishJob(db, jobId, { status: 'finished' })
       audit(db, fakeReq, {
         eventType: 'screening_batch_finished',
         userId,
         projectId: project.id,
-        payload: { total: final.total, done: final.done, errors: final.errors },
+        payload: { total: targets.length, done, errors, job_id: jobId },
       })
     }
   })
@@ -891,14 +893,6 @@ router.post('/:id/screening/run-failed', (req, res) => {
     }
     return res.redirect(redirectUrl)
   }
-  if (runningBatches.has(project.id)) {
-    req.session.flash = {
-      type: 'error',
-      message: '已有批量任务在跑,请等它跑完(刷新页面看进度)。',
-    }
-    return res.redirect(redirectUrl)
-  }
-
   // 找所有 ai_reason 是错误前缀的 records — 这些是 LLM 调用失败的,需要重跑
   const targets = db
     .prepare(
@@ -912,6 +906,7 @@ router.post('/:id/screening/run-failed', (req, res) => {
          AND (sd.ai_reason LIKE 'llm_%'
               OR sd.ai_reason LIKE 'codex_%'
               OR sd.ai_reason LIKE 'json_parse_failed%'
+              OR sd.ai_reason LIKE 'json_shape_failed%'
               OR sd.ai_reason LIKE 'spawn_%'
               OR sd.ai_reason LIKE 'proc_%')
        ORDER BY r.title`
@@ -923,56 +918,55 @@ router.post('/:id/screening/run-failed', (req, res) => {
     return res.redirect(redirectUrl)
   }
 
-  runningBatches.add(project.id)
-  progressInit(project.id, targets.length)
   const userId = req.user.id
+  let job
+  try {
+    job = batchJobsSvc.startJob(db, { projectId: project.id, userId, kind: SCREENING_KIND, total: targets.length, initial: { mode: 'run_failed' } })
+  } catch (e) {
+    req.session.flash = { type: 'error', message: '已有批量任务在跑,请等它跑完(刷新页面看进度)。' }
+    return res.redirect(redirectUrl)
+  }
+  const jobId = job.id
   const fakeReq = { ip: req.ip, get: (h) => req.get(h) }
 
   audit(db, req, {
     eventType: 'screening_batch_started',
     userId,
     projectId: project.id,
-    payload: { total: targets.length, mode: 'run_failed' },
+    payload: { total: targets.length, mode: 'run_failed', job_id: jobId },
   })
 
   req.session.flash = {
     type: 'success',
-    message: `已启动重跑 ${targets.length} 条失败条目。保持页面打开看进度,完成后会通知。`,
+    message: `已启动重跑 ${targets.length} 条失败条目。进度已持久化(关页面 / 重启不丢)。`,
   }
   res.redirect(redirectUrl)
 
   setImmediate(async () => {
+    let done = 0, errors = 0
     try {
       for (const t of targets) {
         const record = getRecordInProject(db, project.id, t.id)
         if (!record) {
-          progressUpdate(project.id, {
-            done: (batchProgress.get(project.id)?.done || 0) + 1,
-            errors: (batchProgress.get(project.id)?.errors || 0) + 1,
-          })
+          done++; errors++
+          batchJobsSvc.updateJobProgress(db, jobId, { done, failed: errors })
           continue
         }
-        progressUpdate(project.id, { current_title: (record.title || '').slice(0, 80) })
+        batchJobsSvc.updateJobProgress(db, jobId, { current: { id: record.id, title: (record.title || '').slice(0, 80) } })
         const r = await runScreeningOnce(db, { userId, project, protocol, record, req: fakeReq })
-        const cur = batchProgress.get(project.id) || { done: 0, errors: 0 }
-        progressUpdate(project.id, {
-          done: cur.done + 1,
-          errors: cur.errors + (r.ok ? 0 : 1),
-        })
+        done++
+        if (!r.ok) errors++
+        batchJobsSvc.updateJobProgress(db, jobId, { done, failed: errors, current: { id: record.id, title: (record.title || '').slice(0, 80) } })
       }
     } catch (e) {
       console.error('[screening] run-failed loop crashed:', e)
     } finally {
-      progressUpdate(project.id, {
-        status: 'finished', current_title: null,
-        finished_at: new Date().toISOString(),
-      })
-      runningBatches.delete(project.id)
-      const final = progressGet(project.id) || {}
+      batchJobsSvc.updateJobProgress(db, jobId, { done, failed: errors, current: null })
+      batchJobsSvc.finishJob(db, jobId, { status: 'finished' })
       audit(db, fakeReq, {
         eventType: 'screening_batch_finished',
         userId, projectId: project.id,
-        payload: { total: final.total, done: final.done, errors: final.errors, mode: 'run_failed' },
+        payload: { total: targets.length, done, errors, mode: 'run_failed', job_id: jobId },
       })
     }
   })
@@ -1074,7 +1068,7 @@ router.get('/:id/screening/progress.json', (req, res) => {
   const project = ownProjectOr404(db, req.params.id, req.user.id)
   if (!project) return res.status(404).json({ error: 'not_found' })
 
-  const p = progressGet(project.id)
+  const p = screeningBatchView(db, project.id)
   if (!p) {
     return res.json({ running: false, total: 0, done: 0, errors: 0 })
   }

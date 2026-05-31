@@ -1177,4 +1177,43 @@ function runMigrations(db) {
     if (!rcols.includes('pages'))
       db.exec(`ALTER TABLE records ADD COLUMN pages TEXT`)
   } catch (e) { console.warn('[M35 records volume/issue/pages]:', e?.message) }
+
+  // ============================================================
+  // M38 (2026-05-31 Phase 1): 程序化驱动地基 — API token + autonomous + webhook
+  // ============================================================
+  //
+  //   北极星目标:让本地 AI agent 用 token + HTTP/CLI 无人值守跑完整条综述流水线。
+  //
+  //   api_tokens —— 个人访问令牌(明文只发一次,存 SHA-256 hash;见 services/api-tokens.js)
+  //     middleware/auth.js requireApiOrUser 认 `Authorization: Bearer slr_xxx` 或回退 session。
+  //
+  //   projects.autonomous_mode —— 自治模式开关(0/1)。开启后所有"人工 gate"走 AI 自动放行
+  //     + 诚实披露(protocol 自动批准 / 检索式自动锁定 / AI 筛选结论即终审 / 矩阵列用 AI 建议)。
+  //     **方法学诚实不破**:autonomous 产出在 methodology_capabilities 里如实标 single-AI-reviewer,
+  //     PRISMA validator 照常 cap 相应条目(复用现有 honesty gate)。
+  //
+  //   projects.webhook_url —— 任务完成回调(P2.2)。batch_jobs finishJob 时若非空 → POST 通知,
+  //     agent 可挂 webhook 代替轮询。NULL = 仅轮询。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS api_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      label TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+      last_used_at TEXT,
+      revoked_at TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash)`)
+
+  try {
+    const pcols = db.prepare(`PRAGMA table_info(projects)`).all().map(r => r.name)
+    if (!pcols.includes('autonomous_mode'))
+      db.exec(`ALTER TABLE projects ADD COLUMN autonomous_mode INTEGER NOT NULL DEFAULT 0`)
+    if (!pcols.includes('webhook_url'))
+      db.exec(`ALTER TABLE projects ADD COLUMN webhook_url TEXT`)
+  } catch (e) { console.warn('[M38 projects autonomous_mode/webhook_url]:', e?.message) }
 }

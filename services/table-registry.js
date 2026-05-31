@@ -94,12 +94,24 @@ import * as RT from './review-tables.js'
 // 标准 4 表
 registerTable({
   key: 'table1',
-  label: 'Characteristics of Included Studies',
-  description: '逐研究特征,按主题分子表(Table 1a/1b/...),与正文 themes 一一呼应。',
+  label: 'Characteristics of Core Included Studies (by theme)',
+  description: '正文用:每个主题只列 RoB 最强的核心研究(每主题封顶 N 篇,5 列精简),与正文 themes 一一呼应。完整全表见 Table S1(table1_full)。',
   intended_section: 'methods+results',
   multi_subtable: true,
   cochrane_required: true,
   deriveFn: RT.buildCharacteristicsTablesByTheme,
+})
+
+// #250:附录全表 —— 满足 PRISMA/Cochrane "列出全部纳入研究" 惯例。
+//   正文 Table 1 是核心子集(瘦身省页),全部研究在此单张扁平表。
+registerTable({
+  key: 'table1_full',
+  label: 'Table S1 — Characteristics of All Included Studies (Supplementary)',
+  description: '附录/补充材料:单张扁平表列出全部纳入研究(含 Theme + RoB/Quality 列),不筛选不封顶。配合正文精简版 Table 1。',
+  intended_section: 'supplementary',
+  multi_subtable: false,
+  cochrane_required: true,
+  deriveFn: RT.buildFullCharacteristicsAppendix,
 })
 
 registerTable({

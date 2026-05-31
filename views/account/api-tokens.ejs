@@ -1,0 +1,85 @@
+<%- include('../partials/header', { title }) %>
+
+<div class="mx-auto max-w-3xl px-4 py-6">
+  <header class="mb-6">
+    <p class="text-xs font-medium uppercase tracking-wider text-slate-400">账户</p>
+    <h1 class="mt-1 text-2xl font-bold text-slate-900">API 访问令牌</h1>
+    <p class="mt-1 text-sm text-slate-600">
+      用于让本地 AI agent / CLI 程序化驱动平台(无需登录 cookie)。
+      调用时在 HTTP 头带 <code class="rounded bg-slate-100 px-1 font-mono text-xs">Authorization: Bearer &lt;token&gt;</code>。
+    </p>
+  </header>
+
+  <% if (newToken) { %>
+    <section class="rounded-2xl border-2 border-emerald-400 bg-emerald-50 p-5 mb-6">
+      <p class="text-sm font-semibold text-emerald-900">✓ 新令牌已生成 —— 只显示这一次,请立即复制保存!</p>
+      <div class="mt-3 flex items-center gap-2">
+        <input id="newTokenField" type="text" readonly value="<%= newToken %>"
+               class="flex-1 rounded-lg border border-emerald-300 bg-white px-3 py-2 font-mono text-sm text-slate-800" />
+        <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('newTokenField').value); this.textContent='已复制'"
+                class="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">复制</button>
+      </div>
+      <div class="mt-4 rounded-lg bg-slate-900 p-3 font-mono text-xs text-slate-100 overflow-x-auto">
+        <div class="text-slate-400"># 本地 agent / CLI 用法:</div>
+        <div>export SLR_API_URL="<%= apiBase %>"</div>
+        <div>export SLR_API_TOKEN="<%= newToken %>"</div>
+        <div class="mt-1 text-slate-400"># 或直接 curl:</div>
+        <div>curl -H "Authorization: Bearer <%= newToken %>" <%= apiBase %>/api/projects</div>
+      </div>
+      <p class="mt-3 text-xs text-emerald-800">关闭或刷新本页后将无法再次查看此令牌。如遗失,请吊销后重新生成。</p>
+    </section>
+  <% } %>
+
+  <!-- 生成新令牌 -->
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 mb-6 shadow-sm">
+    <h2 class="text-lg font-semibold text-slate-900">生成新令牌</h2>
+    <form method="POST" action="/account/api-tokens" class="mt-3 flex items-end gap-3">
+      <div class="flex-1">
+        <label class="block text-xs font-medium text-slate-500 mb-1">备注(可选,帮助你区分用途)</label>
+        <input type="text" name="label" maxlength="100" placeholder="例:本地写论文 agent / 笔记本 CLI"
+               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+      </div>
+      <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
+        生成令牌
+      </button>
+    </form>
+  </section>
+
+  <!-- 已有令牌列表 -->
+  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <h2 class="text-lg font-semibold text-slate-900">现有令牌</h2>
+    <% if (!tokens || tokens.length === 0) { %>
+      <p class="mt-3 text-sm text-slate-500">还没有生成任何令牌。</p>
+    <% } else { %>
+      <div class="mt-3 divide-y divide-slate-100">
+        <% tokens.forEach(function(t) { %>
+          <div class="flex items-center justify-between gap-3 py-3">
+            <div class="min-w-0">
+              <p class="truncate text-sm font-medium text-slate-800">
+                <%= t.label || '(无备注)' %>
+                <% if (t.revoked_at) { %>
+                  <span class="ml-2 rounded bg-rose-100 px-1.5 py-0.5 text-xs font-medium text-rose-700">已吊销</span>
+                <% } else { %>
+                  <span class="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700">有效</span>
+                <% } %>
+              </p>
+              <p class="mt-0.5 text-xs text-slate-400">
+                创建 <%= t.created_at %>
+                · 最后使用 <%= t.last_used_at || '从未' %>
+                <% if (t.revoked_at) { %> · 吊销于 <%= t.revoked_at %><% } %>
+              </p>
+            </div>
+            <% if (!t.revoked_at) { %>
+              <form method="POST" action="/account/api-tokens/<%= t.id %>/revoke"
+                    onsubmit="return confirm('确认吊销?使用此令牌的程序会立即失效。')">
+                <button type="submit" class="rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50">吊销</button>
+              </form>
+            <% } %>
+          </div>
+        <% }) %>
+      </div>
+    <% } %>
+  </section>
+</div>
+
+<%- include('../partials/footer') %>

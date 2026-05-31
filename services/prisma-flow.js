@@ -59,6 +59,11 @@ export function computePrismaFlow(db, projectId) {
   let identifiedTotal = 0
   let identifiedSource = 'zotero_packages'   // 'locked_final_search' | 'zotero_packages'
 
+  // P0.4 (2026-05-31):区分"0 = 真的没数据"和"0 = count 查询挂了"。
+  //   下面每个计数查询失败时往这里记一笔 + console.warn,返回值里带 degraded 标志,
+  //   让 UI / PRISMA flow / API 能提示"这些数字可能不完整(查询失败)"而不是当真值展示。
+  const _degradedQueries = []
+
   try {
     const lockedRows = db.prepare(`
       SELECT database_name, result_count
@@ -111,7 +116,10 @@ export function computePrismaFlow(db, projectId) {
       SELECT COUNT(*) AS n FROM screening_decisions WHERE project_id = ?
     `).get(projectId)
     totalScreening = r?.n || 0
-  } catch { /* table may not exist yet during early phases */ }
+  } catch (e) {
+    // table may not exist yet during early phases — 早期阶段属预期,只 debug 级提示,不算 degraded
+    console.warn(`[prisma-flow] screening_decisions count skipped (${e.message}) — project ${projectId} 可能还没进筛选阶段`)
+  }
 
   if (totalScreening > 0) {
     // 优化打磨包(2026-05-24 fix):全部用 COUNT(DISTINCT record_id) + JOIN records 过滤 dedup。
@@ -129,7 +137,7 @@ export function computePrismaFlow(db, projectId) {
            AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')
       `).get(projectId)
       taExcluded = r?.n || 0
-    } catch {}
+    } catch (e) { _degradedQueries.push('ta_excluded'); console.warn('[prisma-flow] ta_excluded count failed:', e.message) }
     try {
       const r = db.prepare(`
         SELECT COUNT(DISTINCT sd.record_id) AS n
@@ -141,7 +149,7 @@ export function computePrismaFlow(db, projectId) {
            AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')
       `).get(projectId)
       taIncludedOrUncertain = r?.n || 0
-    } catch {}
+    } catch (e) { _degradedQueries.push('ta_included_or_uncertain'); console.warn('[prisma-flow] ta_included_or_uncertain count failed:', e.message) }
     try {
       const r = db.prepare(`
         SELECT COUNT(DISTINCT sd.record_id) AS n
@@ -152,7 +160,7 @@ export function computePrismaFlow(db, projectId) {
            AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')
       `).get(projectId)
       ftAssessed = r?.n || 0
-    } catch {}
+    } catch (e) { _degradedQueries.push('ft_assessed'); console.warn('[prisma-flow] ft_assessed count failed:', e.message) }
     try {
       const r = db.prepare(`
         SELECT COUNT(DISTINCT sd.record_id) AS n
@@ -164,7 +172,7 @@ export function computePrismaFlow(db, projectId) {
            AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')
       `).get(projectId)
       ftExcluded = r?.n || 0
-    } catch {}
+    } catch (e) { _degradedQueries.push('ft_excluded'); console.warn('[prisma-flow] ft_excluded count failed:', e.message) }
     // 最终纳入:full_text 阶段 include(去 dup)
     try {
       const r = db.prepare(`
@@ -177,7 +185,7 @@ export function computePrismaFlow(db, projectId) {
            AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')
       `).get(projectId)
       finalIncluded = r?.n || 0
-    } catch {}
+    } catch (e) { _degradedQueries.push('final_included_ft'); console.warn('[prisma-flow] final_included (full_text) count failed:', e.message) }
   }
 
   // 如果 full_text 阶段没填(项目还没分两阶段),用 title_abstract 的 include 数兜底
@@ -194,7 +202,7 @@ export function computePrismaFlow(db, projectId) {
            AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')
       `).get(projectId)
       finalIncluded = r?.n || 0
-    } catch {}
+    } catch (e) { _degradedQueries.push('final_included_ta_fallback'); console.warn('[prisma-flow] final_included (title_abstract fallback) count failed:', e.message) }
   }
 
   // ---- 3. extractions 数(再兜底) ----
@@ -205,7 +213,7 @@ export function computePrismaFlow(db, projectId) {
     extractionCount = r?.n || 0
     const r2 = db.prepare(`SELECT COUNT(*) AS n FROM extractions WHERE project_id = ? AND human_verified = 1`).get(projectId)
     extractionVerifiedCount = r2?.n || 0
-  } catch {}
+  } catch (e) { _degradedQueries.push('extractions'); console.warn('[prisma-flow] extractions count failed:', e.message) }
 
   // 如果还没记 final include 但 extractions 已有 verified,用 verified 数作 final include
   if (finalIncluded === 0 && extractionVerifiedCount > 0) {
@@ -225,7 +233,7 @@ export function computePrismaFlow(db, projectId) {
           AND (duplicate_of_record_id IS NULL OR duplicate_of_record_id = '')`
     ).get(projectId)
     robExcluded = r?.n || 0
-  } catch {}
+  } catch (e) { _degradedQueries.push('rob_excluded'); console.warn('[prisma-flow] rob_excluded count failed:', e.message) }
 
   // 流程图 / 文档里 "Studies included in synthesis" = 通过 RoB 评估的 = finalIncluded - robExcluded
   const studiesAfterRob = Math.max(0, (finalIncluded || 0) - robExcluded)
@@ -245,7 +253,7 @@ export function computePrismaFlow(db, projectId) {
       `SELECT COUNT(*) AS n FROM records WHERE project_id = ? AND (duplicate_of_record_id IS NULL OR duplicate_of_record_id = '')`
     ).get(projectId)
     recordsUniqueInDb = r?.n || 0
-  } catch {}
+  } catch (e) { _degradedQueries.push('records_unique'); console.warn('[prisma-flow] records_unique count failed:', e.message) }
   // 兜底:records 表为空(早期 phase)时回退老逻辑;否则用 records 真值
   const screenedTotal = recordsUniqueInDb > 0
     ? recordsUniqueInDb
@@ -270,6 +278,10 @@ export function computePrismaFlow(db, projectId) {
     studies_included: studiesAfterRob,          // 修复:扣掉 RoB 排除后的最终纳入(与 Step 6/7 视图一致)
     has_screening: totalScreening > 0,
     has_extractions: extractionCount > 0,
+    // P0.4:有 count 查询失败时 degraded=true,列出失败的查询名;UI/API 据此提示
+    //   "下列数字可能不完整(查询出错)",而不是把 0 当真值展示。
+    degraded: _degradedQueries.length > 0,
+    degraded_queries: _degradedQueries,
   }
 }
 
@@ -287,6 +299,8 @@ function emptyFlow() {
     studies_included: 0,
     has_screening: false,
     has_extractions: false,
+    degraded: false,
+    degraded_queries: [],
   }
 }
 

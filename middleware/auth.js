@@ -12,6 +12,8 @@
  *   app.use('/account', requireUser, accountRouter)
  */
 
+import { verifyApiToken } from '../services/api-tokens.js'
+
 export function loadUser(db) {
   // B1.5:storage_quota_bytes 必须包进来 — 否则 req.user 传给 effectiveQuotaForUser 时 storage_quota_bytes=undefined,
   //       超管为用户显式设置的配额(比如改成 3 GB)会被静默忽略,fallback 回默认 1 GB,导致上传错误拒绝/放行。
@@ -74,6 +76,55 @@ export function requireUser(req, res, next) {
     return res.redirect(`/login?next=${next_}`)
   }
   next()
+}
+
+/**
+ * requireApiOrUser(db) — P1.1:程序化入口认证。
+ *   - 先认 `Authorization: Bearer slr_xxx`(查 api_tokens)。命中 → 把对应 user 挂 req.user,
+ *     req.authVia='api_token',并强制走 JSON 响应语义(agent / CLI 客户端)。
+ *   - 否则回退到 cookie-session(loadUser 已经在前面跑过,req.user 可能已就绪)。
+ *   - 两者都没有 → 401 JSON(带 Bearer token 但无效)或重定向 /login(纯浏览器)。
+ *
+ *   用法(工厂,需要 db 查 token):
+ *     app.use('/api', requireApiOrUser(db), apiRouter)
+ *   也可挂在已有路由前替换 requireUser,让同一路由既服务网页又服务 agent。
+ */
+export function requireApiOrUser(db) {
+  return function requireApiOrUserMiddleware(req, res, next) {
+    const authHeader = req.get('Authorization') || ''
+    const m = /^Bearer\s+(.+)$/i.exec(authHeader.trim())
+    if (m && m[1]) {
+      const token = m[1].trim()
+      let user = null
+      try { user = verifyApiToken(db, token) } catch (e) { console.warn('[auth] verifyApiToken threw:', e?.message) }
+      if (user) {
+        req.user = user
+        res.locals.user = user
+        req.authVia = 'api_token'
+        return next()
+      }
+      // 提供了 Bearer 但无效 → 明确 401(不静默回退 session,避免误导)
+      return res.status(401).json({ ok: false, error: 'invalid_api_token' })
+    }
+
+    // 无 Bearer → 回退 cookie-session(loadUser 已挂 req.user)
+    if (req.user) {
+      req.authVia = req.authVia || 'session'
+      return next()
+    }
+    // 都没有 → JSON 客户端 401,浏览器重定向登录。
+    //   注意:app.use('/api', mw) 下 req.path 已被剥掉 /api 前缀,要用 originalUrl / baseUrl 判断。
+    const wantsJson =
+      (req.get('Accept') || '').includes('application/json') ||
+      req.get('X-Requested-With') === 'XMLHttpRequest' ||
+      (req.originalUrl || '').startsWith('/api/') ||
+      (req.baseUrl || '').startsWith('/api')
+    if (wantsJson) {
+      return res.status(401).json({ ok: false, error: 'authentication_required' })
+    }
+    const next_ = encodeURIComponent(req.originalUrl)
+    return res.redirect(`/login?next=${next_}`)
+  }
 }
 
 export function requireAdmin(req, res, next) {

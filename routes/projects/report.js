@@ -76,6 +76,7 @@ import {
   buildFigureUrl,
 } from '../../services/figure-assets.js'
 import { renderTableExport } from '../../services/review-tables.js'
+import { validateCitationsAgainstInclude } from '../../services/citation-validator.js'
 import {
   loadCapabilities,
   saveCapabilities,
@@ -370,6 +371,71 @@ function listIncludedRecords(db, projectId) {
   } catch {
     return []
   }
+}
+
+// =============================================================================
+// P0.2 (2026-05-31):引文幻觉校验 + [tbl:]/[fig:] 占位 lint —— 抽成共享 helper。
+//
+// 背景:之前只有 orchestrator(generate-all)路径在生成后校验引文并把
+//   hallucinated_recs_json / lint_warnings_json 落库;单章节"直接生成"路径
+//   (setImmediate → generateSectionLlm → finishSection)不校验,导致同一篇手稿
+//   的引文可信度取决于"你用哪个按钮生成的",autonomous 无人值守时尤其危险。
+//
+// 现在两条路径都调本 helper,保证:
+//   - includeSet 严格取 listIncludedRecords(human_decision='include' 或
+//     human_verified=1,且未被 post-RoB 排除)—— 非 include 的 [rec_xxx]
+//     一律标 hallucinated(真校验,不只是格式校验)。
+//   - [tbl:key]/[fig:id] 占位 key 不在注册表/figure assets 内 → 记 lint。
+//
+// 同步函数(validateCitationsAgainstInclude / listTableKeys / listFigureAssets
+//   都是同步的),返回 { hallucinatedRecs:string[], lintWarnings:object|null }。
+// 不抛异常:任一子步骤失败只 warn,返回已算出的部分。
+// =============================================================================
+function computeCitationLintForSection(db, projectId, contentMarkdown, citationMap) {
+  let hallucinatedRecs = []
+  try {
+    const included = listIncludedRecords(db, projectId)
+    const includeSet = new Set(included.map((rec) => rec.id))
+    const result = validateCitationsAgainstInclude(
+      contentMarkdown || '',
+      includeSet,
+      Array.isArray(citationMap) ? citationMap : [],
+    )
+    hallucinatedRecs = result.hallucinated || []
+  } catch (e) {
+    console.warn('[computeCitationLintForSection] citation validation failed:', e?.message)
+  }
+
+  let lintWarnings = null
+  try {
+    const validTableKeys = new Set(listTableKeys() || [])
+    const figureAssets = listFigureAssets(db, projectId) || []
+    const figureIdSet = new Set(figureAssets.map((a) => a.id))
+    const unknownTables = new Set()
+    const unknownFigures = new Set()
+    const re = /\[(tbl|fig):([A-Za-z0-9_-]+)\]/g
+    const md = contentMarkdown || ''
+    let pm
+    while ((pm = re.exec(md)) !== null) {
+      const kind = pm[1]
+      const id = pm[2]
+      if (kind === 'tbl') {
+        if (!validTableKeys.has(id)) unknownTables.add(id)
+      } else {
+        if (id !== 'prisma' && !figureIdSet.has(id)) unknownFigures.add(id)
+      }
+    }
+    if (unknownTables.size > 0 || unknownFigures.size > 0) {
+      lintWarnings = {
+        unknown_tables: Array.from(unknownTables),
+        unknown_figures: Array.from(unknownFigures),
+      }
+    }
+  } catch (e) {
+    console.warn('[computeCitationLintForSection] lint scan failed:', e?.message)
+  }
+
+  return { hallucinatedRecs, lintWarnings }
 }
 
 function shortRecordLabel(r) {
@@ -4338,6 +4404,24 @@ router.post('/:id/report/generate-section/:section', (req, res) => {
     clearInterval(hbInterval)
     try {
       if (status === 'success' && contentMarkdown) {
+        // P0.2 (2026-05-31):单章节直接生成也跑引文幻觉校验 + 占位 lint(与
+        //   orchestrator 路径一致),把结果落 hallucinated_recs_json / lint_warnings_json,
+        //   并把计数并进 section_run_meta,让 view / preview / export 都能 surface。
+        const { hallucinatedRecs, lintWarnings } = computeCitationLintForSection(
+          db, projectId, contentMarkdown, citationMap,
+        )
+        if (hallucinatedRecs.length > 0) {
+          console.warn(`[report/generate-section] section=${section} 检测到 ${hallucinatedRecs.length} 个幻觉引文:`, hallucinatedRecs)
+        }
+        if (lintWarnings) {
+          console.warn(`[report/generate-section] section=${section} 检测到未知占位:`, lintWarnings)
+        }
+        const metaWithLint = {
+          ...(meta || {}),
+          hallucinated_count: hallucinatedRecs.length,
+          lint_unknown_tables: lintWarnings?.unknown_tables?.length || 0,
+          lint_unknown_figures: lintWarnings?.unknown_figures?.length || 0,
+        }
         // UPDATE 同一行(把 placeholder 填实)
         db.prepare(
           `UPDATE draft_sections
@@ -4350,14 +4434,18 @@ router.post('/:id/report/generate-section/:section', (req, res) => {
                   section_run_status = 'success',
                   section_run_finished_at = datetime('now', '+8 hours'),
                   section_run_error = NULL,
-                  section_run_meta = ?
+                  section_run_meta = ?,
+                  hallucinated_recs_json = ?,
+                  lint_warnings_json = ?
             WHERE id = ?`
         ).run(
           contentMarkdown,
           JSON.stringify(citationMap || []),
           model || null,
           promptVersion || null,
-          meta ? JSON.stringify(meta) : null,
+          JSON.stringify(metaWithLint),
+          hallucinatedRecs.length > 0 ? JSON.stringify(hallucinatedRecs) : null,
+          lintWarnings ? JSON.stringify(lintWarnings) : null,
           placeholderId,
         )
       } else {
@@ -6267,58 +6355,17 @@ async function runSectionInOrchestrator(db, { project, projectId, userId, sectio
 
   try {
     if (r.ok) {
-      // 2026-05-25 P0-6:LLM 返回后立刻校验引文幻觉(citation hallucination)
-      //   把幻觉 rec_id 写到 draft_sections.hallucinated_recs_json
-      //   view / preview / export 都会 surface 这个数据
-      let hallucinatedRecs = []
-      try {
-        const validator = await import('../../services/citation-validator.js').catch(() => null)
-        if (validator?.validateCitationsAgainstInclude) {
-          const included = listIncludedRecords(db, projectId)
-          const includeSet = new Set(included.map((rec) => rec.id))
-          const result = validator.validateCitationsAgainstInclude(
-            r.contentMarkdown || '',
-            includeSet,
-            Array.isArray(r.citationMap) ? r.citationMap : [],
-          )
-          hallucinatedRecs = result.hallucinated || []
-          if (hallucinatedRecs.length > 0) {
-            console.warn(`[runSectionInOrchestrator] section=${section} 检测到 ${hallucinatedRecs.length} 个幻觉引文:`, hallucinatedRecs)
-          }
-        }
-      } catch (e) {
-        console.warn('[runSectionInOrchestrator] citation validation failed:', e?.message)
+      // 2026-05-25 P0-6 → 2026-05-31 P0.2:LLM 返回后立刻校验引文幻觉 + [tbl:]/[fig:]
+      //   占位 lint。两件事都抽到 computeCitationLintForSection 共享 helper,
+      //   单章节直接生成路径走同一套(见 finishSection)。
+      const { hallucinatedRecs, lintWarnings } = computeCitationLintForSection(
+        db, projectId, r.contentMarkdown || '', r.citationMap,
+      )
+      if (hallucinatedRecs.length > 0) {
+        console.warn(`[runSectionInOrchestrator] section=${section} 检测到 ${hallucinatedRecs.length} 个幻觉引文:`, hallucinatedRecs)
       }
-
-      // 2026-05-25 P2-13:扫 [tbl:]/[fig:] 占位,把未知 key 写到 lint_warnings_json
-      //   M33 schema 已加列,这里做生成时的写入
-      let lintWarnings = null
-      try {
-        const validTableKeys = new Set(listTableKeys() || [])
-        const figureAssets = listFigureAssets(db, projectId) || []
-        const figureIdSet = new Set(figureAssets.map((a) => a.id))
-        const unknownTables = new Set()
-        const unknownFigures = new Set()
-        const re = /\[(tbl|fig):([A-Za-z0-9_-]+)\]/g
-        const md = r.contentMarkdown || ''
-        let pm
-        while ((pm = re.exec(md)) !== null) {
-          const kind = pm[1]; const id = pm[2]
-          if (kind === 'tbl') {
-            if (!validTableKeys.has(id)) unknownTables.add(id)
-          } else {
-            if (id !== 'prisma' && !figureIdSet.has(id)) unknownFigures.add(id)
-          }
-        }
-        if (unknownTables.size > 0 || unknownFigures.size > 0) {
-          lintWarnings = {
-            unknown_tables: Array.from(unknownTables),
-            unknown_figures: Array.from(unknownFigures),
-          }
-          console.warn(`[runSectionInOrchestrator] section=${section} 检测到未知占位:`, lintWarnings)
-        }
-      } catch (e) {
-        console.warn('[runSectionInOrchestrator] lint scan failed:', e?.message)
+      if (lintWarnings) {
+        console.warn(`[runSectionInOrchestrator] section=${section} 检测到未知占位:`, lintWarnings)
       }
 
       db.prepare(

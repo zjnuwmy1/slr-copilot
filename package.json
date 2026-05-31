@@ -4,6 +4,9 @@
   "private": true,
   "description": "AI-assisted systematic literature review platform",
   "type": "module",
+  "bin": {
+    "slr": "bin/slr.js"
+  },
   "engines": {
     "node": ">=18.18"
   },

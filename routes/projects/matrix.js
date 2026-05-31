@@ -952,6 +952,7 @@ async function runMatrixExtractionForRecord({ db, userId, project, record, reqLi
       system: MATRIX_BATCH_SYSTEM,
       prompt,
       expectJson: true,
+      expectShape: 'object',   // P0.3:期望 {column_key: value} 对象;错误形状 → data=null → 走 failed 兜底
       maxTokens: 8192,
       timeoutMs: 480_000,
     })

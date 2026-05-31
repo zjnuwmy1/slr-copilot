@@ -185,6 +185,31 @@ export function extractJson(text) {
   return null
 }
 
+/**
+ * P0.3 (2026-05-31):最小 JSON 顶层形状校验。
+ *   extractJson 只保证返回 null 或 object/array(永不返回裸标量),所以这里只区分
+ *   object vs array 两种顶层类型。
+ *
+ * @param {*} data    extractJson 的返回值(已确保是 object/array,或 null)
+ * @param {'object'|'array'|null} shape  期望顶层类型;null/未知值 → 不校验(放行)
+ * @returns {{ ok: boolean, error?: string }}
+ */
+export function validateJsonShape(data, shape) {
+  if (!shape) return { ok: true }
+  if (data == null) return { ok: false, error: 'data is null' }
+  const isArray = Array.isArray(data)
+  if (shape === 'array') {
+    return isArray ? { ok: true } : { ok: false, error: `expected array, got ${typeof data}/object` }
+  }
+  if (shape === 'object') {
+    return (!isArray && typeof data === 'object')
+      ? { ok: true }
+      : { ok: false, error: `expected object, got ${isArray ? 'array' : typeof data}` }
+  }
+  // 未知 shape 描述 → 不阻断
+  return { ok: true }
+}
+
 /** 从 text[start] 开始 depth-balanced 扫描。返回 { slice, truncated, openStack }。 */
 function scanBalanced(text, start) {
   let depth = 0, inStr = false, esc = false
@@ -330,6 +355,12 @@ export async function runLlm(db, opts) {
     system,
     prompt,
     expectJson = false,
+    // P0.3 (2026-05-31):可选的最小 JSON 形状契约。expectJson 解析成功后,若顶层类型
+    //   不符(期望 'object' 给了数组,或期望 'array' 给了对象),把 data 置 null —— 直接走
+    //   调用方已有的"data==null"兜底路径(全部关键 actionType 都已处理 null),并在结果里
+    //   带回 jsonShapeFailed + shapeError 信号(供 autonomous 编排器判断"这步是否产出可用")。
+    //   不传则行为与旧版完全一致(向后兼容)。支持值:'object' | 'array' | null。
+    expectShape = null,
     model: modelHint,
     maxTokens = 1024,
     projectId = null,
@@ -502,10 +533,24 @@ export async function runLlm(db, opts) {
   const durationMs = Date.now() - started
   const text = providerResult.text ?? ''
   const usage = providerResult.usage ?? null
-  const data = expectJson ? extractJson(text) : undefined
+  let data = expectJson ? extractJson(text) : undefined
+  const rawParseFailed = expectJson && (data == null)
+
+  // P0.3:解析成功但顶层形状不符(期望 object 给了 array,反之亦然)→ 把 data 置 null,
+  //   走调用方既有的 data==null 兜底路径;同时带回 jsonShapeFailed/shapeError 信号。
+  let jsonShapeFailed = false
+  let shapeError = null
+  if (expectJson && !rawParseFailed && expectShape) {
+    const v = validateJsonShape(data, expectShape)
+    if (!v.ok) {
+      jsonShapeFailed = true
+      shapeError = v.error
+      data = null
+    }
+  }
   const jsonParseFailed = expectJson && (data == null)
 
-  // 6. 落 usage_logs — 解析失败的明确标 parse_failed 并保存原文片段供 debug
+  // 6. 落 usage_logs — 解析/形状失败的明确标 parse_failed 并保存原文片段供 debug
   const usageLogId = recordUsage(db, {
     userId, credentialId: cred.id, projectId, actionType,
     provider: cred.provider, authType: cred.auth_type, model,
@@ -513,9 +558,11 @@ export async function runLlm(db, opts) {
     completionTokens: usage?.output_tokens ?? null,
     durationMs,
     status: jsonParseFailed ? 'parse_failed' : 'success',
-    errorMessage: jsonParseFailed
-      ? `json_parse_failed; raw_text_length=${text.length}; raw_text(first 8000):\n${text.slice(0, 8000)}`
-      : null,
+    errorMessage: jsonShapeFailed
+      ? `json_shape_failed[expect=${expectShape}]: ${shapeError}; raw_text_length=${text.length}; raw_text(first 8000):\n${text.slice(0, 8000)}`
+      : rawParseFailed
+        ? `json_parse_failed; raw_text_length=${text.length}; raw_text(first 8000):\n${text.slice(0, 8000)}`
+        : null,
   })
 
   // 7. 更新凭证 last_used_at
@@ -528,6 +575,10 @@ export async function runLlm(db, opts) {
     status: 'success',
     text,
     data,
+    // P0.3:形状校验信号 —— autonomous 编排器/调用方可据此判断"这步是否产出可用结构"。
+    //   jsonShapeFailed=true 时 data 已被置 null(走兜底),shapeError 说明不符原因。
+    jsonShapeFailed,
+    shapeError,
     model,
     reasoning: reasoning || null,
     provider: cred.provider,
