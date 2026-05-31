@@ -1,0 +1,556 @@
+<%- include('../partials/header', { title: project.title + ' · 投稿准备' }) %>
+<%- include('partials/project-header', { project, currentStep: 'submission' }) %>
+
+<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+  <%- include('partials/stepper', { project, progress, currentStep: 'submission' }) %>
+
+  <section class="space-y-5">
+    <div class="rounded-2xl border border-slate-200 bg-white p-5">
+      <p class="text-xs font-medium uppercase tracking-wider text-slate-500">
+        Step 9 · 投稿准备(Submission)
+      </p>
+      <h1 class="mt-1 text-lg font-semibold text-slate-900">LaTeX 模板填充 · PDF 渲染 · 一键投稿包</h1>
+      <p class="mt-1 text-sm text-slate-600">
+        Step 8 已完成的章节 + 引文 + 图,在这里组装成最终投稿稿件:
+        ① 上传期刊 LaTeX 模板 → ② 选 main.tex → ③ 填作者表 → ④ Opus 把章节填进去 + pdflatex 渲染 PDF → ⑤ 下载 .tex 源 zip 或一键投稿包。
+      </p>
+      <p class="mt-2 text-xs text-slate-500">
+        ※ 想改章节内容/图/PRISMA 验证,请回 <a href="/projects/<%= project.id %>/report" class="text-blue-600 underline">Step 8 撰写</a>。这里只做最后组装。
+      </p>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- Phase 8.F · 投稿就绪状态总览卡(从 report.ejs 迁过来)        -->
+    <!-- ============================================================ -->
+    <%
+      const _finReady = (typeof finalizationReady !== 'undefined' && finalizationReady && typeof finalizationReady === 'object') ? finalizationReady : null
+      const _lastFinalized = (typeof lastFinalizedZip !== 'undefined' && lastFinalizedZip) ? lastFinalizedZip : null
+      const _finOk = !!(_finReady && _finReady.overall_ready)
+      function _rowIcon(ok) { return ok ? '<span class="text-emerald-600">✓</span>' : '<span class="text-rose-500">✗</span>' }
+    %>
+    <div id="finalize-status-card"
+         class="rounded-2xl border <%= _finOk ? 'border-emerald-300 bg-emerald-50/40' : 'border-amber-200 bg-amber-50/30' %> p-6">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-baseline gap-2">
+            <h2 class="text-base font-semibold text-slate-900">🚀 投稿就绪状态</h2>
+            <% if (_finOk) { %>
+              <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">✓ 全部就绪</span>
+            <% } else { %>
+              <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">还差几项</span>
+            <% } %>
+          </div>
+          <p class="mt-1 text-xs text-slate-600">所有就绪后,一键打包 manuscript.md/.pdf/.tex + figures + bib + PRISMA checklist + README。</p>
+        </div>
+      </div>
+
+      <% if (_finReady) { %>
+        <div class="mt-4 grid gap-2 text-sm">
+          <div class="flex items-center justify-between rounded-lg border <%= _finReady.sections_ready ? 'border-emerald-200 bg-white' : 'border-rose-200 bg-rose-50/30' %> px-3 py-2">
+            <div class="flex items-center gap-2">
+              <span class="text-base"><%- _rowIcon(_finReady.sections_ready) %></span>
+              <span class="font-medium text-slate-800">章节完成</span>
+              <% if (!_finReady.sections_ready && _finReady.missing_required && _finReady.missing_required.length) { %>
+                <span class="text-xs text-rose-600 truncate" title="缺:<%= _finReady.missing_required.join(', ') %>">
+                  缺:<%= _finReady.missing_required.slice(0, 3).join(', ') %><%= _finReady.missing_required.length > 3 ? '…' : '' %>
+                </span>
+              <% } %>
+            </div>
+            <span class="font-mono text-xs text-slate-600">
+              <%= _finReady.sections_done %>/<%= _finReady.sections_total_required %>
+            </span>
+          </div>
+
+          <% const _pv = _finReady.prisma_validated %>
+          <div class="flex items-center justify-between rounded-lg border <%= _pv.ready ? 'border-emerald-200 bg-white' : 'border-rose-200 bg-rose-50/30' %> px-3 py-2">
+            <div class="flex items-center gap-2">
+              <span class="text-base"><%- _rowIcon(_pv.ready) %></span>
+              <span class="font-medium text-slate-800">PRISMA 验证</span>
+              <% if (_pv.total > 0) { %>
+                <span class="text-xs text-slate-500">
+                  partial <%= _pv.partial %> · missing <%= _pv.missing %> · 未验证 <%= _pv.unrated %>
+                </span>
+              <% } else { %>
+                <span class="text-xs text-rose-600">尚未跑验证</span>
+              <% } %>
+            </div>
+            <span class="font-mono text-xs <%= _pv.ready ? 'text-emerald-700' : 'text-rose-600' %>">
+              <%= _pv.covered %>/<%= _pv.total || 27 %> covered
+            </span>
+          </div>
+
+          <div class="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <div class="flex items-center gap-2">
+              <span class="text-base text-slate-500">ⓘ</span>
+              <span class="font-medium text-slate-800">图已上传</span>
+              <span class="text-xs text-slate-500">(可选 — 纯文 review 可为 0)</span>
+            </div>
+            <span class="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">
+              <%= _finReady.figures_uploaded %> 张
+            </span>
+          </div>
+
+          <div class="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <div class="flex items-center gap-2">
+              <span class="text-base text-slate-500">ⓘ</span>
+              <span class="font-medium text-slate-800">Authors 已填</span>
+              <span class="text-xs text-slate-500">
+                (可选 — 不填也能打包,下载后在 .tex 里手改 \author{} 块)
+              </span>
+            </div>
+            <span class="rounded-full <%= _finReady.authors_filled > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600' %> px-2 py-0.5 font-mono text-xs">
+              <%= _finReady.authors_filled %> 人
+            </span>
+          </div>
+
+          <% const _lr = _finReady.latex_rendered %>
+          <div class="flex items-center justify-between rounded-lg border <%= _lr.ready ? 'border-emerald-200 bg-white' : 'border-rose-200 bg-rose-50/30' %> px-3 py-2">
+            <div class="flex items-center gap-2">
+              <span class="text-base"><%- _rowIcon(_lr.ready) %></span>
+              <span class="font-medium text-slate-800">LaTeX 渲染</span>
+              <span class="text-xs <%= _lr.ready ? 'text-emerald-700' : 'text-slate-500' %>">
+                <% if (_lr.last_status) { %>
+                  <%= _lr.last_status %><%= _lr.has_pdf ? ' · pdf ✓' : ' · 无 pdf' %>
+                  <% if (_lr.last_at) { %> · <%= _lr.last_at %><% } %>
+                <% } else { %>
+                  尚未渲染
+                <% } %>
+              </span>
+            </div>
+            <span class="font-mono text-xs text-slate-500">
+              <% if (_lr.ready) { %>就绪<% } else { %>未就绪<% } %>
+            </span>
+          </div>
+        </div>
+      <% } else { %>
+        <p class="mt-3 text-sm text-slate-500">就绪度数据计算失败 — 刷新页面重试,或检查服务端日志。</p>
+      <% } %>
+
+      <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
+        <p class="text-xs text-slate-500">
+          投稿包含 manuscript.md/.pdf/.tex + figures + bib + PRISMA checklist + README。
+          <% if (_lastFinalized) { %>
+            <br><span class="text-emerald-700">上次打包于 <%= new Date(_lastFinalized.ts || _lastFinalized.mtime).toISOString() %></span>
+            ·
+            <a class="text-blue-600 underline" href="/projects/<%= project.id %>/report/finalize/download?ts=<%= _lastFinalized.ts || '' %><%= _lastFinalized.ts ? '' : '&latest=1' %>">
+              ⬇ 下载上次的包
+            </a>
+          <% } %>
+        </p>
+        <div class="flex flex-wrap items-center gap-2">
+          <form method="post" action="/projects/<%= project.id %>/report/finalize" class="inline">
+            <button type="submit"
+                    class="rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm
+                           <%= _finOk ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-slate-300 cursor-not-allowed' %>"
+                    <%= _finOk ? '' : 'disabled' %>>
+              ⬇ 下载完整投稿包
+            </button>
+          </form>
+          <% if (!_finOk) { %>
+            <form method="post" action="/projects/<%= project.id %>/report/finalize?force=1" class="inline"
+                  onsubmit="return confirm('当前还有未通过的检查项 — 确认强制打包?生成的包会带 force 标记。')">
+              <button type="submit"
+                      class="rounded-lg border border-amber-400 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100">
+                ⚠ 强制打包(部分项未通过)
+              </button>
+            </form>
+          <% } %>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- LaTeX 投稿模板:上传 → 选 main.tex → 作者表 → 渲染 PDF        -->
+    <!-- ============================================================ -->
+    <%
+      const _latexTemplate = (typeof latexTemplate !== 'undefined' && latexTemplate && typeof latexTemplate === 'object')
+        ? latexTemplate
+        : { zip_path: null, extracted_at: null, extract_dir: null, main_tex_filename: null, tex_files: [] }
+      const _latexAuthors = (typeof latexAuthors !== 'undefined' && latexAuthors && typeof latexAuthors === 'object')
+        ? latexAuthors
+        : { authors: [], affiliations: [], correspondence_email: '', funding_text: '', acknowledgements_text: '' }
+      const _latexLastRender = (typeof latexLastRender !== 'undefined') ? latexLastRender : null
+      const _latexRenderInFlight = (typeof latexRenderInFlight !== 'undefined') ? !!latexRenderInFlight : false
+      const _latexHasTemplate = !!(_latexTemplate && _latexTemplate.extracted_at)
+      const _latexHasMain = !!(_latexTemplate && _latexTemplate.main_tex_filename)
+      const _latexAuthorsList = Array.isArray(_latexAuthors.authors) ? _latexAuthors.authors : []
+      const _latexAffsList = Array.isArray(_latexAuthors.affiliations) ? _latexAuthors.affiliations : []
+      const _latexTexFiles = Array.isArray(_latexTemplate.tex_files) ? _latexTemplate.tex_files : []
+      const _latexFillSystemVersion = (typeof latexFillSystemVersion !== 'undefined') ? (latexFillSystemVersion || '') : ''
+    %>
+    <div id="latex-card"
+         class="rounded-2xl border <%= _latexRenderInFlight ? 'border-blue-300 bg-blue-50/40' : (_latexLastRender && _latexLastRender.status === 'failed' ? 'border-rose-300 bg-rose-50/30' : (_latexLastRender && _latexLastRender.status === 'success' ? 'border-emerald-200 bg-emerald-50/20' : 'border-amber-200 bg-amber-50/30')) %> p-6">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <h2 class="text-base font-semibold text-slate-900">🎯 LaTeX 投稿模板</h2>
+          <p class="mt-1 text-sm text-slate-600">
+            上传期刊提供的 LaTeX 模板 .zip → 平台用 Opus 4.8 把已写好的初稿章节按模板格式填进去 → 服务器 pdflatex 渲染 PDF 供预览 → 下载 .tex 源 ZIP 直接投稿。
+          </p>
+          <p class="mt-1 text-xs text-slate-500">
+            提示词版本 <code class="font-mono text-[10px]"><%= _latexFillSystemVersion %></code> · 需要 prod 端 TeX Live 2023
+          </p>
+        </div>
+      </div>
+
+      <!-- ① 上传 .zip 模板 -->
+      <div class="mt-5 rounded-xl border border-slate-200 bg-white p-4">
+        <h3 class="text-sm font-semibold text-slate-800">① 上传 LaTeX 模板 .zip</h3>
+        <% if (_latexHasTemplate) { %>
+          <p class="mt-1 text-xs text-emerald-700">✓ 已解压:<%= _latexTexFiles.length %> 个 .tex 文件 · 上次上传 <%= _latexTemplate.extracted_at %> UTC</p>
+        <% } else { %>
+          <p class="mt-1 text-xs text-amber-700">⚠ 还未上传模板;请从 Elsevier / IEEE / Springer 官方下载 LaTeX 投稿包(.zip)</p>
+        <% } %>
+        <form method="post" action="/projects/<%= project.id %>/report/latex/upload"
+              enctype="multipart/form-data" class="mt-3 flex flex-wrap items-center gap-3">
+          <input type="file" name="file" accept=".zip,application/zip" required
+                 class="block w-full max-w-md text-xs text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-violet-600 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-white hover:file:bg-violet-500" />
+          <button type="submit"
+                  class="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-violet-500">
+            <%= _latexHasTemplate ? '↻ 重新上传' : '⬆ 上传模板' %>
+          </button>
+        </form>
+      </div>
+
+      <!-- ② 选 main.tex -->
+      <% if (_latexHasTemplate && _latexTexFiles.length > 0) { %>
+        <div class="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+          <h3 class="text-sm font-semibold text-slate-800">② 选择主 .tex 文件</h3>
+          <p class="mt-1 text-xs text-slate-500">通常是 <code class="font-mono">main.tex</code> / <code class="font-mono">manuscript.tex</code> / <code class="font-mono">elsarticle-template.tex</code>;Opus 会基于这个文件填内容。</p>
+          <form method="post" action="/projects/<%= project.id %>/report/latex/main-entry" class="mt-3 flex flex-wrap items-center gap-3">
+            <select name="main_tex" required
+                    class="rounded-md border border-slate-300 px-3 py-1.5 text-xs">
+              <% _latexTexFiles.forEach(function (f) { %>
+                <option value="<%= f %>" <%= (_latexTemplate.main_tex_filename === f) ? 'selected' : '' %>><%= f %></option>
+              <% }) %>
+            </select>
+            <button type="submit"
+                    class="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-slate-600">保存</button>
+            <% if (_latexHasMain) { %>
+              <span class="text-xs text-emerald-700">✓ 当前:<code class="font-mono"><%= _latexTemplate.main_tex_filename %></code></span>
+            <% } %>
+          </form>
+        </div>
+      <% } %>
+
+      <!-- ③ 作者 / 单位 / 致谢 -->
+      <% if (_latexHasMain) { %>
+        <div class="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+          <h3 class="text-sm font-semibold text-slate-800">③ 作者 / 单位 / 致谢</h3>
+          <p class="mt-1 text-xs text-slate-500">动态增删行;留空字段会被忽略。Opus 会按模板的 \author / \affiliation 宏填进去。</p>
+          <form id="latex-authors-form" method="post"
+                action="/projects/<%= project.id %>/report/latex/authors-form"
+                class="mt-3 space-y-4">
+            <input type="hidden" name="authors_json" id="latex-authors-json" />
+            <input type="hidden" name="affiliations_json" id="latex-affiliations-json" />
+
+            <div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-slate-600 uppercase tracking-wide">Authors</span>
+                <button type="button" id="latex-add-author"
+                        class="rounded-md border border-slate-300 px-2 py-1 text-[11px] hover:bg-slate-50">+ 添加作者</button>
+              </div>
+              <div id="latex-authors-rows" class="mt-2 space-y-2"></div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-slate-600 uppercase tracking-wide">Affiliations</span>
+                <button type="button" id="latex-add-affiliation"
+                        class="rounded-md border border-slate-300 px-2 py-1 text-[11px] hover:bg-slate-50">+ 添加单位</button>
+              </div>
+              <div id="latex-affiliations-rows" class="mt-2 space-y-2"></div>
+            </div>
+
+            <div class="grid gap-3 md:grid-cols-3">
+              <label class="text-[11px] text-slate-600">
+                通讯作者 email
+                <input name="correspondence_email" type="email" value="<%= _latexAuthors.correspondence_email || '' %>"
+                       class="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+              </label>
+              <label class="text-[11px] text-slate-600 md:col-span-2">
+                资助声明(funding)
+                <input name="funding_text" type="text" value="<%= _latexAuthors.funding_text || '' %>"
+                       class="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-xs" />
+              </label>
+            </div>
+            <label class="block text-[11px] text-slate-600">
+              致谢(acknowledgements)
+              <textarea name="acknowledgements_text" rows="2"
+                        class="mt-1 block w-full rounded border border-slate-300 px-2 py-1 text-xs"><%= _latexAuthors.acknowledgements_text || '' %></textarea>
+            </label>
+
+            <div class="flex items-center gap-2">
+              <button type="submit"
+                      class="rounded-lg bg-slate-700 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-slate-600">保存作者表单</button>
+              <span class="text-[11px] text-slate-400">当前:<%= _latexAuthorsList.length %> 位作者 · <%= _latexAffsList.length %> 个单位</span>
+            </div>
+          </form>
+        </div>
+      <% } %>
+
+      <!-- ④a LaTeX overlay 抽取(模板专用 prompt + 格式修复清单)— 2026-05-26 -->
+      <% if (_latexHasMain) {
+           const _lxOv = (typeof latexOverlay !== 'undefined') ? latexOverlay : null
+           const _lxOvAt = (typeof latexOverlayExtractedAt !== 'undefined') ? latexOverlayExtractedAt : null
+           const _lxOvStatus = (typeof latexOverlayExtractStatus !== 'undefined') ? latexOverlayExtractStatus : null
+           const _lxOvError = (typeof latexOverlayExtractError !== 'undefined') ? latexOverlayExtractError : null
+           const _lxOvInFlight = !!(typeof latexOverlayInFlight !== 'undefined' && latexOverlayInFlight)
+      %>
+        <div class="mt-4 rounded-xl border border-violet-200 bg-violet-50/30 p-4">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 class="text-sm font-semibold text-slate-800">④a 🧬 模板专用填充指引(LaTeX overlay)</h3>
+            <% if (_lxOv) { %>
+              <span class="rounded bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                ✓ 已抽取(<%= _lxOv.template_family %> · <%= _lxOv.format_fixes_to_apply.length %> 条修复规则)
+              </span>
+            <% } else if (_lxOvInFlight) { %>
+              <span class="rounded-lg bg-blue-100 px-3 py-1 text-xs font-mono text-blue-800">⏳ Sonnet 抽取中…</span>
+            <% } else { %>
+              <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">未抽 → 渲染走通用规则</span>
+            <% } %>
+          </div>
+          <p class="mt-1 text-xs text-slate-600">
+            Sonnet 读 main.tex → 识别模板族(IEEE / Elsevier / Frontiers / LNCS / ACM / Springer-Nature / generic) +
+            抽 section/author/figure/table 宏 + bib 风格 + 格式修复清单(MD bold/italic 转换 / 表格 booktabs /
+            caption 位置 / 引号风格 / hyperref 转义 / equation 模式等)。下一步 ④ 渲染 PDF 时,Opus 严格按这个
+            overlay 填 + 顺手修常见格式问题。<strong>1-3 min,异步</strong>。
+          </p>
+
+          <% if (_lxOv) { %>
+            <details class="mt-2 rounded border border-violet-200 bg-white">
+              <summary class="cursor-pointer px-3 py-1.5 text-[11px] text-violet-800 hover:bg-violet-50">查看抽取结果 ▾</summary>
+              <div class="px-3 py-2 text-[11px] space-y-1.5">
+                <p><strong>模板族:</strong> <code class="font-mono"><%= _lxOv.template_family %></code></p>
+                <p><strong>Documentclass:</strong> <code class="font-mono text-[10px]"><%= (_lxOv.documentclass || '?').slice(0, 100) %></code></p>
+                <% if (_lxOv.author_pattern && _lxOv.author_pattern.macro_style) { %>
+                  <p><strong>作者宏风格:</strong> <%= _lxOv.author_pattern.macro_style %></p>
+                <% } %>
+                <p><strong>图 caption 位置:</strong> <%= _lxOv.figure_caption_position %> · <strong>表 caption 位置:</strong> <%= _lxOv.table_caption_position %></p>
+                <p><strong>booktabs:</strong> <%= _lxOv.uses_booktabs ? '✓ 用 toprule/midrule/bottomrule' : '✗ 用 \\hline' %></p>
+                <% if (_lxOv.bib_style_hint && _lxOv.bib_style_hint.style_name) { %>
+                  <p><strong>引文 style:</strong> <code class="font-mono"><%= _lxOv.bib_style_hint.style_name %></code></p>
+                <% } %>
+                <% if (Array.isArray(_lxOv.template_quirks) && _lxOv.template_quirks.length) { %>
+                  <p class="mt-2"><strong>模板特殊约定 (<%= _lxOv.template_quirks.length %>):</strong></p>
+                  <ul class="ml-4 list-disc text-slate-700">
+                    <% _lxOv.template_quirks.slice(0, 6).forEach(function(q) { %>
+                      <li><%= q %></li>
+                    <% }) %>
+                  </ul>
+                <% } %>
+                <p class="mt-2"><strong>格式修复规则 (<%= _lxOv.format_fixes_to_apply.length %>) — 渲染时 Opus 会全部应用:</strong></p>
+                <ol class="ml-4 list-decimal text-slate-700">
+                  <% _lxOv.format_fixes_to_apply.slice(0, 12).forEach(function(r) { %>
+                    <li><%= r %></li>
+                  <% }) %>
+                </ol>
+                <% if (_lxOv.confidence_summary) { %>
+                  <p class="mt-2 text-slate-500 italic"><%= _lxOv.confidence_summary %></p>
+                <% } %>
+                <% if (_lxOvAt) { %>
+                  <p class="mt-2 text-[10px] text-slate-400">抽取时间:<%= _lxOvAt %> UTC</p>
+                <% } %>
+              </div>
+            </details>
+          <% } %>
+
+          <% if (_lxOvStatus === 'failed' && _lxOvError && !_lxOvInFlight) { %>
+            <p class="mt-2 text-[11px] text-rose-700" title="<%= _lxOvError %>">⚠ 上次抽取失败:<%= String(_lxOvError).slice(0, 120) %></p>
+          <% } %>
+
+          <% if (!_lxOvInFlight) { %>
+            <form method="post" action="/projects/<%= project.id %>/report/latex/overlay-extract" class="mt-3 inline">
+              <button type="submit"
+                      class="rounded-lg <%= _lxOv ? 'bg-violet-100 text-violet-800 hover:bg-violet-200 border border-violet-300' : 'bg-violet-600 text-white hover:bg-violet-500 shadow-sm' %> px-3 py-1.5 text-xs font-medium">
+                <%= _lxOv ? '↻ 重新抽取 overlay' : '🧬 抽取 LaTeX 模板规范(Sonnet, 1-3 min)' %>
+              </button>
+            </form>
+          <% } %>
+        </div>
+      <% } %>
+
+      <!-- ④ 渲染 PDF -->
+      <% if (_latexHasMain) { %>
+        <div class="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+          <h3 class="text-sm font-semibold text-slate-800">④ 渲染 PDF 预览</h3>
+          <p class="mt-1 text-xs text-slate-500">
+            Opus 4.8 把 draft_sections 按模板格式填进 main.tex,服务器跑 latexmk(120s 超时)→ PDF。整个流程 3-8 min。
+            <% if (typeof latexOverlay !== 'undefined' && latexOverlay) { %>
+              <span class="text-violet-700">✓ 将按 ④a 抽取的 overlay 严格执行 + 修常见格式问题</span>
+            <% } else { %>
+              <span class="text-amber-700">⚠ 未抽 overlay → 走通用 LaTeX 规则。建议先点上方「🧬 抽取 LaTeX 模板规范」一次,质量更高</span>
+            <% } %>
+          </p>
+
+          <% if (_latexRenderInFlight) { %>
+            <div id="latex-render-progress"
+                 class="mt-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3"
+                 data-render-id="<%= _latexLastRender.id %>"
+                 data-started="<%= _latexLastRender.started_at %>">
+              <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 animate-spin text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 008-8h-4a4 4 0 01-4 4z"></path>
+                </svg>
+                <span class="text-xs text-blue-800">渲染中…(<span id="latex-render-elapsed">0</span>s,可关页面)</span>
+              </div>
+              <p class="mt-1 text-[11px] text-blue-600">render_id = <code class="font-mono"><%= _latexLastRender.id %></code></p>
+            </div>
+          <% } else { %>
+            <form method="post" action="/projects/<%= project.id %>/report/latex/render" class="mt-3"
+                  onsubmit="return confirm('调用 Opus 4.8 + 跑 pdflatex(~3-8 min)。是否继续?')">
+              <button type="submit"
+                      class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-emerald-500">
+                <%= _latexLastRender ? '↻ 重新渲染' : '⚡ 渲染 PDF 预览' %>
+              </button>
+            </form>
+          <% } %>
+
+          <% if (_latexLastRender) { %>
+            <div class="mt-4 border-t border-slate-100 pt-4">
+              <% if (_latexLastRender.status === 'success' && !_latexRenderInFlight) { %>
+                <p class="text-xs text-emerald-700">
+                  ✓ 上次渲染成功 · <%= _latexLastRender.finished_at %> UTC
+                  <% if (_latexLastRender.llm_usage_log_id) { %> · usage_log #<%= _latexLastRender.llm_usage_log_id %><% } %>
+                </p>
+                <div class="mt-3 flex flex-wrap items-center gap-2">
+                  <a href="/projects/<%= project.id %>/report/latex/render/<%= _latexLastRender.id %>/source.zip"
+                     class="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">⬇ 下载 .tex 源 zip</a>
+                  <a href="/projects/<%= project.id %>/report/latex/render/<%= _latexLastRender.id %>/pdf" target="_blank"
+                     class="rounded-md border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50">↗ 在新窗口打开 PDF</a>
+                </div>
+                <iframe src="/projects/<%= project.id %>/report/latex/render/<%= _latexLastRender.id %>/pdf"
+                        class="mt-3 w-full rounded border border-slate-200" style="height: 800px;"
+                        title="LaTeX render preview"></iframe>
+              <% } else if (_latexLastRender.status === 'failed') { %>
+                <p class="text-xs font-medium text-rose-800">⚠ 上次渲染失败 · <%= _latexLastRender.finished_at %> UTC</p>
+                <% if (_latexLastRender.error) { %>
+                  <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded border border-rose-200 bg-rose-50 p-2 text-[10px] text-rose-900"><%= _latexLastRender.error.slice(-2000) %></pre>
+                <% } %>
+                <% if (_latexLastRender.llm_usage_log_id) { %>
+                  <p class="mt-1 text-[11px] text-slate-500">LLM usage log #<%= _latexLastRender.llm_usage_log_id %>(供超管诊断)</p>
+                <% } %>
+              <% } else if (_latexLastRender.status === 'aborted_by_restart') { %>
+                <p class="text-xs text-amber-700">⚠ 上次渲染被服务重启中断 · <%= _latexLastRender.finished_at %> UTC · 直接重跑即可</p>
+              <% } %>
+            </div>
+          <% } %>
+        </div>
+      <% } %>
+    </div>
+
+    <!-- 动态作者表 + 渲染轮询(从 report.ejs 同段迁过来) -->
+    <script>
+    (function () {
+      var initialAuthors = <%- JSON.stringify(_latexAuthorsList) %>
+      var initialAffs = <%- JSON.stringify(_latexAffsList) %>
+      var authorsBox = document.getElementById('latex-authors-rows')
+      var affsBox = document.getElementById('latex-affiliations-rows')
+      if (!authorsBox || !affsBox) return
+
+      function renderAuthor(a) {
+        var row = document.createElement('div')
+        row.className = 'flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-slate-50 p-2'
+        row.dataset.role = 'author-row'
+        row.innerHTML =
+          '<input data-k="first" placeholder="First name" value="' + (a.first || '').replace(/"/g, '&quot;') + '" class="rounded border border-slate-300 px-2 py-1 text-xs w-28" />' +
+          '<input data-k="last" placeholder="Last name" value="' + (a.last || '').replace(/"/g, '&quot;') + '" class="rounded border border-slate-300 px-2 py-1 text-xs w-32" />' +
+          '<input data-k="email" placeholder="email" value="' + (a.email || '').replace(/"/g, '&quot;') + '" class="rounded border border-slate-300 px-2 py-1 text-xs w-44" />' +
+          '<input data-k="orcid" placeholder="ORCID" value="' + (a.orcid || '').replace(/"/g, '&quot;') + '" class="rounded border border-slate-300 px-2 py-1 text-xs w-36" />' +
+          '<input data-k="affiliation_id" placeholder="affiliation_id" value="' + (a.affiliation_id || '').replace(/"/g, '&quot;') + '" class="rounded border border-slate-300 px-2 py-1 text-xs w-28" />' +
+          '<button type="button" data-role="del" class="rounded border border-rose-300 px-2 py-1 text-[10px] text-rose-700 hover:bg-rose-50">删</button>'
+        row.querySelector('[data-role="del"]').addEventListener('click', function () { row.remove() })
+        return row
+      }
+      function renderAff(a) {
+        var row = document.createElement('div')
+        row.className = 'flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-slate-50 p-2'
+        row.dataset.role = 'aff-row'
+        row.innerHTML =
+          '<input data-k="id" placeholder="id (a/b/1/...)" value="' + (a.id || '').replace(/"/g, '&quot;') + '" class="rounded border border-slate-300 px-2 py-1 text-xs w-24" />' +
+          '<input data-k="name" placeholder="Institution name" value="' + (a.name || '').replace(/"/g, '&quot;') + '" class="rounded border border-slate-300 px-2 py-1 text-xs flex-1 min-w-[180px]" />' +
+          '<input data-k="department" placeholder="Department" value="' + (a.department || '').replace(/"/g, '&quot;') + '" class="rounded border border-slate-300 px-2 py-1 text-xs flex-1 min-w-[140px]" />' +
+          '<input data-k="address" placeholder="Address" value="' + (a.address || '').replace(/"/g, '&quot;') + '" class="rounded border border-slate-300 px-2 py-1 text-xs flex-1 min-w-[160px]" />' +
+          '<button type="button" data-role="del" class="rounded border border-rose-300 px-2 py-1 text-[10px] text-rose-700 hover:bg-rose-50">删</button>'
+        row.querySelector('[data-role="del"]').addEventListener('click', function () { row.remove() })
+        return row
+      }
+
+      if (initialAuthors.length === 0) initialAuthors = [{ first: '', last: '', email: '', orcid: '', affiliation_id: 'a' }]
+      if (initialAffs.length === 0) initialAffs = [{ id: 'a', name: '', department: '', address: '' }]
+      initialAuthors.forEach(function (a) { authorsBox.appendChild(renderAuthor(a)) })
+      initialAffs.forEach(function (a) { affsBox.appendChild(renderAff(a)) })
+
+      var addAuthorBtn = document.getElementById('latex-add-author')
+      var addAffBtn = document.getElementById('latex-add-affiliation')
+      if (addAuthorBtn) addAuthorBtn.addEventListener('click', function () { authorsBox.appendChild(renderAuthor({})) })
+      if (addAffBtn) addAffBtn.addEventListener('click', function () { affsBox.appendChild(renderAff({})) })
+
+      function rowToObj(row) {
+        var out = {}
+        row.querySelectorAll('input[data-k]').forEach(function (inp) {
+          out[inp.getAttribute('data-k')] = inp.value.trim()
+        })
+        return out
+      }
+      var form = document.getElementById('latex-authors-form')
+      if (form) {
+        form.addEventListener('submit', function () {
+          var authors = []
+          authorsBox.querySelectorAll('[data-role="author-row"]').forEach(function (row) {
+            var o = rowToObj(row)
+            if (o.first || o.last) authors.push(o)
+          })
+          var affs = []
+          affsBox.querySelectorAll('[data-role="aff-row"]').forEach(function (row) {
+            var o = rowToObj(row)
+            if (o.id || o.name) affs.push(o)
+          })
+          document.getElementById('latex-authors-json').value = JSON.stringify(authors)
+          document.getElementById('latex-affiliations-json').value = JSON.stringify(affs)
+        })
+      }
+
+      var renderProg = document.getElementById('latex-render-progress')
+      if (renderProg) {
+        var renderId = renderProg.getAttribute('data-render-id')
+        var startedISO = renderProg.getAttribute('data-started') || ''
+        var startedMs = startedISO ? Date.parse(String(startedISO).replace(' ', 'T') + (String(startedISO).indexOf('Z') < 0 ? 'Z' : '')) : Date.now()
+        if (!isFinite(startedMs)) startedMs = Date.now()
+        var elEl = document.getElementById('latex-render-elapsed')
+        function tickLatex() {
+          var s = Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
+          if (elEl) elEl.textContent = s
+        }
+        tickLatex()
+        var tickInt = setInterval(tickLatex, 1000)
+
+        var projectIdJs = <%- JSON.stringify(project.id) %>
+        function pollLatex() {
+          fetch('/projects/' + projectIdJs + '/report/latex/render/' + renderId + '/status.json',
+                { headers: { 'X-Requested-With': 'fetch' } })
+            .then(function (r) { return r.json() })
+            .then(function (j) {
+              if (!j || !j.ok || !j.render) return
+              if (!j.render.in_flight) {
+                clearInterval(tickInt)
+                clearInterval(pollInt)
+                window.location.reload()
+              }
+            })
+            .catch(function () {})
+        }
+        var pollInt = setInterval(pollLatex, 8000)
+        setTimeout(pollLatex, 2000)
+      }
+    })()
+    </script>
+
+    <div class="flex justify-between text-sm">
+      <a href="/projects/<%= project.id %>/report" class="rounded-lg border border-slate-300 px-3 py-2 text-slate-700 hover:bg-slate-50">← 返回 Step 8 撰写</a>
+      <a href="/projects/<%= project.id %>" class="rounded-lg bg-slate-900 px-3 py-2 text-white hover:bg-slate-700">返回项目主页</a>
+    </div>
+  </section>
+</div>
+
+<%- include('../partials/footer') %>

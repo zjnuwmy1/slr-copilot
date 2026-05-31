@@ -169,7 +169,7 @@ export function clearDerivedData(db, projectId, { actorUserId, req = null } = {}
         db.prepare(`UPDATE projects SET matrix_ai_customized_at_version = NULL WHERE id = ?`).run(projectId)
       } catch (e) { /* 老库可能没这列 */ }
       // project 状态回退到 protocol_approved(刚审批新协议)
-      db.prepare(`UPDATE projects SET status = 'protocol_approved', updated_at = datetime('now') WHERE id = ?`).run(projectId)
+      db.prepare(`UPDATE projects SET status = 'protocol_approved', updated_at = datetime('now', '+8 hours') WHERE id = ?`).run(projectId)
     })()
   } catch (e) {
     return {

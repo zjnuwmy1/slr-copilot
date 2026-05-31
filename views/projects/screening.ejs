@@ -268,7 +268,7 @@
           </form>
           <p class="mt-2 text-[11px] text-slate-500 leading-relaxed">
             5-15% = 主题细分严控  ·  <strong>15-25%</strong> = 典型 SLR  ·  25-40% = 较宽 / scoping 倾向。
-            目标只影响 LLM 对"勉强相关"边缘 case 的方向倾斜,**不会改判**客观 exclude(命中排除标准 / 类型不符 / 无概念重叠)。
+            目标只影响 LLM 对"勉强相关"边缘 case 的方向倾斜,<strong>不会改判</strong>客观 exclude(命中排除标准 / 类型不符 / 无概念重叠)。
           </p>
         </div>
 
@@ -485,13 +485,20 @@
 
             <header class="flex items-start justify-between gap-4">
               <div class="min-w-0 flex-1">
-                <!-- 第 1 行:序号 + 年 + 期刊 + 缺摘要警告 -->
+                <!-- 第 1 行:序号 + 年 + 期刊 + 缺摘要警告 + (M26) post-RoB 排除徽章 -->
                 <div class="flex items-center gap-2 text-xs">
                   <span class="text-slate-400">#<%= idx + 1 %></span>
                   <% if (r.year) { %><span class="font-mono text-slate-500"><%= r.year %></span><% } %>
                   <% if (r.journal) { %><span class="truncate text-slate-500"><%= r.journal %></span><% } %>
                   <% if (!r.has_abstract) { %>
                     <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">缺摘要</span>
+                  <% } %>
+                  <% if (r.rob_excluded_at) { %>
+                    <a href="/projects/<%= project.id %>/rob#<%= r.id %>"
+                       class="inline-flex items-center gap-1 rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 text-[10px] font-medium text-orange-800 hover:bg-orange-100"
+                       title="Step 5 RoB 后标记不纳入 synthesis(原因:<%= r.rob_excluded_reason || '' %>)">
+                      🚫 post-RoB 不纳入
+                    </a>
                   <% } %>
                 </div>
 

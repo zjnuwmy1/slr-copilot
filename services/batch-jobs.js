@@ -42,7 +42,7 @@ export function startJob(db, { projectId, userId, kind, total = 0, initial = {} 
   const bootId = process.env.SLR_BOOT_ID || null
   db.prepare(
     `INSERT INTO batch_jobs (id, project_id, user_id, kind, status, pid, boot_id, total, done, failed, progress_json, started_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, datetime('now'))`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, datetime('now', '+8 hours'))`
   ).run(id, projectId, userId, kind, ACTIVE_STATUS, process.pid, bootId, total, progress)
   return { id, project_id: projectId, user_id: userId, kind, status: ACTIVE_STATUS, total, done: 0, failed: 0 }
 }
@@ -88,7 +88,7 @@ export function finishJob(db, jobId, { status = 'finished', errorMessage = null 
   db.prepare(
     `UPDATE batch_jobs
         SET status = ?,
-            finished_at = datetime('now'),
+            finished_at = datetime('now', '+8 hours'),
             error_message = COALESCE(?, error_message),
             last_error = COALESCE(?, last_error),
             can_retry = ?

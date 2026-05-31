@@ -1,80 +1,1042 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
 <%- include('partials/project-header', { project, currentStep: 'rob' }) %>
 
-<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
-  <%- include('partials/stepper', { project, progress, currentStep: 'rob' }) %>
+<%
+  // ---- 视图辅助 ----
+  function ratingColor(rating, tool) {
+    if (!rating) return 'bg-slate-100 text-slate-500'
+    if (tool === 'mmat') {
+      // "N/5" 格式或 'screening_failed'
+      if (rating === 'screening_failed') return 'bg-rose-100 text-rose-800 border-rose-200'
+      const m = String(rating).match(/^(\d+)\/(\d+)$/)
+      if (m) {
+        const r = parseInt(m[1], 10) / parseInt(m[2], 10)
+        if (r >= 0.8) return 'bg-emerald-100 text-emerald-800 border-emerald-200'
+        if (r >= 0.4) return 'bg-amber-100 text-amber-800 border-amber-200'
+        return 'bg-rose-100 text-rose-800 border-rose-200'
+      }
+      return 'bg-slate-100 text-slate-700'
+    }
+    if (tool === 'nos') {
+      if (rating === 'high_quality') return 'bg-emerald-100 text-emerald-800 border-emerald-200'
+      if (rating === 'moderate_quality') return 'bg-amber-100 text-amber-800 border-amber-200'
+      return 'bg-rose-100 text-rose-800 border-rose-200'
+    }
+    if (tool === 'jbi_cs') {
+      if (rating === 'high') return 'bg-emerald-100 text-emerald-800 border-emerald-200'
+      if (rating === 'moderate') return 'bg-amber-100 text-amber-800 border-amber-200'
+      return 'bg-rose-100 text-rose-800 border-rose-200'
+    }
+    // RoB 2 / ROBINS-I
+    if (rating === 'low') return 'bg-emerald-100 text-emerald-800 border-emerald-200'
+    if (rating === 'some_concerns' || rating === 'moderate') return 'bg-amber-100 text-amber-800 border-amber-200'
+    if (rating === 'high' || rating === 'serious' || rating === 'critical') return 'bg-rose-100 text-rose-800 border-rose-200'
+    if (rating === 'no_information') return 'bg-slate-100 text-slate-600'
+    return 'bg-slate-100 text-slate-700'
+  }
+  function domainCellColor(judgment) {
+    if (!judgment) return 'bg-slate-50 text-slate-300'
+    if (['low','yes','star'].includes(judgment)) return 'bg-emerald-100 text-emerald-700'
+    if (['some_concerns','moderate','cant_tell','unclear'].includes(judgment)) return 'bg-amber-100 text-amber-700'
+    if (['high','serious','critical','no'].includes(judgment)) return 'bg-rose-100 text-rose-700'
+    if (judgment === 'no_information') return 'bg-slate-200 text-slate-600'
+    if (['na','no_star'].includes(judgment)) return 'bg-slate-100 text-slate-400'
+    return 'bg-slate-50 text-slate-500'
+  }
+  // 把 overall_rating 折叠到 3 个 valence 类:'good' / 'middle' / 'bad' / 'unrated'
+  function ratingValence(rating, tool) {
+    if (!rating) return 'unrated'
+    if (tool === 'mmat') {
+      if (rating === 'screening_failed') return 'bad'
+      const m = String(rating).match(/^(\d+)\/(\d+)$/)
+      if (m) {
+        const r = parseInt(m[1], 10) / parseInt(m[2], 10)
+        if (r >= 0.8) return 'good'
+        if (r >= 0.4) return 'middle'
+        return 'bad'
+      }
+      return 'unrated'
+    }
+    if (tool === 'nos') {
+      if (rating === 'high_quality') return 'good'
+      if (rating === 'moderate_quality') return 'middle'
+      return 'bad'
+    }
+    if (tool === 'jbi_cs') {
+      if (rating === 'high') return 'good'
+      if (rating === 'moderate') return 'middle'
+      return 'bad'
+    }
+    // RoB 2 / ROBINS-I
+    if (rating === 'low') return 'good'
+    if (rating === 'some_concerns' || rating === 'moderate') return 'middle'
+    if (rating === 'high' || rating === 'serious' || rating === 'critical') return 'bad'
+    return 'unrated'
+  }
+  // 计算 3 桶分布(供顶部统计卡)
+  const _valenceCounts = { good: 0, middle: 0, bad: 0, unrated: 0 }
+  if (Array.isArray(records)) {
+    for (const r of records) {
+      const v = ratingValence(r.rob && r.rob.overall_rating, r.effective_tool)
+      _valenceCounts[v] = (_valenceCounts[v] || 0) + 1
+    }
+  }
+  const _valenceTotal = (records || []).length || 1
+  const _valencePct = {
+    good: Math.round(_valenceCounts.good / _valenceTotal * 100),
+    middle: Math.round(_valenceCounts.middle / _valenceTotal * 100),
+    bad: Math.round(_valenceCounts.bad / _valenceTotal * 100),
+    unrated: Math.round(_valenceCounts.unrated / _valenceTotal * 100),
+  }
 
-  <section class="space-y-6">
-    <%- include('partials/step-banner', {
-      stepNum: 5,
-      stepTitle: '偏倚风险评估',
-      stepIntro: '评估每篇纳入研究的方法学质量与偏倚风险 —— 低质量研究不应与高质量 RCT 同等权重。站内 RoB 2 / ROBINS-I 工具开发中,当前可在外部完成评估后回到本步标记完成。',
-      prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
-    }) %>
+  function shortJudgment(j) {
+    if (!j) return '—'
+    const map = { low: '✓', some_concerns: '?', moderate: '?', high: '✗', serious: '✗', critical: '✗✗',
+                  no_information: '?', na: '—', yes: '✓', no: '✗', cant_tell: '?', unclear: '?',
+                  star: '★', no_star: '☆' }
+    return map[j] || j
+  }
+  const protocolApproved = !!protocol
+  const overlayHas = !!overlay
+  const batchRunning = batchJob && batchJob.status === 'running'
+  const batchDone = batchJob && batchJob.status === 'finished'
+%>
 
-    <% const robDone = project.rob_marked_done_at %>
-    <div class="rounded-2xl border <%= robDone ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200 bg-white' %> p-8">
-      <div class="flex flex-wrap items-start gap-6">
-        <div class="flex-1 min-w-0">
-          <h2 class="text-lg font-semibold text-slate-900">
-            偏倚风险评估
-            <% if (robDone) { %>
-              <span class="ml-2 rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">✓ 已外部完成</span>
-            <% } %>
-          </h2>
-          <p class="mt-2 text-sm leading-relaxed text-slate-600">
-            站内的偏倚风险工具暂未开放(Phase 7+ 接入 RoB 2 / ROBINS-I)。当前可以:
-          </p>
-          <ul class="mt-2 space-y-1 text-sm text-slate-600 list-disc pl-5">
-            <li>在 <a href="/projects/<%= project.id %>/synthesis" class="text-slate-900 underline hover:no-underline">综合</a> 阶段把"研究质量"作为主题维度讨论;</li>
-            <li>在 <a href="/projects/<%= project.id %>/certainty" class="text-slate-900 underline hover:no-underline">证据强度</a> 步骤的 risk_of_bias 维度里填整体评级 + 理由;</li>
-            <li>在外部用 Cochrane RoB 2 / ROBINS-I / Newcastle-Ottawa 完成评估后,在最终报告的"方法"章节注明评估方式与结论。</li>
-          </ul>
+<div class="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+  <%- include('partials/stepper', { project, progress: progress || null, currentStep: 'rob' }) %>
 
-          <!-- 自报告"已外部完成" — 让 8/8 进度可达 -->
-          <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-            <% if (robDone) { %>
-              <p class="text-xs text-emerald-800">
-                ✓ 你已于 <code class="font-mono"><%= robDone %></code> 标记为外部完成。stepper 上 Step 5 已计入进度。
-              </p>
-              <form method="post" action="/projects/<%= project.id %>/rob/unmark" class="mt-2 inline"
-                    onsubmit="return confirm('取消'已外部完成'标记?Step 5 进度会变回未开始。');">
-                <button type="submit" class="text-xs text-slate-500 underline hover:text-slate-700">↻ 取消标记</button>
-              </form>
-            <% } else { %>
-              <p class="text-xs text-slate-600">
-                完成外部 RoB 评估后,标记此步骤,stepper 进度才能到 8/8。
-              </p>
-              <form method="post" action="/projects/<%= project.id %>/rob/mark-done" class="mt-2 inline">
-                <button type="submit" class="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500">
-                  ✓ 我已在外部完成 RoB
-                </button>
-              </form>
-            <% } %>
+  <section class="space-y-6 min-w-0">
+    <% if (typeof stepItems !== 'undefined' && stepItems && stepItems.length) { %>
+      <%- include('partials/step-banner', {
+        stepNum: 5,
+        stepTitle: '偏倚风险评估',
+        stepIntro: '按 study_design 自动路由到 5 套发表级 RoB 工具(Cochrane RoB 2 / ROBINS-I / NOS / JBI-CS / MMAT 2018),Sonnet 4.6 + 项目专用 overlay 跑批,每个 domain 必须给 verbatim quote 才算数。',
+        prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
+      }) %>
+    <% } else { %>
+      <div class="rounded-2xl border border-slate-200 bg-white p-5">
+        <h1 class="text-xl font-semibold text-slate-900">Step 5 · 偏倚风险评估</h1>
+        <p class="mt-1 text-sm text-slate-600">按 study_design 自动路由到 5 套发表级 RoB 工具(Cochrane RoB 2 / ROBINS-I / NOS / JBI-CS / MMAT 2018),Sonnet 4.6 + 项目专用 overlay 跑批,每个 domain 必须给 verbatim quote 才算数。</p>
+      </div>
+    <% } %>
+
+    <!-- ============================================================ -->
+    <!-- Card 1:进度概览 + 工具路由 + 导出 -->
+    <!-- ============================================================ -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <div class="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 class="text-base font-semibold text-slate-900">📋 评估进度</h2>
+        <p class="text-sm text-slate-600">
+          已评估 <strong class="text-slate-900"><%= totalAssessed %></strong> / <%= totalInclude %> 篇
+          <span class="ml-2 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700"><%= progressPct %>%</span>
+        </p>
+      </div>
+
+      <!-- 进度条 -->
+      <div class="mt-3 h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+        <div class="h-full bg-emerald-500 transition-all" style="width: <%= progressPct %>%"></div>
+      </div>
+
+      <!-- 3 质量等级统计卡(顶部一眼看完成体感)-->
+      <% if (totalAssessed > 0) { %>
+      <div class="mt-5">
+        <p class="text-xs font-medium uppercase tracking-wide text-slate-400 mb-2">按质量等级(跨工具汇总)</p>
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div class="rounded-lg border-2 border-emerald-200 bg-emerald-50/60 p-3">
+            <p class="text-[11px] uppercase tracking-wide text-emerald-700 font-medium">✓ 好</p>
+            <p class="mt-1 text-2xl font-bold text-emerald-900 leading-none"><%= _valenceCounts.good %></p>
+            <p class="mt-1 text-[10px] text-emerald-600"><%= _valencePct.good %>% · 低偏倚 / 高质量</p>
+          </div>
+          <div class="rounded-lg border-2 border-amber-200 bg-amber-50/60 p-3">
+            <p class="text-[11px] uppercase tracking-wide text-amber-700 font-medium">? 中</p>
+            <p class="mt-1 text-2xl font-bold text-amber-900 leading-none"><%= _valenceCounts.middle %></p>
+            <p class="mt-1 text-[10px] text-amber-600"><%= _valencePct.middle %>% · some concerns / moderate</p>
+          </div>
+          <div class="rounded-lg border-2 border-rose-200 bg-rose-50/60 p-3">
+            <p class="text-[11px] uppercase tracking-wide text-rose-700 font-medium">✗ 差</p>
+            <p class="mt-1 text-2xl font-bold text-rose-900 leading-none"><%= _valenceCounts.bad %></p>
+            <p class="mt-1 text-[10px] text-rose-600"><%= _valencePct.bad %>% · 高偏倚 / 低质量</p>
+          </div>
+          <div class="rounded-lg border border-slate-200 bg-slate-50/40 p-3">
+            <p class="text-[11px] uppercase tracking-wide text-slate-500 font-medium">— 未评估</p>
+            <p class="mt-1 text-2xl font-bold text-slate-700 leading-none"><%= _valenceCounts.unrated %></p>
+            <p class="mt-1 text-[10px] text-slate-400"><%= _valencePct.unrated %>% · 未跑 / parse 失败</p>
           </div>
         </div>
-        <div class="flex flex-none flex-col gap-2">
-          <a href="/projects/<%= project.id %>/matrix" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 transition">← 返回矩阵</a>
-          <a href="/projects/<%= project.id %>/synthesis" class="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-700 transition">下一步:综合 →</a>
+      </div>
+      <% } %>
+
+      <!-- 5 tool stats 横条 -->
+      <div class="mt-5">
+        <p class="text-xs font-medium uppercase tracking-wide text-slate-400 mb-2">按 study_design 自动路由</p>
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <% for (const [tool, meta] of Object.entries(toolMeta)) { %>
+            <div class="rounded-lg border border-slate-200 bg-slate-50/40 p-3">
+              <p class="text-[11px] uppercase tracking-wide text-slate-500"><%= meta.label %></p>
+              <p class="mt-1 text-2xl font-bold text-slate-900 leading-none"><%= toolStats[tool] || 0 %></p>
+              <p class="mt-1 text-[10px] text-slate-400">篇</p>
+            </div>
+          <% } %>
         </div>
+      </div>
+
+      <% if (typeof postRobExcludedCount !== 'undefined' && postRobExcludedCount > 0) { %>
+      <div class="mt-3 rounded-lg border border-orange-200 bg-orange-50/40 p-2 text-xs">
+        <p class="text-orange-900">
+          🚫 <strong><%= postRobExcludedCount %></strong> 篇已标记 post-RoB 排除(基于全文 RoB 判方法学不适合,如纯理论 / 无实证 / 全 no_information)
+          <span class="text-orange-700">— 不会带入 Step 6 / 7 / 8;但仍在 Step 3 include 计数里(诚实保留)</span>
+        </p>
+      </div>
+      <% } %>
+
+      <!-- 导出 -->
+      <div class="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+        <a href="/projects/<%= project.id %>/rob/export.xlsx"
+           class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 transition">⬇ robvis CSV (xlsx)</a>
+        <a href="/projects/<%= project.id %>/rob/export.json"
+           class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 transition">⬇ JSON</a>
       </div>
     </div>
 
-    <div class="rounded-2xl border border-slate-200 bg-white p-6">
-      <h3 class="text-sm font-medium uppercase text-slate-400">本步骤覆盖的 PRISMA 2020 清单项</h3>
-      <ul class="mt-3 space-y-3 text-sm">
-        <% stepItems.forEach(it => { %>
-          <li class="flex gap-3">
-            <span class="flex-none rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">#<%= it.item_number %></span>
-            <div class="min-w-0">
-              <p class="font-medium text-slate-800"><%= it.topic %> <span class="text-xs font-normal text-slate-400">· <%= it.section %></span></p>
-              <p class="mt-0.5 text-xs text-slate-500"><%= it.recommendation %></p>
-            </div>
-          </li>
-        <% }) %>
-      </ul>
+    <!-- ============================================================ -->
+    <!-- Card 2:Overlay(独立卡)-->
+    <!-- ============================================================ -->
+    <div class="rounded-2xl border <%= overlayHas && !overlayStale ? 'border-emerald-200 bg-emerald-50/30' : (overlayInFlight ? 'border-blue-200 bg-blue-50/30' : 'border-amber-200 bg-amber-50/30') %> p-6">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <h2 class="text-base font-semibold text-slate-900">⚙️ 项目专用 overlay</h2>
+            <% if (overlayHas && !overlayStale) { %>
+              <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">✓ 协议 v<%= overlayAtVersion %></span>
+            <% } else if (overlayHas && overlayStale) { %>
+              <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">⚠ 协议已升级</span>
+            <% } else { %>
+              <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">未生成</span>
+            <% } %>
+          </div>
+          <p class="mt-2 text-sm text-slate-600 leading-relaxed">
+            5 套 RoB 工具的项目特异性指引(MAI/MSLQ 自报告 ceiling、Design Thinking phase 测量、GenAI prompt 一致性等),Opus 4.8 + ultrathink 一次性生成。每协议版本生成 1 次。
+          </p>
+        </div>
+        <div class="flex flex-none flex-col items-end gap-2">
+          <% if (overlayInFlight) { %>
+            <span id="overlay-status" class="rounded-lg bg-blue-100 px-3 py-2 text-xs font-mono text-blue-800" data-started="<%= overlayLockStarted %>">
+              ⏳ 生成中
+            </span>
+          <% } else if (!protocolApproved) { %>
+            <span class="text-xs text-rose-700">先审批协议</span>
+          <% } else if (overlayHas && !overlayStale) { %>
+            <!-- 协议没升级 + overlay 已生成 → 按钮锁死(协议变了才解锁,跟 matrix optimize 同模式)-->
+            <span class="text-xs text-emerald-700 text-right max-w-[220px]">
+              基于协议 v<%= overlayAtVersion %> 已生成<br>
+              <span class="text-slate-400">改协议后才能重新生成</span>
+            </span>
+          <% } else { %>
+            <!-- 没生成过 OR 协议升级了 → 显示按钮 -->
+            <form id="overlay-form" method="post" action="/projects/<%= project.id %>/rob/optimize-overlay">
+              <button type="submit" id="overlay-btn"
+                      class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-600 transition disabled:opacity-60"
+                      title="Opus 4.8 + ultrathink, 5-8 分钟">
+                <%= overlayHas ? '↻ 重新生成(协议已升级)' : '⚙️ 生成 overlay' %>
+              </button>
+            </form>
+          <% } %>
+        </div>
+      </div>
+
+      <% if (overlayHas && !overlayStale) { %>
+        <details class="mt-4 text-xs">
+          <summary class="cursor-pointer text-emerald-800 hover:text-emerald-900 font-medium">查看 5 套 overlay 内容 ▾</summary>
+          <div class="mt-3 grid gap-2 sm:grid-cols-2">
+            <% for (const [tool, meta] of Object.entries(toolMeta)) { %>
+              <div class="rounded-lg border border-emerald-200 bg-white p-3">
+                <p class="text-[11px] font-semibold uppercase tracking-wide text-emerald-700"><%= meta.label %></p>
+                <p class="mt-1.5 whitespace-pre-wrap text-slate-600 leading-relaxed"><%= overlay[tool] || '(empty)' %></p>
+              </div>
+            <% } %>
+          </div>
+        </details>
+      <% } %>
     </div>
+
+    <!-- ============================================================ -->
+    <!-- Card 3:批量评估(独立卡)-->
+    <!-- ============================================================ -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <div class="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 class="text-base font-semibold text-slate-900">⚡ 批量 RoB 评估</h2>
+        <% if (batchRunning) { %>
+          <span id="batch-status" class="rounded-lg bg-blue-100 px-3 py-1.5 text-xs font-mono text-blue-800"
+                data-job-id="<%= batchJob.id %>" data-total="<%= batchJob.total %>">
+            ⏳ <%= batchJob.done || 0 %>/<%= batchJob.total %>(<%= Math.round((batchJob.done || 0)/Math.max(batchJob.total,1) * 100) %>%)
+          </span>
+        <% } %>
+      </div>
+      <p class="mt-1 text-xs text-slate-500">
+        每个 domain 必须给原文 verbatim quote(≤30 词);找不到证据 → 降级为 some_concerns / cant_tell。
+        <% if (!overlayHas) { %>
+          <span class="text-amber-700">未生成 overlay 也可跑,但发表级建议先生成。</span>
+        <% } %>
+      </p>
+
+      <% if (!batchRunning && totalInclude > 0) { %>
+        <form method="post" action="/projects/<%= project.id %>/rob/run-batch-ai" class="mt-4 space-y-4">
+
+          <!-- 模式选择 — 2 个大卡片 -->
+          <div class="grid gap-3 md:grid-cols-2">
+            <label class="block rounded-xl border-2 border-emerald-400 bg-emerald-50/60 p-4 cursor-pointer hover:bg-emerald-50 transition">
+              <div class="flex items-center gap-2">
+                <input type="radio" name="mode" value="fast" checked class="text-emerald-600">
+                <span class="font-semibold text-emerald-900">🚀 Fast(推荐)</span>
+              </div>
+              <p class="mt-2 text-xs text-slate-600 leading-relaxed">
+                每批 N 篇 1 个 LLM call,只读 matrix。
+                <strong class="text-emerald-700">约 5-10 min · $3-10</strong>
+              </p>
+              <p class="mt-1 text-[11px] text-slate-500">
+                Step 4 矩阵已抽好方法学要点,RoB 直接用 — 大部分论文质量足够。
+              </p>
+            </label>
+
+            <label class="block rounded-xl border <%= canDeepVerify ? 'border-slate-300 bg-white cursor-pointer hover:bg-slate-50' : 'border-slate-200 bg-slate-100 opacity-60 cursor-not-allowed' %> p-4 transition">
+              <div class="flex items-center gap-2 flex-wrap">
+                <input type="radio" name="mode" value="deep" class="text-slate-600" <%= canDeepVerify ? '' : 'disabled' %>>
+                <span class="font-semibold text-slate-800">🔍 Deep</span>
+                <span class="inline-block text-[10px] font-medium text-violet-700 rounded bg-violet-100 px-1.5 py-0.5">高级抽取专享</span>
+              </div>
+              <p class="mt-2 text-xs text-slate-600 leading-relaxed">
+                每篇 1 个 call,读 methods/results/discussion 全文 chunks。
+                <strong class="text-slate-700">约 30-60 min · $25-60</strong>
+              </p>
+              <p class="mt-1 text-[11px] text-slate-500">
+                RCT 论文或边界 case 推荐;单条 RoB 评估完后也可对该篇 ↻ Deep 重评。
+                <% if (!canDeepVerify) { %><span class="text-rose-600">· 需开通高级抽取权限</span><% } %>
+              </p>
+            </label>
+          </div>
+
+          <!-- 参数 + 启动按钮 -->
+          <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+            <div class="flex flex-wrap items-center gap-4 text-xs text-slate-600">
+              <label class="flex items-center gap-1.5">
+                <span>Fast 每批</span>
+                <input type="number" name="batch_size" value="8" min="2" max="15" class="w-14 rounded border border-slate-300 px-2 py-0.5 text-xs text-center">
+                <span>篇/call</span>
+              </label>
+              <label class="flex items-center gap-1.5">
+                <input type="checkbox" name="force_rerun" value="1" class="rounded border-slate-300">
+                <span>强制重跑已评估的</span>
+              </label>
+            </div>
+            <button type="submit"
+                    class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 transition">
+              ⚡ 启动批量 RoB(<%= totalInclude - totalAssessed %> 篇待评)
+            </button>
+          </div>
+        </form>
+      <% } else if (totalInclude === 0) { %>
+        <p class="mt-3 text-xs text-rose-700">先在 Step 3 标几篇 include 论文</p>
+      <% } %>
+
+      <% if (batchDone && batchJob.failed > 0) { %>
+        <p class="mt-3 text-xs text-amber-700">
+          ⚠ 上次批量跑完,有 <strong><%= batchJob.failed %></strong> 篇失败 — 点该篇的 ↻ 重评单条 按钮重试。
+        </p>
+      <% } %>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- Card 3.5: Deep verify(双 rater)— advanced extraction 用户专享 -->
+    <!-- ============================================================ -->
+    <% if (canDeepVerify && totalAssessed > 0) {
+         const deepRunning = deepVerifyJob && deepVerifyJob.status === 'running'
+         const deepDone = deepVerifyJob && deepVerifyJob.status === 'finished'
+         const pass2Count = (records || []).filter(r => r.rob_pass2).length
+         const divergeCount = (records || []).filter(r => r.agreement === 'diverge').length
+         const sameCount = (records || []).filter(r => r.agreement === 'same').length
+         const deepVerifiedTotal = typeof deepVerifiedCount !== 'undefined' ? deepVerifiedCount : pass2Count
+         // 待 Deep:中差 + 不在已 Deep 验过列表 + 不在 post-RoB 排除列表
+         const middleBadNotDeep = (records || []).filter(r => {
+           if (r.post_rob_excluded) return false
+           if (r.deep_verified) return false
+           if (!r.rob) return false
+           const rating = r.rob.overall_rating
+           const tool = r.effective_tool
+           const v = ratingValence(rating, tool)
+           return v === 'middle' || v === 'bad' || v === 'unrated'
+         }).length
+    %>
+    <div class="rounded-2xl border border-violet-200 bg-violet-50/30 p-6">
+      <div class="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 class="text-base font-semibold text-violet-900">🔍 Deep 二次验证(双 rater)<span class="ml-2 inline-block text-[10px] font-medium text-violet-600 rounded bg-violet-100 px-1.5 py-0.5">高级抽取专享</span></h2>
+        <% if (deepRunning) { %>
+          <span id="deep-verify-status" class="rounded-lg bg-blue-100 px-3 py-1.5 text-xs font-mono text-blue-800"
+                data-job-id="<%= deepVerifyJob.id %>" data-total="<%= deepVerifyJob.total %>">
+            ⏳ <%= deepVerifyJob.done || 0 %>/<%= deepVerifyJob.total %>
+          </span>
+        <% } %>
+      </div>
+      <p class="mt-1 text-xs text-violet-700/80">
+        用 <strong>Opus 4.8 + ultrathink + 全文 chunks</strong> 重评中/差类(rater_pass=2)。完成后跟 Fast 结果<strong>side-by-side</strong>展示,你手动选用哪个(分歧时)。
+      </p>
+
+      <% if (deepVerifiedTotal > 0 || middleBadNotDeep > 0) { %>
+      <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 text-xs">
+        <div class="rounded-lg bg-violet-100/60 p-2">
+          <p class="text-violet-700 font-medium">✓ 已 Deep 验证</p>
+          <p class="text-xl font-bold text-violet-900"><%= deepVerifiedTotal %></p>
+          <p class="text-[10px] text-violet-600">永久标记,不会重排</p>
+        </div>
+        <div class="rounded-lg bg-emerald-100/60 p-2">
+          <p class="text-emerald-700 font-medium">✓ Fast / Deep 一致</p>
+          <p class="text-xl font-bold text-emerald-900"><%= sameCount %></p>
+          <p class="text-[10px] text-emerald-600">pass-2 还在</p>
+        </div>
+        <div class="rounded-lg bg-amber-100/60 p-2">
+          <p class="text-amber-700 font-medium">⚠ 分歧待裁决</p>
+          <p class="text-xl font-bold text-amber-900"><%= divergeCount %></p>
+        </div>
+        <div class="rounded-lg bg-slate-100/60 p-2">
+          <p class="text-slate-700 font-medium">待 Deep 验证</p>
+          <p class="text-xl font-bold text-slate-900"><%= middleBadNotDeep %></p>
+          <p class="text-[10px] text-slate-500">中差 + 未 Deep</p>
+        </div>
+      </div>
+
+      <% if (divergeCount > 0) { %>
+        <div class="mt-3 rounded-lg border border-amber-300 bg-amber-50/60 p-3 text-xs">
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <div class="min-w-0 flex-1">
+              <p class="font-medium text-amber-900">⚡ 快速裁决<%= divergeCount %> 篇分歧</p>
+              <p class="mt-1 text-amber-800/80">
+                Deep 用了 Opus + 全文 chunks,通常比 Fast(matrix-only)更准。下面按钮把全部 <%= divergeCount %> 篇分歧的 pass-1 用 pass-2 替换。
+                <strong>建议先展开看下面"⚠ 分歧"那几条复核再批量同意</strong>(尤其 RoB 跨 2 个等级以上的)。
+              </p>
+            </div>
+            <button id="bulk-promote-all-btn" type="button"
+                    class="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-violet-500 transition flex-none">
+              一键同意 Deep 顶 Fast(<%= divergeCount %>)
+            </button>
+          </div>
+          <details class="mt-3 text-[11px]">
+            <summary class="cursor-pointer text-amber-800 hover:text-amber-900 font-medium">快速复核分歧清单 ▾</summary>
+            <ul class="mt-2 space-y-1.5 max-h-80 overflow-y-auto">
+              <% records.filter(r => r.agreement === 'diverge').forEach(r => { %>
+                <li class="flex items-baseline gap-2 rounded bg-white border border-amber-200 p-1.5">
+                  <span class="flex-none font-mono text-[10px] text-slate-400"><%= r.id.slice(0, 14) %></span>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-slate-700"><%= (r.title || '').slice(0, 100) %></p>
+                    <p class="text-[10px] text-slate-500 mt-0.5">
+                      Fast: <strong><%= r.rob.overall_rating %></strong> → Deep: <strong class="text-violet-700"><%= r.rob_pass2.overall_rating %></strong>
+                      · <a href="#<%= r.id %>" onclick="document.querySelector('details[data-record-id=&quot;<%= r.id %>&quot;]')?.setAttribute('open','');" class="text-indigo-600 hover:underline">展开看</a>
+                    </p>
+                  </div>
+                </li>
+              <% }) %>
+            </ul>
+          </details>
+        </div>
+      <% } %>
+      <% } %>
+
+      <% if (!deepRunning) { %>
+      <form method="post" action="/projects/<%= project.id %>/rob/run-deep-verify-batch" class="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-violet-200 pt-3">
+        <div class="flex flex-wrap items-center gap-3 text-xs text-violet-800">
+          <label class="flex items-center gap-1">
+            范围:
+            <select name="filter" class="rounded border border-violet-300 px-2 py-0.5 text-xs">
+              <option value="middle_bad" selected>仅 中 + 差(推荐)</option>
+              <option value="bad">仅 差</option>
+              <option value="all">全部(覆盖 Fast 结果)</option>
+            </select>
+          </label>
+          <label class="flex items-center gap-1.5">
+            <input type="checkbox" name="overwrite_pass2" value="1" class="rounded border-violet-300">
+            覆盖已有 pass-2(重跑 Deep)
+          </label>
+        </div>
+        <button type="submit"
+                class="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-500 transition">
+          🔍 启动 Deep 二次验证(Opus + 全文)
+        </button>
+      </form>
+      <p class="mt-2 text-[11px] text-violet-600">
+        ⓘ 每篇 3-5 min(Opus + ultrathink),N 篇预计 N×4 分钟。仅 pass-1 已存在的论文会跑(确保跟 Fast 结果对比有效)。
+      </p>
+      <% } %>
+    </div>
+    <% } %>
+
+    <!-- ============================================================ -->
+    <!-- Card 4: Per-paper RoB grid -->
+    <!-- ============================================================ -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 class="text-base font-semibold text-slate-900">📑 论文 RoB 评估(<%= records.length %> 篇)</h2>
+        <p class="text-[11px] text-slate-500">
+          点击任一行展开:看 evidence quote + 可手动改判
+        </p>
+      </div>
+      <% if (typeof needsReviewCount !== 'undefined' && needsReviewCount > 0) { %>
+        <div class="mt-2 rounded-lg border border-orange-300 bg-orange-50/60 p-2 text-xs">
+          <p class="text-orange-900">
+            🚨 <strong><%= needsReviewCount %></strong> 篇<strong>系统建议复核</strong>(screening_failed 或 高 no_information 比例 ≥50%)
+            <span class="text-orange-700">— 已置顶。复核后可点 🚫 标记不纳入 synthesis</span>
+          </p>
+        </div>
+      <% } %>
+      <!-- 颜色图例 — 颜色按 valence(好/中/差)不按英文词 -->
+      <div class="mt-3 space-y-1.5">
+        <div class="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+          <span class="inline-flex items-center gap-1"><span class="inline-block h-3 w-3 rounded bg-emerald-100 border border-emerald-300"></span>绿 = 好(低偏倚 / 高质量)</span>
+          <span class="inline-flex items-center gap-1"><span class="inline-block h-3 w-3 rounded bg-amber-100 border border-amber-300"></span>黄 = 中(some_concerns / moderate)</span>
+          <span class="inline-flex items-center gap-1"><span class="inline-block h-3 w-3 rounded bg-rose-100 border border-rose-300"></span>红 = 差(高偏倚 / 低质量)</span>
+          <span class="inline-flex items-center gap-1"><span class="inline-block h-3 w-3 rounded bg-slate-100 border border-slate-300"></span>灰 = N/A / 未评估</span>
+        </div>
+        <p class="text-[11px] text-slate-400">
+          ⓘ <strong>注意词义方向</strong>:RoB 2 / ROBINS-I 用"low / high"指 <strong>偏倚程度</strong>(low = 低偏倚 = 好,绿);NOS / JBI-CS / MMAT 用"low / high"指 <strong>研究质量</strong>(low quality = 低质量 = 差,红)。颜色已自动按工具语义校正,<strong>看颜色不看英文词</strong>。
+        </p>
+      </div>
+
+      <div class="mt-4 space-y-1.5">
+        <% records.forEach((r, idx) => { %>
+          <% const robData = r.rob %>
+          <% const meta = toolMeta[r.effective_tool] %>
+          <%
+            // 复核优先级视觉:flag 1 已排除(灰) / 2 screening_failed(橙) / 3 高 no_info(橙)
+            let _flagCfg = null
+            if (r.review_flag === 'post_rob_excluded') _flagCfg = { border: 'border-orange-200 bg-orange-50/30', chip: 'bg-orange-100 text-orange-800', label: '🚫 已排除' }
+            else if (r.review_flag === 'screening_failed') _flagCfg = { border: 'border-orange-400 bg-orange-50/60', chip: 'bg-orange-200 text-orange-900', label: '⚠ MMAT screening 失败' }
+            else if (r.review_flag === 'mostly_no_info') _flagCfg = { border: 'border-orange-400 bg-orange-50/60', chip: 'bg-orange-200 text-orange-900', label: '⚠ 高 no_info(' + Math.round((r.no_info_ratio || 0) * 100) + '%)' }
+          %>
+          <details class="group rounded-lg border <%= _flagCfg ? _flagCfg.border : (robData ? 'border-slate-200 bg-white' : 'border-dashed border-slate-300 bg-slate-50/30') %> hover:border-slate-300 transition" data-record-id="<%= r.id %>" id="<%= r.id %>">
+            <summary class="cursor-pointer list-none p-3 hover:bg-slate-50/60 rounded-lg">
+              <!-- 第一行:序号 + 复核 flag + 标题 + overall rating + 展开图标 -->
+              <div class="flex items-center gap-3">
+                <span class="flex-none text-xs text-slate-400 font-mono w-8 text-right tabular-nums"><%= idx + 1 %></span>
+                <% if (_flagCfg) { %>
+                  <span class="flex-none rounded px-1.5 py-0.5 text-[10px] font-semibold <%= _flagCfg.chip %>" title="复核优先级 P<%= r.review_priority %> · <%= r.review_flag %>">
+                    <%= _flagCfg.label %>
+                  </span>
+                <% } %>
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-sm font-medium text-slate-800"><%= r.title || '(无标题)' %></p>
+                </div>
+                <% if (robData) { %>
+                  <span class="flex-none rounded-md border px-2 py-0.5 text-[11px] font-semibold tabular-nums <%= ratingColor(robData.overall_rating, r.effective_tool) %>">
+                    <%= robData.overall_rating || '—' %>
+                  </span>
+                <% } else { %>
+                  <span class="flex-none rounded-md border border-dashed border-slate-300 px-2 py-0.5 text-[11px] text-slate-500">未评估</span>
+                <% } %>
+                <span class="flex-none text-slate-300 text-xs group-open:rotate-90 transition-transform">▶</span>
+              </div>
+
+              <!-- 第二行(缩进):元数据 + tool + traffic light -->
+              <div class="mt-1.5 ml-11 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                <span>
+                  <%= r.authors_text ? r.authors_text.split(/[,;]/)[0] : '?' %>
+                  <% if (r.year) { %> · <%= r.year %><% } %>
+                  <% if (r.journal) { %> · <em><%= r.journal %></em><% } %>
+                </span>
+                <span class="flex-none rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-700" title="auto-routed from study_design: <%= r.study_design || '(empty)' %>">
+                  <%= meta.label %>
+                </span>
+                <% if (robData && robData.parsed_judgments && robData.parsed_judgments.judgments) { %>
+                  <span class="flex items-center gap-0.5" title="点击展开看细节">
+                    <% robData.parsed_judgments.judgments.forEach((j) => { %>
+                      <span class="inline-flex h-4 w-4 items-center justify-center rounded text-[9px] font-bold <%= domainCellColor(j.judgment) %>" title="<%= j.domain %>: <%= j.judgment %>">
+                        <%= shortJudgment(j.judgment) %>
+                      </span>
+                    <% }) %>
+                  </span>
+                <% } %>
+                <% if (r.study_design) { %>
+                  <span class="truncate text-slate-400 max-w-md" title="<%= r.study_design %>">
+                    design: <%= r.study_design.slice(0, 70) %><%= r.study_design.length > 70 ? '…' : '' %>
+                  </span>
+                <% } %>
+              </div>
+            </summary>
+
+            <!-- 展开内容 -->
+            <div class="border-t border-slate-100 p-4 text-sm min-w-0">
+              <% if (robData) { %>
+                <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-[11px]">
+                  <p class="text-slate-600">
+                    <strong><%= meta.version %></strong>
+                    <% if (robData.parsed_judgments?.effect_of_interest) { %> · effect: <%= robData.parsed_judgments.effect_of_interest %><% } %>
+                    <% if (robData.parsed_judgments?.study_subtype) { %> · subtype: <%= robData.parsed_judgments.study_subtype %><% } %>
+                    <% if (robData.parsed_judgments?.mmat_design_category) { %> · MMAT cat: <%= robData.parsed_judgments.mmat_design_category %><% } %>
+                  </p>
+                  <p class="text-slate-400">
+                    <%= robData.filled_by %> · <%= robData.model_used || '?' %>
+                  </p>
+                </div>
+                <p class="mt-2 text-sm text-slate-800">
+                  <strong>Overall:</strong>
+                  <span class="rounded border px-1.5 py-0.5 text-xs font-medium <%= ratingColor(robData.overall_rating, r.effective_tool) %>">
+                    <%= robData.overall_rating || '—' %>
+                  </span>
+                  <span class="text-xs text-slate-600"><%= robData.overall_rationale || '' %></span>
+                </p>
+
+                <!-- per-domain 卡片(替代横向 6 列表格,窄屏不爆)-->
+                <div class="mt-3 space-y-2">
+                  <% (robData.parsed_judgments?.judgments || []).forEach((j) => { %>
+                    <div class="rounded-md border border-slate-200 bg-slate-50/40 p-2.5">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="font-mono text-[11px] text-slate-700"><%= j.domain %></span>
+                        <span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-bold <%= domainCellColor(j.judgment) %>">
+                          <%= j.judgment %>
+                        </span>
+                        <% if (j.confidence) { %><span class="text-[10px] text-slate-400">conf: <%= j.confidence %></span><% } %>
+                        <% if (j.page_ref) { %><span class="text-[10px] font-mono text-slate-400 ml-auto"><%= j.page_ref %></span><% } %>
+                      </div>
+                      <% if (j.signaling_answers_summary) { %>
+                        <p class="mt-1.5 text-[12px] text-slate-700"><span class="text-slate-400">signaling:</span> <%= j.signaling_answers_summary %></p>
+                      <% } %>
+                      <% if (j.rationale) { %>
+                        <p class="mt-1 text-[12px] text-slate-600"><span class="text-slate-400">rationale:</span> <%= j.rationale %></p>
+                      <% } %>
+                      <% if (j.evidence_quote) { %>
+                        <p class="mt-1 text-[12px] italic text-emerald-700">"<%= j.evidence_quote %>"</p>
+                      <% } else { %>
+                        <p class="mt-1 text-[11px] text-rose-600">⚠ no evidence quote</p>
+                      <% } %>
+                    </div>
+                  <% }) %>
+                </div>
+              <% } else { %>
+                <p class="text-xs text-slate-500">还没评估。点 ⚡ 启动批量(上方)一次性评全部,或点这条的 ↻ 重评单条。</p>
+              <% } %>
+
+              <!-- ✦ Deep 二次验证(pass-2)对比 -->
+              <% if (r.rob_pass2) { %>
+                <div class="mt-4 rounded-lg border-2 <%= r.agreement === 'same' ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-300 bg-amber-50/40' %> p-3">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <p class="text-xs font-semibold <%= r.agreement === 'same' ? 'text-emerald-800' : 'text-amber-800' %>">
+                      🔍 Deep 验证(pass-2)
+                      <% if (r.agreement === 'same') { %>
+                        · <span class="rounded bg-emerald-100 px-1.5 py-0.5">✓ 与 Fast 一致</span>
+                      <% } else { %>
+                        · <span class="rounded bg-amber-100 px-1.5 py-0.5">⚠ 与 Fast 分歧 — 需裁决</span>
+                      <% } %>
+                    </p>
+                    <p class="text-[11px] text-slate-500">
+                      <%= r.rob_pass2.filled_by %> · <%= r.rob_pass2.model_used || '?' %>
+                    </p>
+                  </div>
+                  <div class="mt-2 grid gap-2 sm:grid-cols-2 text-xs">
+                    <div class="rounded border border-slate-200 bg-white p-2">
+                      <p class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Fast(pass-1,matrix 抽证据)</p>
+                      <p>
+                        <span class="rounded border px-1.5 py-0.5 text-[11px] font-semibold <%= ratingColor(r.rob.overall_rating, r.effective_tool) %>">
+                          <%= r.rob.overall_rating || '—' %>
+                        </span>
+                      </p>
+                      <p class="mt-1.5 text-slate-600"><%= (r.rob.overall_rationale || '').slice(0, 200) %></p>
+                    </div>
+                    <div class="rounded border border-violet-200 bg-violet-50/30 p-2">
+                      <p class="text-[11px] uppercase tracking-wide text-violet-600 mb-1">Deep(pass-2,全文 chunks)</p>
+                      <p>
+                        <span class="rounded border px-1.5 py-0.5 text-[11px] font-semibold <%= ratingColor(r.rob_pass2.overall_rating, r.effective_tool) %>">
+                          <%= r.rob_pass2.overall_rating || '—' %>
+                        </span>
+                        <% if (r.agreement === 'diverge') { %>
+                          <form method="post" action="/projects/<%= project.id %>/rob/<%= r.id %>/promote-pass2" class="inline ml-2 promote-pass2-form" data-record-id="<%= r.id %>">
+                            <button type="submit" class="rounded bg-violet-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-violet-500">用 Deep 顶 Fast →</button>
+                          </form>
+                        <% } %>
+                      </p>
+                      <p class="mt-1.5 text-violet-700"><%= (r.rob_pass2.overall_rationale || '').slice(0, 200) %></p>
+                    </div>
+                  </div>
+                  <details class="mt-2 text-[11px]">
+                    <summary class="cursor-pointer text-slate-500 hover:text-slate-700">看 Deep 的每 domain 判断</summary>
+                    <div class="mt-2 space-y-1.5">
+                      <% (r.rob_pass2.parsed_judgments?.judgments || []).forEach((j) => { %>
+                        <div class="rounded bg-white border border-violet-100 p-1.5">
+                          <span class="font-mono text-[10px] text-slate-700"><%= j.domain %></span>
+                          <span class="ml-2 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold <%= domainCellColor(j.judgment) %>"><%= j.judgment %></span>
+                          <% if (j.evidence_quote) { %>
+                            <p class="mt-0.5 italic text-violet-700">"<%= j.evidence_quote %>"</p>
+                          <% } %>
+                        </div>
+                      <% }) %>
+                    </div>
+                  </details>
+                </div>
+              <% } %>
+
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                <!-- 改 tool -->
+                <form method="post" action="/projects/<%= project.id %>/rob/<%= r.id %>/edit-tool"
+                      class="rob-edit-tool-form inline-flex items-center gap-1"
+                      onsubmit="return confirm('改用其他工具会清掉当前这条 RoB 评估,需重跑。继续?')">
+                  <label class="text-xs text-slate-500">改用工具:</label>
+                  <select name="tool" class="rounded border border-slate-300 px-2 py-1 text-xs">
+                    <% for (const [tk, tm] of Object.entries(toolMeta)) { %>
+                      <option value="<%= tk %>" <%= r.effective_tool === tk ? 'selected' : '' %>><%= tm.label %></option>
+                    <% } %>
+                  </select>
+                  <button type="submit" class="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-700 hover:bg-slate-50">切换</button>
+                </form>
+
+                <!-- 重跑单条 -->
+                <button type="button" class="rob-rerun-btn rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-xs text-indigo-800 hover:bg-indigo-100"
+                        data-record-id="<%= r.id %>">↻ 重评本条(Sonnet)</button>
+
+                <% if (robData) { %>
+                  <form method="post" action="/projects/<%= project.id %>/rob/<%= r.id %>/delete"
+                        class="inline" onsubmit="return confirm('删除这条 RoB 评估?(可重跑)')">
+                    <button type="submit" class="rounded border border-rose-300 px-2 py-0.5 text-xs text-rose-700 hover:bg-rose-50">删评估</button>
+                  </form>
+                <% } %>
+
+                <!-- M26 post-RoB exclude(独立于 Step 3 screening)-->
+                <% if (r.post_rob_excluded) { %>
+                  <span class="inline-flex items-center gap-1 rounded border-2 border-orange-300 bg-orange-50 px-2 py-0.5 text-xs text-orange-800" title="已标记 post-RoB 排除:<%= r.post_rob_excluded_reason %>">
+                    🚫 不纳入 synthesis
+                  </span>
+                  <form method="post" action="/projects/<%= project.id %>/rob/<%= r.id %>/unexclude-post-rob" class="inline">
+                    <button type="submit" class="rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-50">↩ 恢复</button>
+                  </form>
+                <% } else { %>
+                  <button type="button" class="post-rob-exclude-btn rounded border-2 border-orange-300 bg-orange-50/40 px-2 py-0.5 text-xs text-orange-800 hover:bg-orange-100"
+                          data-record-id="<%= r.id %>" data-title="<%= (r.title || '').slice(0, 80) %>"
+                          title="基于全文 RoB 判断这篇不应该纳入 synthesis(纯理论 / 无实证 / RoB 全 no_information 等)">
+                    🚫 标记不纳入 synthesis
+                  </button>
+                <% } %>
+              </div>
+            </div>
+          </details>
+        <% }) %>
+      </div>
+
+      <% if (records.length === 0) { %>
+        <p class="mt-4 text-sm text-slate-500">还没有 include 的论文。先到 Step 3 标几篇 include 再回来评 RoB。</p>
+      <% } %>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- 3. 兜底:外部完成自报告(legacy)-->
+    <!-- ============================================================ -->
+    <details class="rounded-2xl border border-slate-200 bg-slate-50/60 p-5 text-sm">
+      <summary class="cursor-pointer font-medium text-slate-700">🛠 我用外部工具完成了 RoB(兜底)</summary>
+      <div class="mt-3 space-y-2 text-xs text-slate-600">
+        <p>如果你已经在 <strong>外部</strong>(RevMan / Excel / Cochrane Risk-of-bias VISualization tool 等)做完 RoB,可以在这里标记完成 — stepper 上 Step 5 会变 done 让 8/8 进度可达。</p>
+        <% if (project.rob_marked_done_at) { %>
+          <p class="text-emerald-700">✓ 你已于 <code class="font-mono"><%= project.rob_marked_done_at %></code> 标记为外部完成。</p>
+          <form method="post" action="/projects/<%= project.id %>/rob/unmark" class="inline">
+            <button type="submit" class="text-xs text-slate-500 underline hover:text-slate-700">↻ 取消标记</button>
+          </form>
+        <% } else { %>
+          <form method="post" action="/projects/<%= project.id %>/rob/mark-done" class="inline">
+            <button type="submit" class="rounded bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-500">
+              ✓ 我已在外部完成 RoB
+            </button>
+          </form>
+        <% } %>
+      </div>
+    </details>
+
+    <% if (typeof stepItems !== 'undefined' && stepItems && stepItems.length) { %>
+      <div class="rounded-2xl border border-slate-200 bg-white p-6">
+        <h3 class="text-sm font-medium uppercase text-slate-400">本步骤覆盖的 PRISMA 2020 清单项</h3>
+        <ul class="mt-3 space-y-3 text-sm">
+          <% stepItems.forEach(it => { %>
+            <li class="flex gap-3">
+              <span class="flex-none rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">#<%= it.item_number %></span>
+              <div class="min-w-0">
+                <p class="font-medium text-slate-800"><%= it.topic %> <span class="text-xs font-normal text-slate-400">· <%= it.section %></span></p>
+                <p class="mt-0.5 text-xs text-slate-500"><%= it.recommendation %></p>
+              </div>
+            </li>
+          <% }) %>
+        </ul>
+      </div>
+    <% } %>
   </section>
 </div>
+
+<script>
+(function() {
+  // ⚙️ overlay 表单走 AJAX(原生 POST 会跳 JSON 响应页)
+  var overlayForm = document.getElementById('overlay-form')
+  var overlayBtn = document.getElementById('overlay-btn')
+  if (overlayForm && overlayBtn) {
+    overlayForm.addEventListener('submit', function(ev) {
+      ev.preventDefault()
+      if (overlayBtn.disabled) return
+      overlayBtn.disabled = true
+      overlayBtn.textContent = '⏳ 启动中...'
+      fetch(overlayForm.action, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.json().catch(function() { return { ok: false, error: 'bad response' } }) })
+        .then(function(j) {
+          if (j && j.ok) {
+            window.location.reload()
+          } else {
+            overlayBtn.disabled = false
+            overlayBtn.textContent = '<%= overlayHas ? '↻ 重新生成 overlay(协议升级了)' : '⚙️ 生成项目专用 overlay' %>'
+            alert('启动失败:' + ((j && j.error) || '未知错误'))
+          }
+        }).catch(function(e) {
+          overlayBtn.disabled = false
+          alert('启动失败:' + (e && e.message || '网络错误'))
+        })
+    })
+  }
+
+  // overlay 进度轮询
+  var overlayStatusEl = document.getElementById('overlay-status')
+  if (overlayStatusEl) {
+    var overlayStart = new Date(overlayStatusEl.getAttribute('data-started') + ' UTC').getTime()
+    var ovTimer = setInterval(function() {
+      var elapsed = Math.floor((Date.now() - overlayStart) / 1000)
+      overlayStatusEl.textContent = '⏳ 生成中 ' + Math.floor(elapsed / 60) + 'm ' + (elapsed % 60) + 's'
+      fetch('/projects/<%= project.id %>/rob/optimize-overlay/status.json', { headers: { 'Accept': 'application/json' } })
+        .then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          if (!s.in_flight) {
+            clearInterval(ovTimer)
+            window.location.reload()
+          }
+        }).catch(function() {})
+    }, 5000)
+  }
+
+  // ⚡ batch 进度轮询
+  var batchStatusEl = document.getElementById('batch-status')
+  if (batchStatusEl) {
+    var batchTotal = parseInt(batchStatusEl.getAttribute('data-total'), 10) || 0
+    var batchTimer = setInterval(function() {
+      fetch('/projects/<%= project.id %>/rob/batch-progress.json', { headers: { 'Accept': 'application/json' } })
+        .then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          if (!s.job || s.job.status !== 'running') {
+            clearInterval(batchTimer)
+            window.location.reload()
+            return
+          }
+          var done = s.job.done || 0
+          var pct = batchTotal ? Math.round((done / batchTotal) * 100) : 0
+          var curTitle = s.job.current && s.job.current.title ? ' — ' + s.job.current.title.slice(0, 40) : ''
+          batchStatusEl.textContent = '⏳ ' + done + '/' + batchTotal + '(' + pct + '%)' + curTitle
+        }).catch(function() {})
+    }, 5000)
+  }
+
+  // ============================================================
+  // 重跑单条 RoB — UX:顶部 sticky banner + 按钮 spinner + 计时器 + 禁用其他按钮
+  //   Opus 4.8 + ultrathink 单篇 3-5 min,如果只改按钮 text 用户根本注意不到
+  // ============================================================
+  function showRerunBanner(recordTitle) {
+    var existing = document.getElementById('rerun-banner')
+    if (existing) existing.remove()
+    var b = document.createElement('div')
+    b.id = 'rerun-banner'
+    b.className = 'sticky top-0 z-50 -mx-6 px-6 py-3 bg-indigo-600 text-white shadow-lg'
+    b.innerHTML = ''
+      + '<div class="flex items-center justify-between gap-3">'
+      + '  <div class="flex items-center gap-3 min-w-0">'
+      + '    <span class="inline-block animate-spin">⏳</span>'
+      + '    <div class="min-w-0 flex-1">'
+      + '      <p class="text-sm font-medium truncate">正在用 Opus 4.8 + ultrathink 重评:' + recordTitle + '</p>'
+      + '      <p class="text-xs opacity-90">已耗时 <span id="rerun-timer">0</span>s · 预计 3-5 分钟 · 完成后页面自动刷新 · 不要关闭浏览器</p>'
+      + '    </div>'
+      + '  </div>'
+      + '</div>'
+    document.body.insertBefore(b, document.body.firstChild)
+    // 跳到顶部让用户看见
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    return b
+  }
+
+  // ============================================================
+  // Deep verify batch 进度轮询(顶部状态条)
+  // ============================================================
+  var deepStatusBadge = document.getElementById('deep-verify-status')
+  if (deepStatusBadge) {
+    var dvTotal = parseInt(deepStatusBadge.getAttribute('data-total'), 10) || 0
+    var dvTimer = setInterval(function() {
+      fetch('/projects/<%= project.id %>/rob/deep-verify-progress.json', { headers: { Accept: 'application/json' } })
+        .then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          if (!s.job || s.job.status !== 'running') {
+            clearInterval(dvTimer)
+            window.location.reload()
+            return
+          }
+          var done = s.job.done || 0
+          deepStatusBadge.textContent = '⏳ ' + done + '/' + dvTotal
+        }).catch(function() {})
+    }, 8000)
+  }
+
+  // ============================================================
+  // M26 post-RoB 排除 — 弹窗选原因 + AJAX POST
+  // ============================================================
+  document.querySelectorAll('.post-rob-exclude-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var rid = btn.getAttribute('data-record-id')
+      var title = btn.getAttribute('data-title') || ''
+      var presets = [
+        '纯理论 / 概念框架论文,无实证数据',
+        'MMAT screening 未通过(无清晰研究问题或数据)',
+        'RoB 所有 domain 都 no_information',
+        '系统/工具开发论文,不是实证研究',
+        '会议短文 / 立场文 / 评论性文章',
+      ]
+      var promptText = '排除"' + title + '"理由(选数字 1-5 或自由输入):\n\n'
+      presets.forEach(function(p, i) { promptText += '  ' + (i+1) + '. ' + p + '\n' })
+      var reason = window.prompt(promptText, '1')
+      if (!reason) return
+      // 数字 → 转预设
+      var n = parseInt(reason.trim(), 10)
+      if (n >= 1 && n <= presets.length) reason = presets[n - 1]
+      if (reason.length < 3) { alert('原因太短(≥3 字符)'); return }
+      btn.disabled = true
+      btn.textContent = '⏳ 保存中...'
+      var formData = new FormData()
+      formData.append('reason', reason)
+      fetch('/projects/<%= project.id %>/rob/' + rid + '/exclude-post-rob', {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'X-Requested-With': 'fetch' },
+        credentials: 'same-origin',
+        body: new URLSearchParams({ reason: reason }),
+      }).then(function(r) { return r.json() })
+        .then(function(j) {
+          if (j && j.ok) window.location.reload()
+          else { btn.disabled = false; btn.textContent = '🚫 标记不纳入 synthesis'; alert('标记失败:' + ((j && j.error) || '未知')) }
+        }).catch(function(e) {
+          btn.disabled = false; btn.textContent = '🚫 标记不纳入 synthesis'
+          alert('请求失败:' + (e?.message || '网络错误'))
+        })
+    })
+  })
+
+  // ============================================================
+  // 一键批量同意所有 ⚠ 分歧的 Deep 结果(顶 Fast)
+  // ============================================================
+  var bulkBtn = document.getElementById('bulk-promote-all-btn')
+  if (bulkBtn) {
+    bulkBtn.addEventListener('click', function() {
+      if (!confirm('一键把所有 ⚠ 分歧的 Deep 结果顶替 Fast。\n\nDeep 用了 Opus 4.8 + ultrathink + 全文 chunks,通常更准 — 但建议你先展开看几条分歧再批量同意。\n\n这个动作不可撤销(可以再跑 Deep verify 重做)。继续?')) return
+      bulkBtn.disabled = true
+      bulkBtn.textContent = '⏳ 批量提升中...'
+      fetch('/projects/<%= project.id %>/rob/promote-pass2-bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ mode: 'divergent_all' }),
+      }).then(function(r) { return r.json() })
+        .then(function(j) {
+          if (j && j.ok) {
+            alert('✓ 已提升 ' + j.promoted + ' 篇' + (j.failed_count > 0 ? '(' + j.failed_count + ' 失败)' : ''))
+            window.location.reload()
+          } else {
+            bulkBtn.disabled = false
+            bulkBtn.textContent = '一键同意 Deep 顶 Fast'
+            alert('批量提升失败:' + ((j && j.error) || '未知'))
+          }
+        }).catch(function(e) {
+          bulkBtn.disabled = false
+          bulkBtn.textContent = '一键同意 Deep 顶 Fast'
+          alert('请求失败:' + (e?.message || '网络错误'))
+        })
+    })
+  }
+
+  // ============================================================
+  // 用 Deep 顶 Fast(promote pass-2 → primary)— AJAX,不要表单跳转
+  // ============================================================
+  document.querySelectorAll('.promote-pass2-form').forEach(function(form) {
+    form.addEventListener('submit', function(ev) {
+      ev.preventDefault()
+      if (!confirm('确定用 Deep(pass-2)的结果替换 Fast(pass-1)?\n\n这会:删除 pass-1 + 把 pass-2 升级为 primary。不可撤销(但可以再跑 Deep verify 重做)。')) return
+      var btn = form.querySelector('button')
+      btn.disabled = true
+      btn.textContent = '⏳ 提升中...'
+      fetch(form.action, { method: 'POST', headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+        .then(function(r) { return r.json() })
+        .then(function(j) {
+          if (j && j.ok) {
+            window.location.reload()
+          } else {
+            btn.disabled = false
+            btn.textContent = '用 Deep 顶 Fast →'
+            alert('提升失败:' + ((j && j.error) || '未知'))
+          }
+        }).catch(function(e) {
+          btn.disabled = false
+          btn.textContent = '用 Deep 顶 Fast →'
+          alert('请求失败:' + (e?.message || '网络错误'))
+        })
+    })
+  })
+
+  document.querySelectorAll('.rob-rerun-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(ev) {
+      ev.preventDefault()
+      var rid = btn.getAttribute('data-record-id')
+      // 取标题
+      var summaryEl = btn.closest('details') && btn.closest('details').querySelector('summary p')
+      var recordTitle = summaryEl ? (summaryEl.textContent || '').trim().slice(0, 80) : '该论文'
+
+      // 禁用所有 rerun 按钮(防止并发)
+      document.querySelectorAll('.rob-rerun-btn').forEach(function(b) { b.disabled = true })
+      btn.textContent = '⏳ 评估中...'
+      btn.classList.add('bg-indigo-300', 'animate-pulse')
+
+      // 显示顶部 sticky banner + 启动计时器
+      var banner = showRerunBanner(recordTitle)
+      var t0 = Date.now()
+      var timerInt = setInterval(function() {
+        var el = document.getElementById('rerun-timer')
+        if (el) el.textContent = Math.floor((Date.now() - t0) / 1000)
+      }, 1000)
+
+      function cleanup() {
+        clearInterval(timerInt)
+        if (banner) banner.remove()
+        document.querySelectorAll('.rob-rerun-btn').forEach(function(b) { b.disabled = false })
+        btn.textContent = '↻ 重评本条(Sonnet)'
+        btn.classList.remove('bg-indigo-300', 'animate-pulse')
+      }
+
+      fetch('/projects/<%= project.id %>/rob/' + rid + '/run-one-ai', {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.json().catch(function() { return { ok: false, error: 'bad response' } }) })
+        .then(function(j) {
+          if (j && j.ok) {
+            // 成功 — 改 banner 颜色 + 1 秒后 reload(让用户看到完成提示)
+            if (banner) {
+              banner.className = 'sticky top-0 z-50 -mx-6 px-6 py-3 bg-emerald-600 text-white shadow-lg'
+              banner.innerHTML = '<p class="text-sm font-medium">✓ 评估完成,正在刷新页面...</p>'
+            }
+            clearInterval(timerInt)
+            setTimeout(function() { window.location.reload() }, 800)
+          } else {
+            cleanup()
+            alert('评估失败:' + ((j && j.error) || '未知错误') + '\n(可能 Opus 推理超时或子进程死了,稍后再试)')
+          }
+        }).catch(function(e) {
+          cleanup()
+          alert('请求失败:' + (e && e.message || '网络错误'))
+        })
+    })
+  })
+})();
+</script>
 
 <%- include('../partials/footer') %>

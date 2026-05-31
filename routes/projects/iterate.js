@@ -154,7 +154,7 @@ async function doDiagnose(req, res) {
       prompt: userPrompt,
       expectJson: true,
       // 'heavy' / 'flagship' alias 会通过 resolveStepModel 走 iteration step,
-      // 默认 tier=flagship(opus-4-7 或 gpt-5.5 按 provider),reasoning=high
+      // 默认 tier=flagship(opus-4-8 或 gpt-5.5 按 provider),reasoning=high
       model: 'flagship',
       maxTokens: 8192,                 // diagnosis + 完整新协议,留足空间
       timeoutMs: 600_000,              // 10 分钟 — high reasoning + 大 prompt

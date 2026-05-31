@@ -1,7 +1,11 @@
 <%
-// _time.ejs - 把 SQLite 原始时间字符串("YYYY-MM-DD HH:MM:SS",UTC)
+// _time.ejs - 把 SQLite 原始时间字符串("YYYY-MM-DD HH:MM:SS",新加坡时间 +08:00)
 // 渲染成相对时间(刚刚 / N 分钟前 / N 小时前 / N 天前 / YYYY-MM-DD),
 // 同时把原始字符串放进 title 属性,鼠标悬停能看到精确时间。
+//
+// 2026-05-31:整个项目时间统一为新加坡时间(SGT, +08:00)。所有 datetime('now')
+// 在 SQL 层都加了 '+8 hours' 修饰符,存的字符串是 SGT 时刻(无 TZ 后缀)。
+// 这里解析时显式加 '+08:00' 后缀,保证任意浏览器/服务器 TZ 下绝对时间正确。
 //
 // 用法(在父模板里):
 //   include('../partials/_time', { value: row.updated_at })
@@ -17,11 +21,12 @@ const __mono = (typeof mono !== 'undefined') ? !!mono : false
 
 function __fmtRelative(s) {
   if (!s) return __placeholder
-  // SQLite datetime('now') 返回 UTC,无时区标记。把它当 UTC 解析。
-  // 如果已经是 ISO(带 T 或 Z),按原样解析。
+  // 2026-05-31:存的字符串是 SGT(新加坡 +08:00),无 TZ 后缀。
+  // 如果字符串已带 ISO TZ(Z 或 +HH:MM),按原样解析(向后兼容旧 UTC 数据)。
+  // 否则附 '+08:00' 保证按 SGT 解析。
   let iso = s
   if (!/T/.test(iso)) iso = iso.replace(' ', 'T')
-  if (!/Z|[+-]\d{2}:?\d{2}$/.test(iso)) iso = iso + 'Z'
+  if (!/Z|[+-]\d{2}:?\d{2}$/.test(iso)) iso = iso + '+08:00'
   const d = new Date(iso)
   if (isNaN(d.getTime())) return s
   const diff = (Date.now() - d.getTime()) / 1000

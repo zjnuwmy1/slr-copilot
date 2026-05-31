@@ -45,23 +45,49 @@ export function normalizeRecord(rawRow) {
   out.authors = authors
     .map((a) => {
       if (!a) return null;
-      if (typeof a === 'string') {
-        // 'Wang Guankun' 或 'Wang, Guankun'
-        const t = a.trim();
-        if (!t) return null;
-        if (t.includes(',')) {
-          const [s, g] = t.split(',').map((x) => x.trim());
-          return { surname: s || '', givenName: g || '', full: t };
-        }
-        const parts = t.split(/\s+/);
-        if (parts.length === 1) return { surname: parts[0], givenName: '', full: t };
-        return { surname: parts[parts.length - 1], givenName: parts.slice(0, -1).join(' '), full: t };
+      // Object 形态:已经有 surname/givenName(zotero-ingest / 新 csv-ingest 走这条)
+      if (typeof a === 'object' && (a.surname || a.family || a.givenName || a.given)) {
+        return {
+          surname: (a.surname || a.family || '').trim(),
+          givenName: (a.givenName || a.given || '').trim(),
+          full: (a.full || '').trim(),
+        };
       }
+      // Object 但只有 .full(老 csv-ingest 错误 INSERT 的兼容路径)
+      //   走下方 string 解析逻辑;a.full 通常已经是 "Wang G" / "Wang, Gang" 风格
+      const raw = typeof a === 'string' ? a : String(a?.full || '')
+      const t = raw.trim()
+      if (!t) return null
+      // 2026-05-25 BUG FIX: 把 string → {surname, givenName} 的解析重写,
+      //   覆盖 5 种常见输入,避免之前 "Wang G" 被解析成 {surname:G, givenName:Wang} 的姓名颠倒
+      // ── Case 1: "Surname, Given"  (Zotero / WoS AF / Scopus AF)
+      let m = t.match(/^([^,]+),\s*(.+?)\.?$/)
+      if (m) {
+        return { surname: m[1].trim(), givenName: m[2].trim().replace(/\.$/, ''), full: t }
+      }
+      // ── Case 2: "Surname Initials"  e.g. "Wang G", "Wang GK", "Wang G K", "Wang G."
+      //   姓在前 + 后面跟 1-3 个大写首字母(可能有点/空格)— WoS / Scopus 老格式
+      m = t.match(/^(\S+(?:\s\S+)*?)\s+([A-Z](?:\.?\s?[A-Z]\.?){0,3})\.?$/)
+      if (m) {
+        return { surname: m[1].trim(), givenName: m[2].replace(/\./g, '').replace(/\s+/g, ''), full: t }
+      }
+      // ── Case 3: 单 token (机构 / 残缺)
+      const parts = t.split(/\s+/)
+      if (parts.length === 1) return { surname: parts[0], givenName: '', full: t }
+      // ── Case 4: "Initials Surname"  e.g. "G. Wang", "G K Wang"  (IEEE/MLA 输入)
+      if (/^[A-Z]{1,3}\.?$/.test(parts[0])) {
+        return {
+          surname: parts[parts.length - 1],
+          givenName: parts.slice(0, -1).join(' ').replace(/\./g, ''),
+          full: t,
+        }
+      }
+      // ── Case 5: 完整名 "Given Surname"(默认西式)— 把最后一个当 surname
       return {
-        surname: (a.surname || a.family || '').trim(),
-        givenName: (a.givenName || a.given || '').trim(),
-        full: (a.full || '').trim(),
-      };
+        surname: parts[parts.length - 1],
+        givenName: parts.slice(0, -1).join(' '),
+        full: t,
+      }
     })
     .filter((a) => a && (a.surname || a.givenName || a.full));
 
@@ -246,12 +272,93 @@ function apaAuthor(a) {
   return inits ? `${sur}, ${inits}` : sur;
 }
 
+// ============================================================
+// 2026-05-25 M35:volume / issue / pages 标准化访问
+// ------------------------------------------------------------
+//   Zotero 导入(zotero-ingest.js)和 CSV 导入会把 volume / issue / pages 落到
+//   records 表对应字段。下面 5 个 format 函数共用 vipBits/vipApa/vipIeee/vipGb/vipChicago/vipMla
+//   把 volume(issue):pages 按 style 习惯拼出来,缺字段全 graceful skip。
+// ============================================================
+function vipBits(r) {
+  return {
+    vol:   r && r.volume ? String(r.volume).trim() : '',
+    iss:   r && r.issue  ? String(r.issue).trim()  : '',
+    pages: r && r.pages  ? String(r.pages).trim().replace(/^\s*pp?\.\s*/i, '') : '',
+  }
+}
+
+/** APA 7:`<i>Journal</i>, V(I), pages.` */
+function vipApa(r) {
+  const { vol, iss, pages } = vipBits(r)
+  if (!vol && !iss && !pages) return ''
+  let s = ''
+  if (vol) {
+    s += `, *${vol}*`
+    if (iss) s += `(${iss})`
+  } else if (iss) {
+    s += `, (${iss})`
+  }
+  if (pages) s += (s ? ', ' : ', ') + pages
+  return s
+}
+
+/** IEEE:`, vol. V, no. I, pp. pages` */
+function vipIeee(r) {
+  const { vol, iss, pages } = vipBits(r)
+  const out = []
+  if (vol)   out.push('vol. ' + vol)
+  if (iss)   out.push('no. ' + iss)
+  if (pages) out.push('pp. ' + pages)
+  return out.length ? ', ' + out.join(', ') : ''
+}
+
+/** GB/T 7714:`, year, V(I): pages.` — vol/issue/pages 部分(年份外部处理) */
+function vipGb(r) {
+  const { vol, iss, pages } = vipBits(r)
+  if (!vol && !iss && !pages) return ''
+  let s = ', '
+  if (vol) {
+    s += vol
+    if (iss) s += '(' + iss + ')'
+  } else if (iss) {
+    s += '(' + iss + ')'
+  }
+  if (pages) s += ': ' + pages
+  return s
+}
+
+/** Chicago author-date:` V (I): pages.` 紧跟 *Journal* 后 */
+function vipChicago(r) {
+  const { vol, iss, pages } = vipBits(r)
+  if (!vol && !iss && !pages) return ''
+  let s = ''
+  if (vol) {
+    s += ' ' + vol
+    if (iss) s += ' (' + iss + ')'
+  } else if (iss) {
+    s += ' (' + iss + ')'
+  }
+  if (pages) s += ': ' + pages
+  return s
+}
+
+/** MLA 9:`, vol. V, no. I, year, pp. pages,` — year 部分外面给,这里只 vol/issue/pages */
+function vipMla(r) {
+  const { vol, iss, pages } = vipBits(r)
+  const out = []
+  if (vol)   out.push('vol. ' + vol)
+  if (iss)   out.push('no. ' + iss)
+  if (pages) out.push('pp. ' + pages)
+  return out.length ? ', ' + out.join(', ') : ''
+}
+
 function formatApa(r) {
   const authorsStr = formatApaAuthors(r.authors);
   const year = getYear(r) || 'n.d.';
   const title = getTitle(r);
   const venue = getJournalOrVenue(r);
   const doi = doiUrl(r.doi);
+  const vip = vipApa(r)   // ", *V*(I), pages"
 
   const parts = [];
   if (authorsStr) {
@@ -266,14 +373,18 @@ function formatApa(r) {
     parts.push(`(${year}). `);
   }
 
+  // venue + vol/issue/pages
   if (r.item_type === 'conferencePaper' && venue) {
-    parts.push(`In *${venue}*. `);
+    parts.push(`In *${venue}*${vip}. `);
   } else if (r.item_type === 'bookSection' && venue) {
-    parts.push(`In *${venue}*. `);
+    parts.push(`In *${venue}*${vip}. `);
   } else if (r.item_type === 'webpage') {
     if (venue) parts.push(`*${venue}*. `);
   } else if (venue) {
-    parts.push(`*${venue}*. `);
+    parts.push(`*${venue}*${vip}. `);
+  } else if (vip) {
+    // 没 venue 但有 vol/issue/pages — 也输出,删掉开头的 ", "
+    parts.push(vip.replace(/^,\s*/, '') + '. ');
   }
 
   if (doi) {
@@ -316,16 +427,21 @@ function formatIeee(r) {
   const venue = getJournalOrVenue(r);
   const year = getYear(r);
   const doi = r.doi ? String(r.doi).trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '') : null;
+  const vip = vipIeee(r)   // ", vol. V, no. I, pp. pages"
 
   const parts = [];
   if (authorsStr) parts.push(authorsStr + ', ');
   if (title) parts.push(`"${title}," `);
   if (venue) {
     if (r.item_type === 'conferencePaper') {
-      parts.push(`in *${venue}*, `);
+      parts.push(`in *${venue}*`);
     } else {
-      parts.push(`*${venue}*, `);
+      parts.push(`*${venue}*`);
     }
+    if (vip) parts.push(vip)
+    parts.push(', ');
+  } else if (vip) {
+    parts.push(vip.replace(/^,\s*/, '') + ', ');
   }
   if (year) parts.push(year);
   if (doi) {
@@ -376,12 +492,14 @@ function formatGbT7714(r) {
   const venue = getJournalOrVenue(r);
   const year = getYear(r);
   const docType = GB_TYPE[r.item_type] || 'Z';
+  const vip = vipGb(r)   // ", V(I): pages"
 
   const parts = [];
   if (authorsStr) parts.push(authorsStr + '. ');
   if (title) parts.push(`${title}[${docType}]`);
   if (venue) parts.push('. ' + venue);
   if (year) parts.push(', ' + year);
+  if (vip) parts.push(vip);
   if (r.doi) {
     const d = String(r.doi).trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '');
     parts.push('. DOI: ' + d);
@@ -426,12 +544,19 @@ function formatChicago(r) {
   const title = getTitle(r);
   const venue = getJournalOrVenue(r);
   const doi = doiUrl(r.doi);
+  const vip = vipChicago(r)   // " V (I): pages"
 
   const parts = [];
   if (authorsStr) parts.push(authorsStr + '. ');
   parts.push(year + '. ');
   if (title) parts.push(`"${title}." `);
-  if (venue) parts.push(`*${venue}*.`);
+  if (venue) {
+    parts.push(`*${venue}*`);
+    if (vip) parts.push(vip)
+    parts.push('.');
+  } else if (vip) {
+    parts.push(vip.trim() + '.');
+  }
   if (doi) parts.push(' ' + doi + '.');
   else if (r.url) parts.push(' ' + r.url + '.');
   return parts.join('').trim();
@@ -468,12 +593,14 @@ function formatMla(r) {
   const venue = getJournalOrVenue(r);
   const year = getYear(r);
   const doi = doiUrl(r.doi);
+  const vip = vipMla(r)   // ", vol. V, no. I, pp. pages"
 
   const parts = [];
   if (authorsStr) parts.push(authorsStr + '. ');
   if (title) parts.push(`"${title}." `);
   if (venue) parts.push(`*${venue}*`);
-  if (year) parts.push((venue ? ', ' : '') + year);
+  if (vip) parts.push(vip)
+  if (year) parts.push((venue || vip ? ', ' : '') + year);
   if (doi) parts.push(', ' + doi);
   else if (r.url) parts.push(', ' + r.url);
   return trimEndPunct(parts.join('').trim()) + '.';
@@ -486,7 +613,10 @@ function formatMla(r) {
 const STYLES = {
   apa: formatApa,
   ieee: formatIeee,
+  // 2026-05-25 M35:接受多种 GB/T 7714 别名(preview ?style=gbt7714 走这条)
   gb_t_7714: formatGbT7714,
+  gbt7714: formatGbT7714,
+  gb7714: formatGbT7714,
   chicago: formatChicago,
   mla: formatMla,
 };

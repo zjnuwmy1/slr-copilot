@@ -10,6 +10,9 @@ WorkingDirectory=/opt/slr
 EnvironmentFile=/etc/slr.env
 # 关键:让 Node spawn 出的 claude CLI 能读到 slr 用户的 OAuth 凭证
 Environment=HOME=/var/lib/slr/claude-home
+# 2026-05-31:全平台时间统一新加坡时间(SGT, +08:00)。Node Date / 日志时间戳跟这个 TZ;
+# SQLite datetime('now', '+8 hours') 在 SQL 层独立保证 SGT(存进 DB 的字符串无 TZ 后缀)。
+Environment=TZ=Asia/Singapore
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=5

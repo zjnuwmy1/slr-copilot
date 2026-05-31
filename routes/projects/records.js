@@ -22,6 +22,7 @@ import { getProjectProgress } from '../../services/prisma.js'
 import { randomId } from '../../services/crypto.js'
 import { audit } from '../../services/audit.js'
 import { requireAdvancedExtraction } from '../../middleware/auth.js'
+import { getSetting } from '../../services/settings.js'
 import { ensureRoomForUpload as quotaEnsureRoomForUpload, formatBytes as quotaFormatBytes, createReservation, releaseReservation } from '../../services/storage-quota.js'
 import { formatAllStyles, normalizeRecord } from '../../services/citation-format.js'
 import {
@@ -998,7 +999,7 @@ router.get('/:id/records/:recordId', (req, res) => {
 
   const attachments = db
     .prepare(
-      `SELECT id, record_id, attachment_kind, filename, size_bytes, mime_type, created_at
+      `SELECT id, record_id, attachment_kind, filename, size_bytes, mime_type, created_at, pdf_offloaded_at
        FROM attachments
        WHERE record_id = ?
        ORDER BY
@@ -1389,13 +1390,27 @@ router.post('/:id/records/:recordId/upload-pdf',
 
       // 自动 chunk 新 PDF — 否则矩阵抽取会回退到只读摘要(历史 bug)。
       // setImmediate 异步,不阻塞响应。pdf-parse 通常 1-3 秒。
-      const _attId = attId, _recordId = record.id
+      const _attId = attId, _recordId = record.id, _projectId = project.id, _userId = req.user.id
       setImmediate(async () => {
         try {
           const { parsePdfAttachment } = await import('../../services/pdf-parse.js')
           const r = await parsePdfAttachment(db, { attachmentId: _attId, recordId: _recordId })
           if (r.requires_ocr) console.warn(`[records auto-chunk] requires OCR: ${_recordId}`)
-          else if (r.total_chunks > 0) console.log(`[records auto-chunk] ${_recordId}: ${r.total_chunks} chunks`)
+          else if (r.total_chunks > 0) {
+            console.log(`[records auto-chunk] ${_recordId}: ${r.total_chunks} chunks`)
+            // 2026-05-31:chunk 成功 → 自动 offload PDF 源文件腾空间(pdf_auto_offload 开关默认 on)
+            try {
+              const auto = getSetting(db, 'pdf_auto_offload')
+              if (auto == null || auto === 'on') {
+                const { offloadRecordPdf } = await import('../../services/pdf-offload.js')
+                const off = offloadRecordPdf(db, {
+                  recordId: _recordId, reason: 'auto_after_upload_chunk',
+                  req: { user: { id: _userId }, ip: '', get: () => '' },
+                })
+                if (off.offloaded_n > 0) console.log(`[records auto-offload] ${_recordId}: freed ${off.bytes_freed} bytes`)
+              }
+            } catch (e) { console.warn('[records auto-offload] failed for', _recordId, e.message) }
+          }
         } catch (e) {
           console.error('[records auto-chunk] failed for', _recordId, e.message)
         }
@@ -1411,6 +1426,117 @@ router.post('/:id/records/:recordId/upload-pdf',
     }
   }
 )
+
+// ============================================================
+// POST /projects/:id/records/:recordId/delete-pdf
+//   — 删除单篇 PDF + 关联 paper_chunks(传错 PDF 回滚用)
+//   - 找所有 attachment_kind='pdf' 的 attachments,unlink 物理文件
+//   - 显式 DELETE paper_chunks WHERE attachment_id IN (...)(FK CASCADE 兜底)
+//   - DELETE attachments
+//   - UPDATE records SET has_pdf = 0, pdf_status = NULL(回容缺 triage 状态)
+//   - audit log
+// 2026-05-28 加:用户传错 PDF 后没法标"容缺"也没法纠正,这里给一个回滚出口
+// ============================================================
+router.post('/:id/records/:recordId/delete-pdf', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    req.session.flash = { type: 'error', message: '项目不存在或无权访问' }
+    return res.redirect(`/projects/${req.params.id}/records`)
+  }
+  const record = db.prepare(
+    'SELECT id, title FROM records WHERE id = ? AND project_id = ?'
+  ).get(req.params.recordId, project.id)
+  if (!record) {
+    req.session.flash = { type: 'error', message: '文献条目不存在' }
+    return res.redirect(`/projects/${project.id}/records`)
+  }
+
+  // 1) 找所有 PDF attachments
+  const pdfAtts = db.prepare(
+    `SELECT id, storage_path, filename, size_bytes
+       FROM attachments
+      WHERE record_id = ? AND attachment_kind = 'pdf'`
+  ).all(record.id)
+
+  if (pdfAtts.length === 0) {
+    req.session.flash = { type: 'info', message: '这篇文献没有 PDF 可删' }
+    return res.redirect(`/projects/${project.id}/records/${record.id}`)
+  }
+
+  // 2) 数一下要删的 chunks(给 audit + 用户提示)
+  const attIds = pdfAtts.map((a) => a.id)
+  const placeholders = attIds.map(() => '?').join(',')
+  let chunkCount = 0
+  try {
+    const row = db.prepare(
+      `SELECT COUNT(*) AS n FROM paper_chunks
+        WHERE record_id = ? OR attachment_id IN (${placeholders})`
+    ).get(record.id, ...attIds)
+    chunkCount = row?.n || 0
+  } catch (e) { console.warn('[delete-pdf] count chunks failed:', e.message) }
+
+  // 3) 事务:删 chunks + attachments + reset records.has_pdf
+  //    paper_chunks FK ON DELETE CASCADE 理论上会自动删,但显式 DELETE 兜底
+  //    (有的 sqlite 启动时 foreign_keys=OFF 默认)
+  const tx = db.transaction(() => {
+    // 删 chunks(同时 by record_id 和 by attachment_id,任一命中都删)
+    db.prepare(`DELETE FROM paper_chunks WHERE record_id = ?`).run(record.id)
+    if (attIds.length) {
+      db.prepare(
+        `DELETE FROM paper_chunks WHERE attachment_id IN (${placeholders})`
+      ).run(...attIds)
+    }
+    // 删 attachments 行
+    for (const a of pdfAtts) {
+      db.prepare(`DELETE FROM attachments WHERE id = ?`).run(a.id)
+    }
+    // reset records 状态
+    db.prepare(
+      `UPDATE records SET has_pdf = 0, pdf_status = NULL WHERE id = ?`
+    ).run(record.id)
+  })
+  try { tx() } catch (e) {
+    console.error('[delete-pdf] tx failed:', e)
+    req.session.flash = { type: 'error', message: '删除失败:' + (e.message || String(e)).slice(0, 200) }
+    return res.redirect(`/projects/${project.id}/records/${record.id}`)
+  }
+
+  // 4) 物理文件 unlink(事务外,失败不回滚 DB —— 物理文件作为 best-effort 清理)
+  let unlinkedN = 0
+  let bytesFreed = 0
+  for (const a of pdfAtts) {
+    if (!a.storage_path) continue
+    try {
+      if (fs.existsSync(a.storage_path)) {
+        fs.unlinkSync(a.storage_path)
+        unlinkedN++
+        bytesFreed += (a.size_bytes || 0)
+      }
+    } catch (e) {
+      console.warn('[delete-pdf] unlink failed:', a.storage_path, e.message)
+    }
+  }
+
+  audit(db, req, {
+    eventType: 'record_pdf_deleted',
+    userId: req.user.id, actorUserId: req.user.id, projectId: project.id,
+    payload: {
+      record_id: record.id,
+      title_snippet: (record.title || '').slice(0, 100),
+      attachments_deleted: pdfAtts.length,
+      files_unlinked: unlinkedN,
+      bytes_freed: bytesFreed,
+      chunks_deleted: chunkCount,
+    },
+  })
+
+  req.session.flash = {
+    type: 'success',
+    message: `已删除 PDF(${pdfAtts.length} 个附件 / ${chunkCount} 个 chunks / 释放 ${quotaFormatBytes(bytesFreed)})。条目已回到"暂无 PDF"状态,可重传或标"容缺"。`,
+  }
+  res.redirect(`/projects/${project.id}/records/${record.id}`)
+})
 
 // ============================================================
 // POST /projects/:id/records/:recordId/delete — 删除 + 级联清理附件文件
@@ -1496,7 +1622,7 @@ router.get('/:id/attachments/:attachmentId/download', (req, res) => {
 
   const row = db
     .prepare(
-      `SELECT a.id, a.storage_path, a.filename, a.mime_type, a.attachment_kind, a.size_bytes
+      `SELECT a.id, a.storage_path, a.filename, a.mime_type, a.attachment_kind, a.size_bytes, a.pdf_offloaded_at
        FROM attachments a
        JOIN records r ON r.id = a.record_id
        WHERE a.id = ? AND r.project_id = ?`
@@ -1505,6 +1631,14 @@ router.get('/:id/attachments/:attachmentId/download', (req, res) => {
 
   if (!row) {
     return res.status(404).render('error', { title: 'Not Found', message: '附件不存在或无权访问' })
+  }
+
+  // 2026-05-31:PDF 源文件已 offload(chunk 后腾空间)— 友好提示而非 generic 404
+  if (row.pdf_offloaded_at) {
+    return res.status(410).render('error', {
+      title: '源文件已清理',
+      message: '此 PDF 已成功解析为全文 chunks,源文件已清理以腾出空间(不影响 AI 抽取 / 综述,它们读的是解析后的文本)。如需原始 PDF,请到该文献详情页重新上传。',
+    })
   }
 
   if (!row.storage_path) {

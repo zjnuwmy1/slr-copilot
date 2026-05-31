@@ -23,14 +23,16 @@ import { getEffectiveConfigForUser as stepPresetsGetEffectiveConfigForUser } fro
 // 可选模型清单 — Admin UI 用,LLM router 也用作"用户没绑该 provider 时降级"
 // ============================================================
 
-// 实测验证(2026-05-20 用 Claude Max 订阅 + ChatGPT Pro 订阅 + 各自 CLI 实测)
-// Anthropic:claude-sonnet-4-7 / claude-haiku-4-7 都 404,Anthropic 目前只有 Opus 升到 4.7
+// 实测验证(2026-05-20 用 Claude Max 订阅 + ChatGPT Pro 订阅 + 各自 CLI 实测;
+//   2026-05-29 bump Opus 4.7 → 4.8,平台所有 step-preset 跟随,CLI smoke 测过)
+// Anthropic:claude-sonnet-4-8 / claude-haiku-4-8 尚未实测可用,Anthropic 当前只有 Opus 升到 4.8
 // OpenAI:gpt-5 / o3 / gpt-4o 系列已被 gpt-5.x 取代
 export const AVAILABLE_MODELS = {
   anthropic: [
-    { id: 'claude-opus-4-7',          label: 'Claude Opus 4.7 (旗舰 · 1M 上下文 / 64K 输出)', tier: 'flagship' },
-    { id: 'claude-opus-4-6',          label: 'Claude Opus 4.6 (上一代旗舰)',                  tier: 'flagship' },
-    { id: 'claude-opus-4-5',          label: 'Claude Opus 4.5 (更早旗舰)',                    tier: 'flagship' },
+    { id: 'claude-opus-4-8',          label: 'Claude Opus 4.8 (旗舰最新 · 1M 上下文 / 64K 输出)', tier: 'flagship' },
+    { id: 'claude-opus-4-7',          label: 'Claude Opus 4.7 (上一代旗舰)',                  tier: 'flagship' },
+    { id: 'claude-opus-4-6',          label: 'Claude Opus 4.6 (更早旗舰)',                    tier: 'flagship' },
+    { id: 'claude-opus-4-5',          label: 'Claude Opus 4.5 (更更早)',                      tier: 'flagship' },
     { id: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6 (推荐 · 600K 上下文)',        tier: 'standard' },
     { id: 'claude-haiku-4-5',         label: 'Claude Haiku 4.5 (快且便宜)',                   tier: 'light' },
     { id: 'claude-haiku-4-5-20251001',label: 'Claude Haiku 4.5 (snapshot 20251001)',          tier: 'light' },
@@ -96,7 +98,7 @@ export const STEP_SPECS = {
     label: '矩阵列定制 (Matrix Suggest Columns)',
     description: 'AI 基于协议改写默认列 + 反推专属新列 —— 结构化 JSON 输出',
     // 兜底 tier(preset 没配时用):light。preset 优先级最高,3 套预设里都给配了:
-    // performance=opus-4-7 · balanced=sonnet-4-6 · economy=haiku-4-5
+    // performance=opus-4-8 · balanced=sonnet-4-6 · economy=haiku-4-5
     defaultTier: 'light',
     defaultReasoning: 'minimal',
   },
@@ -104,7 +106,7 @@ export const STEP_SPECS = {
     label: '矩阵批量抽取 (Matrix Run Batch)',
     description: 'Step 4 AI 路径:对每篇 include+PDF 论文跑 master prompt 一次出全列 JSON',
     // 默认 flagship,因为是真正的抽取/读全文任务。preset 覆盖:
-    // performance=opus-4-7 · balanced=sonnet-4-6 · economy=sonnet-4-6
+    // performance=opus-4-8 · balanced=sonnet-4-6 · economy=sonnet-4-6
     defaultTier: 'flagship',
     defaultReasoning: 'high',
   },
@@ -118,7 +120,7 @@ export const STEP_KEYS = Object.keys(STEP_SPECS)
 
 const DEFAULT_BY_PROVIDER_AND_TIER = {
   anthropic: {
-    flagship: 'claude-opus-4-7',     // 实测可用,1M context
+    flagship: 'claude-opus-4-8',     // 实测可用,1M context
     standard: 'claude-sonnet-4-6',   // Sonnet 4-7 不存在,4-6 仍是 standard
     light:    'claude-haiku-4-5',    // Haiku 4-7 不存在
   },
@@ -141,7 +143,7 @@ export function getSetting(db, key) {
 export function setSetting(db, { key, value, updatedByUserId }) {
   db.prepare(`
     INSERT INTO system_settings (key, value, updated_by_user_id, updated_at)
-    VALUES (?, ?, ?, datetime('now'))
+    VALUES (?, ?, ?, datetime('now', '+8 hours'))
     ON CONFLICT(key) DO UPDATE SET
       value = excluded.value,
       updated_by_user_id = excluded.updated_by_user_id,

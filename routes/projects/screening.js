@@ -228,7 +228,7 @@ async function runScreeningOnce(db, {
     // runLlm 内部会兜异常,这里走到说明非常意外
     db.prepare(
       `UPDATE screening_decisions
-       SET ai_suggestion = 'uncertain', ai_reason = ?, ai_ran_at = datetime('now'), updated_at = datetime('now')
+       SET ai_suggestion = 'uncertain', ai_reason = ?, ai_ran_at = datetime('now', '+8 hours'), updated_at = datetime('now', '+8 hours')
        WHERE record_id = ? AND stage = 'title_abstract'`
     ).run(`llm_threw: ${(e?.message || String(e)).slice(0, 300)}`, record.id)
     return { ok: false, decision: 'uncertain', error: e?.message || 'llm_threw' }
@@ -239,7 +239,7 @@ async function runScreeningOnce(db, {
   if (!result.ok) {
     db.prepare(
       `UPDATE screening_decisions
-       SET ai_suggestion = 'uncertain', ai_reason = ?, ai_model = ?, ai_ran_at = datetime('now'), updated_at = datetime('now')
+       SET ai_suggestion = 'uncertain', ai_reason = ?, ai_model = ?, ai_ran_at = datetime('now', '+8 hours'), updated_at = datetime('now', '+8 hours')
        WHERE record_id = ? AND stage = 'title_abstract'`
     ).run(
       `llm_error[${result.status}]: ${(result.error || '').slice(0, 240)}`,
@@ -263,8 +263,8 @@ async function runScreeningOnce(db, {
      SET ai_suggestion = ?, ai_reason = ?, ai_confidence = ?, ai_model = ?,
          ai_matched_inclusion = ?, ai_matched_exclusion = ?,
          ai_matched_concepts  = ?, ai_need_full_text = ?,
-         ai_ran_at = datetime('now'),
-         updated_at = datetime('now')
+         ai_ran_at = datetime('now', '+8 hours'),
+         updated_at = datetime('now', '+8 hours')
      WHERE record_id = ? AND stage = 'title_abstract'`
   ).run(
     norm.decision,
@@ -402,6 +402,7 @@ router.get('/:id/screening', (req, res) => {
     .prepare(
       `SELECT r.id, r.title, r.year, r.journal, r.authors_text, r.abstract,
               r.keywords_json, r.has_pdf, r.pdf_status, r.doi, r.language, r.source_databases,
+              r.rob_excluded_at, r.rob_excluded_reason,
               sd.id AS sd_id, sd.ai_suggestion, sd.ai_reason, sd.ai_confidence,
               sd.ai_model, sd.ai_matched_inclusion, sd.ai_matched_exclusion,
               sd.ai_matched_concepts, sd.ai_need_full_text, sd.ai_ran_at,
@@ -621,7 +622,7 @@ router.post('/:id/screening/target', (req, res) => {
   }
 
   db.prepare(
-    `UPDATE projects SET screening_target_include_pct = ?, updated_at = datetime('now') WHERE id = ?`
+    `UPDATE projects SET screening_target_include_pct = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?`
   ).run(pct, project.id)
 
   audit(db, req, {
@@ -1032,10 +1033,10 @@ router.post('/:id/screening/bulk-accept-ai', (req, res) => {
   const result = db.prepare(
     `UPDATE screening_decisions
      SET human_decision = ai_suggestion,
-         decided_at = datetime('now'),
+         decided_at = datetime('now', '+8 hours'),
          decided_by = ?,
          human_reason = COALESCE(NULLIF(human_reason, ''), 'auto: bulk-accepted AI suggestion by admin'),
-         updated_at = datetime('now')
+         updated_at = datetime('now', '+8 hours')
      WHERE project_id = ?
        AND stage = 'title_abstract'
        AND ai_suggestion IN ('include', 'exclude')
@@ -1128,8 +1129,8 @@ router.post('/:id/screening/decide/:recordId', (req, res) => {
 
   db.prepare(
     `UPDATE screening_decisions
-     SET human_decision = ?, human_reason = ?, decided_at = datetime('now'),
-         decided_by = ?, updated_at = datetime('now')
+     SET human_decision = ?, human_reason = ?, decided_at = datetime('now', '+8 hours'),
+         decided_by = ?, updated_at = datetime('now', '+8 hours')
      WHERE record_id = ? AND stage = 'title_abstract'`
   ).run(decision, reason, req.user.id, record.id)
 

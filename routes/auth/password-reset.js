@@ -200,13 +200,13 @@ router.post('/reset-password/:token', async (req, res) => {
     db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(hash, row.user_id)
     db.prepare(`
       UPDATE password_reset_tokens
-      SET used_at = datetime('now')
+      SET used_at = datetime('now', '+8 hours')
       WHERE token = ?
     `).run(token)
     // 同一用户的所有其他未用 token 立即作废(防"我点了链接但又申请了一次"的二次重置窗口)
     db.prepare(`
       UPDATE password_reset_tokens
-      SET used_at = datetime('now')
+      SET used_at = datetime('now', '+8 hours')
       WHERE user_id = ? AND used_at IS NULL AND token != ?
     `).run(row.user_id, token)
   })

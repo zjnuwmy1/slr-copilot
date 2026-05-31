@@ -151,9 +151,16 @@ export function getProjectProgress(db, projectId) {
   //     ② 新 literature_matrix(任何 fields 非空 + completeness>=0.2)
   //   覆盖率达到 include 的 100% → done;有任何 → in_progress
   try {
+    // 必须 JOIN records 过滤 duplicate_of_record_id IS NOT NULL — 那些是 dedup 合并的副本,
+    //   它们继承的 include 决定已经"过户"给主记录,不应该重复计数。
+    //   不过滤的话:用户看到 "已抽取 121/123 篇" — 分母 123 是含 dup 的 raw 决定数,
+    //   分子 121 是 literature_matrix 实际行(已 dedup),永远凑不齐 → 误以为没抽完。
     const incRow = db.prepare(
-      `SELECT COUNT(*) AS c FROM screening_decisions
-       WHERE project_id = ? AND stage = 'title_abstract' AND human_decision = 'include'`
+      `SELECT COUNT(*) AS c
+         FROM screening_decisions sd
+         JOIN records r ON r.id = sd.record_id
+        WHERE sd.project_id = ? AND sd.stage = 'title_abstract' AND sd.human_decision = 'include'
+          AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')`
     ).get(projectId)
     const includeCount = incRow.c || 0
 
@@ -198,34 +205,93 @@ export function getProjectProgress(db, projectId) {
   } catch (e) { /* keep not_started */ }
 
   // ---- 5. RoB(risk of bias)----
-  //   站内工具未开放,用户在外部完成后点"标记为已外部完成" → projects.rob_marked_done_at
-  //   据此变 done,8/8 进度可达。
+  //   Phase 1 已上 5 工具(MMAT/RoB2/ROBINS-I/NOS/JBI-CS)— Step 5 状态联动 rob_assessments 行数:
+  //     完成 ≥ 80% include → done
+  //     完成 1+ 但 < 80% → in_progress
+  //     完成 0 但有 rob_marked_done_at(外部完成自报告)→ done(兜底)
+  //     完成 0 + 无自报告 → not_started(默认)
   try {
-    const row = db.prepare(`SELECT rob_marked_done_at FROM projects WHERE id = ?`).get(projectId)
-    if (row && row.rob_marked_done_at) {
+    // 同 Step 4 — 过滤 dup 才能拿到真正"应评估"的 include 数(否则分母虚高)
+    const includeCount = db.prepare(
+      `SELECT COUNT(*) AS c
+         FROM screening_decisions sd
+         JOIN records r ON r.id = sd.record_id
+        WHERE sd.project_id = ? AND sd.stage = 'title_abstract' AND sd.human_decision = 'include'
+          AND (r.duplicate_of_record_id IS NULL OR r.duplicate_of_record_id = '')`
+    ).get(projectId).c || 0
+    const robCount = db.prepare(
+      `SELECT COUNT(*) AS c FROM rob_assessments WHERE project_id = ? AND rater_pass = 1`
+    ).get(projectId).c || 0
+    const projRow = db.prepare(`SELECT rob_marked_done_at FROM projects WHERE id = ?`).get(projectId)
+
+    if (includeCount > 0 && robCount >= Math.ceil(includeCount * 0.8)) {
+      stepStatus.rob = { status: 'done', summary: `已评估 ${robCount}/${includeCount} 篇(AI + 人工)` }
+    } else if (robCount > 0) {
+      stepStatus.rob = { status: 'in_progress', summary: `已评估 ${robCount}/${includeCount} 篇` }
+    } else if (projRow && projRow.rob_marked_done_at) {
       stepStatus.rob = { status: 'done', summary: '已外部完成(自报告)' }
     }
   } catch {}
 
   // ---- 6. Synthesis(主题聚类 + evidence matrix)----
+  //   Bug fix(2026-05-24):三元两个分支都是 'in_progress' 的 typo,
+  //   导致只要 themes > 0,Step 6 永远显示"进行中"而不是"已完成"。
+  //   正确逻辑:
+  //     - synthesis_run_status='running' 且 in lock window → 'in_progress'(正在跑 LLM)
+  //     - themes > 0 → 'done'(已生成主题)
+  //     - evidence_points > 0 但 themes = 0 → 'in_progress'(异常,部分数据)
+  //     - 都没 → 'not_started'
   try {
     const thRow = db.prepare(`SELECT COUNT(*) AS c FROM themes WHERE project_id = ?`).get(projectId)
     const epRow = db.prepare(`SELECT COUNT(*) AS c FROM evidence_points WHERE project_id = ?`).get(projectId)
-    if ((thRow.c || 0) > 0 || (epRow.c || 0) > 0) {
+    const runRow = db.prepare(`SELECT synthesis_run_status, synthesis_run_started_at FROM projects WHERE id = ?`).get(projectId)
+    const isRunning = !!(
+      runRow?.synthesis_run_status === 'running' && runRow?.synthesis_run_started_at &&
+      (Date.now() - new Date(runRow.synthesis_run_started_at + ' UTC').getTime() < 60 * 60 * 1000)
+    )
+    const themesCount = thRow.c || 0
+    const epCount = epRow.c || 0
+    if (isRunning) {
       stepStatus.synthesis = {
-        status: (thRow.c || 0) > 0 ? 'in_progress' : 'in_progress',
-        summary: `${thRow.c || 0} 个主题,${epRow.c || 0} 个证据点`,
+        status: 'in_progress',
+        summary: `正在生成主题聚类(LLM 跑中)…`,
+      }
+    } else if (themesCount > 0) {
+      stepStatus.synthesis = {
+        status: 'done',
+        summary: `${themesCount} 个主题,${epCount} 个证据点`,
+      }
+    } else if (epCount > 0) {
+      stepStatus.synthesis = {
+        status: 'in_progress',
+        summary: `${epCount} 个证据点但无主题(异常状态)`,
       }
     }
   } catch (e) { /* keep not_started */ }
 
-  // ---- 7. Certainty (GRADE) ----
+  // ---- 7. Certainty (主题级 + outcome 级) ----
+  //   - certainty_run_status='running' OR 任何主题 outcome_run_status='running' → in_progress
+  //   - 主题级 theme_certainty 全覆盖 OR outcome 级 grade_assessments 存在 → done
+  //   - 否则 not_started
   try {
-    const g = db
-      .prepare('SELECT COUNT(*) AS c FROM grade_assessments WHERE project_id = ?')
-      .get(projectId)
-    if (g.c > 0) {
-      stepStatus.certainty = { status: 'done', summary: `${g.c} 个 outcome 已 GRADE 评级` }
+    const runRow = db.prepare(`SELECT certainty_run_status, certainty_run_started_at FROM projects WHERE id = ?`).get(projectId)
+    const themeRunning = !!(
+      runRow?.certainty_run_status === 'running' && runRow?.certainty_run_started_at &&
+      (Date.now() - new Date(runRow.certainty_run_started_at + ' UTC').getTime() < 75 * 60 * 1000)
+    )
+    const outcomeRunning = db.prepare(
+      `SELECT COUNT(*) AS c FROM themes WHERE project_id = ? AND outcome_run_status = 'running'
+         AND outcome_run_started_at > datetime('now', '-20 minutes')`
+    ).get(projectId).c || 0
+    const tcRow = db.prepare(`SELECT COUNT(*) AS c FROM theme_certainty WHERE project_id = ?`).get(projectId).c || 0
+    const themesRow = db.prepare(`SELECT COUNT(*) AS c FROM themes WHERE project_id = ?`).get(projectId).c || 0
+    const grRow = db.prepare(`SELECT COUNT(*) AS c FROM grade_assessments WHERE project_id = ?`).get(projectId).c || 0
+    if (themeRunning || outcomeRunning > 0) {
+      stepStatus.certainty = { status: 'in_progress', summary: themeRunning ? '主题级 certainty 跑中…' : `${outcomeRunning} 个主题 outcome 跑中…` }
+    } else if (themesRow > 0 && tcRow >= themesRow) {
+      stepStatus.certainty = { status: 'done', summary: `${tcRow} 主题级评估 + ${grRow} outcome` }
+    } else if (tcRow > 0 || grRow > 0) {
+      stepStatus.certainty = { status: 'in_progress', summary: `${tcRow}/${themesRow} 主题已评 + ${grRow} outcome` }
     }
   } catch {}
 
@@ -240,11 +306,33 @@ export function getProjectProgress(db, projectId) {
     }
   } catch (e) { /* keep not_started */ }
 
+  // ---- 9. Submission (LaTeX + finalize) ----
+  //   - 有 latex_renders 行(status='success')→ in_progress / done(看是否有 finalize zip)
+  //   - 否则 not_started
+  stepStatus.submission = { status: 'not_started', summary: '' }
+  try {
+    const lr = db.prepare(
+      `SELECT COUNT(*) AS c FROM latex_renders WHERE project_id = ? AND status = 'success'`
+    ).get(projectId).c || 0
+    if (lr > 0) {
+      stepStatus.submission = { status: 'in_progress', summary: `LaTeX 已渲染 ${lr} 次,可一键打包投稿包` }
+    }
+    // 看 /var/lib/slr/uploads/finalized/ 是否有该项目的 zip — 这里只看 DB 信号,
+    // 文件系统检查交给路由层。如果用户已点过 finalize 至少一次,记为 done。
+    // 暂时无 DB 标记 finalize 已跑;留待后续填充。
+  } catch {}
+
   // 简单的"锁"规则:协议未审批前后续不能开始
   if (stepStatus.protocol.status !== 'done') {
-    for (const key of ['screening', 'extraction', 'rob', 'synthesis', 'certainty', 'report']) {
+    for (const key of ['screening', 'extraction', 'rob', 'synthesis', 'certainty', 'report', 'submission']) {
       stepStatus[key].status = 'locked'
     }
+  }
+  // Step 9 投稿:仅当 Step 8 撰写 in_progress 或 done 才解锁
+  if (stepStatus.protocol.status === 'done'
+      && stepStatus.report.status !== 'done'
+      && stepStatus.report.status !== 'in_progress') {
+    stepStatus.submission.status = 'locked'
   }
 
   // ---- PRISMA 整体进度 ----

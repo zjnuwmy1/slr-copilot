@@ -79,7 +79,7 @@ router.post('/login', async (req, res) => {
   if (!ok) return fail('邮箱或密码错误')
 
   // 成功
-  db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(row.id)
+  db.prepare("UPDATE users SET last_login_at = datetime('now', '+8 hours') WHERE id = ?").run(row.id)
   req.session.user_id = row.id
   audit(db, req, {
     eventType: 'login_success',
@@ -155,7 +155,7 @@ router.post('/register', async (req, res) => {
   if (!invite) return fail('邀请码无效')
   if (invite.used_by_user_id) return fail('邀请码已被使用')
   if (invite.expires_at) {
-    const exp = new Date(invite.expires_at + 'Z') // schema 用 datetime('now'),按 UTC 解释
+    const exp = new Date(invite.expires_at + 'Z') // schema 用 datetime('now', '+8 hours'),按 UTC 解释
     const expRaw = new Date(invite.expires_at)
     const now = Date.now()
     // 容错处理:如果两种解释都已过期才判定为过期
@@ -193,7 +193,7 @@ router.post('/register', async (req, res) => {
     const upd = db
       .prepare(
         `UPDATE invite_codes
-         SET used_by_user_id = ?, used_at = datetime('now')
+         SET used_by_user_id = ?, used_at = datetime('now', '+8 hours')
          WHERE code = ? AND used_by_user_id IS NULL`
       )
       .run(id, invite_code)
@@ -226,7 +226,7 @@ router.post('/register', async (req, res) => {
 
   // 自动登录
   req.session.user_id = id
-  db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(id)
+  db.prepare("UPDATE users SET last_login_at = datetime('now', '+8 hours') WHERE id = ?").run(id)
   req.session.flash = { type: 'success', message: '欢迎加入 SLR Copilot' }
   res.redirect('/account')
 })

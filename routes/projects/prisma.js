@@ -147,7 +147,7 @@ router.post('/item/:itemNumber', (req, res) => {
 
   db.prepare(
     `UPDATE prisma_checklist
-       SET status = ?, notes = ?, evidence_url = ?, updated_at = datetime('now')
+       SET status = ?, notes = ?, evidence_url = ?, updated_at = datetime('now', '+8 hours')
      WHERE project_id = ? AND item_number = ?`
   ).run(status, notes, evidenceUrl, project.id, itemNumber)
 
@@ -197,7 +197,7 @@ router.post('/bulk-mark-step', (req, res) => {
   const result = db
     .prepare(
       `UPDATE prisma_checklist
-         SET status = ?, updated_at = datetime('now')
+         SET status = ?, updated_at = datetime('now', '+8 hours')
        WHERE project_id = ? AND workflow_step = ?`
     )
     .run(status, project.id, workflowStep)

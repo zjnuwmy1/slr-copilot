@@ -62,6 +62,7 @@ export function storageUsedByUser(db, userId) {
                  JOIN projects p ON p.id = r.project_id
                 WHERE p.user_id = ? AND a.size_bytes IS NOT NULL
                   AND a.attachment_kind = 'pdf'
+                  AND a.pdf_offloaded_at IS NULL   -- 2026-05-31:已 offload 源文件不计配额
                 GROUP BY a.record_id
              )
           ),
@@ -75,7 +76,7 @@ export function storageUsedByUser(db, userId) {
       const rsv = db.prepare(
         `SELECT COALESCE(SUM(bytes), 0) AS pending
            FROM storage_reservations
-          WHERE user_id = ? AND expires_at > datetime('now')`
+          WHERE user_id = ? AND expires_at > datetime('now', '+8 hours')`
       ).get(userId)
       used += Number(rsv?.pending) || 0
     } catch (_) { /* 表不存在(老库) — 忽略 */ }

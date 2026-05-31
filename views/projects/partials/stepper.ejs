@@ -5,11 +5,11 @@
     project       : { id, ... }
     progress      : getProjectProgress(db, projectId) 返回值
                     { stepStatus: { protocol: {status, summary}, ... }, prismaProgress: { donePct, done, total } }
-    currentStep   : 'protocol' | 'search' | 'screening' | 'extraction' | 'rob' | 'synthesis' | 'certainty' | 'report'
+    currentStep   : 'protocol' | 'search' | 'screening' | 'extraction' | 'rob' | 'synthesis' | 'certainty' | 'report' | 'submission'
 %>
 <%
-  // 8 步 — 以"你正在做什么"为主线,不再以 PRISMA 术语开头。
-  // PRISMA 在 Step 8 报告时再前台展示(本文件最下方的 PRISMA 链接保留入口)。
+  // 9 步 — Step 8 拆分为 8(撰写)+ 9(投稿)。顺序不变,左侧多一步。
+  // PRISMA 仍在 Step 8 报告时前台展示;Step 9 只做 LaTeX + 投稿包打包。
   const steps = [
     { id: 'protocol',   label: '确立研究方案',     sub: '研究问题 · 纳排标准 · 概念框架', short: '研究方案' },
     { id: 'search',     label: '构建检索策略',     sub: 'WoS / Scopus / PubMed 三库检索式', short: '检索策略' },
@@ -18,7 +18,8 @@
     { id: 'rob',        label: '偏倚风险评估',     sub: '评估各研究的方法学质量', short: '偏倚评估' },
     { id: 'synthesis',  label: '主题综合',         sub: '跨研究归纳:一致 · 矛盾 · 空白', short: '主题综合' },
     { id: 'certainty',  label: '证据确定性评级',   sub: 'GRADE 框架:高 / 中 / 低 / 极低', short: 'GRADE' },
-    { id: 'report',     label: '撰写综述初稿',     sub: '全文初稿 · PRISMA 流程图 · 投稿就绪', short: '综述初稿' },
+    { id: 'report',     label: '撰写综述初稿',     sub: '期刊模板 · overlay · 全章节 · 图 · PRISMA 验证', short: '综述初稿' },
+    { id: 'submission', label: '投稿准备',         sub: 'LaTeX 模板 · 作者表 · PDF 渲染 · 投稿包', short: '投稿准备' },
   ]
   const prismaProgress = (progress && progress.prismaProgress) || { donePct: 0, done: 0, total: 42 }
   const stepStatus = (progress && progress.stepStatus) || {}
@@ -30,8 +31,8 @@
       default:            return ['bg-slate-100 text-slate-500',   '未开始']
     }
   }
-  const stepsTotal = 8
-  const stepsDone = ['protocol','search','screening','extraction','rob','synthesis','certainty','report']
+  const stepsTotal = 9
+  const stepsDone = ['protocol','search','screening','extraction','rob','synthesis','certainty','report','submission']
     .filter((k) => (stepStatus[k] && stepStatus[k].status === 'done')).length
   const stepPct = Math.round(stepsDone / stepsTotal * 100)
 %>

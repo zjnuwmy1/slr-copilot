@@ -8,25 +8,246 @@
     <%- include('partials/step-banner', {
       stepNum: 7,
       stepTitle: '证据确定性评级',
-      stepIntro: '对每个主题下的结局指标(outcome)依 GRADE 框架五维度评级:研究内偏倚 / 不一致性 / 间接性 / 不精确性 / 发表偏倚。AI 给出初评,由您审阅与调整;最终导出 Summary of Findings 表供审稿人参考。',
+      stepIntro: '主题级:GRADE + CERQual 双轨,基于 Step 4 matrix + Step 5 RoB + Step 6 主题结构总评每主题"证据体"强度。Outcome 级:Cochrane SoF 表,具体效应量的 5 维度评级(可选,作为主题级的 drill-down)。AI 初评 → 你审阅 / 编辑 / 锁定 → 导出 Evidence Profile + Summary of Findings,直接进 Discussion / Results 章节。',
       prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
     }) %>
 
-    <!-- 顶部操作 / 导出 -->
-    <div class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-card">
-      <div>
-        <p class="text-sm font-medium text-slate-800">Summary of Findings</p>
-        <p class="text-xs text-slate-500 mt-0.5">每个 outcome 一行,5 维度评级 + 最终 4 档 certainty</p>
+    <!-- ============================================================ -->
+    <!-- M30 Card A: 数据 + 协议 + framework 分布 -->
+    <!-- ============================================================ -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6">
+      <div class="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 class="text-base font-semibold text-slate-900">📊 输入数据</h2>
+        <% if (protocolFull) { %>
+          <p class="text-xs text-slate-500">协议 v<%= protocolFull.version %><% if (synthesisMeta) { %> · Step 6 已综合 <%= themes.length %> 主题<% } %></p>
+        <% } %>
       </div>
-      <div class="flex flex-wrap gap-2">
-        <a href="/projects/<%= project.id %>/certainty/sof.md"
-           class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 shadow-subtle">
-          导出 Markdown
-        </a>
-        <a href="/projects/<%= project.id %>/certainty/sof.csv"
-           class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 shadow-subtle">
-          导出 CSV (Excel)
-        </a>
+      <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div class="rounded-lg border border-slate-200 bg-slate-50/40 p-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500">主题数</p>
+          <p class="mt-1 text-2xl font-bold text-slate-900 leading-none"><%= themes.length %></p>
+        </div>
+        <div class="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500">GRADE 主题(量化主导)</p>
+          <p class="mt-1 text-2xl font-bold text-emerald-700 leading-none"><%= frameworkSplit.grade %></p>
+        </div>
+        <div class="rounded-lg border border-violet-200 bg-violet-50/40 p-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500">CERQual 主题(质性主导)</p>
+          <p class="mt-1 text-2xl font-bold text-violet-700 leading-none"><%= frameworkSplit.cerqual %></p>
+        </div>
+        <div class="rounded-lg border border-amber-200 bg-amber-50/40 p-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500">Hybrid(混合方法)</p>
+          <p class="mt-1 text-2xl font-bold text-amber-700 leading-none"><%= frameworkSplit.hybrid %></p>
+        </div>
+      </div>
+      <% if (synthesisMeta && Array.isArray(synthesisMeta.cross_cutting_observations) && synthesisMeta.cross_cutting_observations.length) { %>
+        <details class="mt-4 rounded-lg border border-violet-200 bg-violet-50/30 p-3">
+          <summary class="cursor-pointer text-xs font-medium text-violet-800">🔭 Step 6 跨主题观察(<%= synthesisMeta.cross_cutting_observations.length %> 条,LLM 评估时也会参考)</summary>
+          <ul class="mt-2 space-y-1 text-xs text-violet-900">
+            <% synthesisMeta.cross_cutting_observations.slice(0,8).forEach(o => { %>
+              <li>· <%= o %></li>
+            <% }) %>
+          </ul>
+        </details>
+      <% } %>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- M30 Card B: 项目专用 overlay(可选)-->
+    <!-- ============================================================ -->
+    <div class="rounded-2xl border <%= overlay && !overlayStale ? 'border-emerald-200 bg-emerald-50/30' : (overlayInFlight ? 'border-blue-200 bg-blue-50/30' : 'border-amber-200 bg-amber-50/30') %> p-6">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-baseline gap-2">
+            <h2 class="text-base font-semibold text-slate-900">⚙️ 项目专用 certainty 指引(overlay)</h2>
+            <% if (overlay && !overlayStale) { %>
+              <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">✓ 协议 v<%= overlayAtVersion %></span>
+            <% } else if (overlay && overlayStale) { %>
+              <%
+                const staleLabel = ({
+                  protocol_upgraded:        '已过期(协议升级)',
+                  system_prompt_upgraded:   '已过期(通用 prompt 升级)',
+                  old_overlay_no_version:   '已过期(旧版 overlay,需重新生成)',
+                })[overlayStaleReason] || '已过期'
+              %>
+              <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800" title="reason=<%= overlayStaleReason || '?' %>"><%= staleLabel %></span>
+            <% } else { %>
+              <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">未生成</span>
+            <% } %>
+          </div>
+          <p class="mt-1 text-xs text-slate-600">通用 GRADE+CERQual 骨架 + 本项目特定的 indirectness / RoB pattern / CERQual relevance 锚点。Opus 一次性生成,~5-8 min。</p>
+        </div>
+        <div class="flex flex-none flex-col items-end gap-2">
+          <% if (overlayInFlight) { %>
+            <span id="cert-overlay-status" class="rounded-lg bg-blue-100 px-3 py-2 text-xs font-mono text-blue-800" data-started="<%= overlayLockStarted %>">
+              ⏳ 生成中…(开始于 <%= overlayLockStarted %>)
+            </span>
+          <% } else if (overlay && !overlayStale) { %>
+            <p class="text-xs text-emerald-700 text-right">基于协议 v<%= overlayAtVersion %> 已生成</p>
+          <% } else { %>
+            <form id="cert-overlay-form" method="post" action="/projects/<%= project.id %>/certainty/optimize-overlay">
+              <button type="submit" id="cert-overlay-btn"
+                      class="rounded-lg <%= overlayStale ? 'bg-amber-600 hover:bg-amber-500' : 'bg-violet-600 hover:bg-violet-500' %> px-3 py-2 text-xs font-medium text-white shadow-sm">
+                <%= overlay ? '↻ 重新生成(协议已升级)' : '⚙️ 生成项目专用 overlay' %>
+              </button>
+            </form>
+          <% } %>
+        </div>
+      </div>
+      <% if (overlay && !overlayStale) { %>
+        <details class="mt-3 text-xs">
+          <summary class="cursor-pointer text-emerald-800 hover:text-emerald-900 font-medium">查看 overlay 内容 ▾</summary>
+          <pre class="mt-3 whitespace-pre-wrap rounded-lg border border-emerald-200 bg-white p-3 text-slate-700 leading-relaxed"><%= overlay.overlay_text || overlay.text || JSON.stringify(overlay, null, 2) %></pre>
+        </details>
+      <% } %>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- M30 Card C: 跑主题级 rollup(异步)+ 顶部导出 -->
+    <!-- ============================================================ -->
+    <div id="cert-run-card"
+         class="rounded-2xl border <%= certRunInFlight ? 'border-blue-300 bg-blue-50/40' : (certRunStatus === 'failed' ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200 bg-white') %> p-6">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div class="min-w-0 flex-1">
+          <h2 class="text-base font-semibold text-slate-900">⚡ 主题级 certainty 评估(GRADE + CERQual rollup)</h2>
+          <p class="mt-1 text-sm text-slate-500">
+            一次 LLM call 给所有 <%= themes.length %> 主题打 overall certainty。基于 study_design_mix 自动分流 GRADE/CERQual/Hybrid。Opus 4.8 + ultrathink,~20-40 min,可关闭页面后台继续。
+          </p>
+        </div>
+        <div class="flex flex-none flex-wrap items-center gap-2">
+          <% if (certRunInFlight) { %>
+            <button type="button" disabled
+                    class="cursor-not-allowed rounded-lg bg-blue-200 px-4 py-2 text-sm font-medium text-blue-800">
+              ⏳ 运行中…
+            </button>
+          <% } else if (themes.length === 0) { %>
+            <span class="rounded-lg bg-slate-100 px-3 py-1.5 text-xs text-slate-500">没有主题 → 先跑 Step 6</span>
+          <% } else if (certUpstreamUnchanged) { %>
+            <div class="flex flex-col items-end gap-1">
+              <button type="button" disabled
+                      class="cursor-not-allowed rounded-lg bg-slate-200 px-4 py-2 text-sm font-medium text-slate-500"
+                      title="上游数据(协议 / themes / matrix / RoB / overlay)未变化 — 重跑会得到几乎相同结果">
+                ✓ 上次结果有效(上游未变更)
+              </button>
+              <form method="post" action="/projects/<%= project.id %>/certainty/run-themes" class="inline"
+                    onsubmit="return confirm('上游没变化时强制重跑会得到非常相似的结果且烧 token,确认继续?')">
+                <input type="hidden" name="force" value="1">
+                <button type="submit" class="text-[11px] text-rose-600 hover:text-rose-800 underline">⚠ 强制重跑(浪费 token)</button>
+              </form>
+            </div>
+          <% } else { %>
+            <form id="cert-run-form" method="post" action="/projects/<%= project.id %>/certainty/run-themes"
+                  onsubmit="return confirm('将调用 Opus 4.8 + ultrathink 评估所有主题(~20-40 分钟,后台跑,可关闭页面)。\n\n⚠ 注意:重跑会同时清除所有 outcome 级 SoF 评估(grade_assessments),因为评估前提变了 — 完成后你需要重新点 \\u26A1 让 AI 提议 outcome。\n\n继续?')">
+              <button type="submit" id="cert-run-btn"
+                      class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 transition">
+                <%= Object.keys(themeCertaintyMap).length ? '↻ 重新评估(上游已变更)' : '⚡ 跑主题级 certainty' %>
+              </button>
+            </form>
+          <% } %>
+        </div>
+      </div>
+
+      <!-- 进度卡(in-flight 时显示;M30+:3 段计时 已用 / 预估 / 最长 + 💓 心跳)-->
+      <%
+        // certainty 预估按 themes 数算(每主题 ~5 min — Opus + ultrathink + 完整 paper profile,实测偏保守)
+        //   6 主题 → 30 min;10 主题 → 50 min;但顶 60 min,因为硬超时是 60 min
+        //   宁可偏长不偏短:用户预期 X min,实际 < X min 是惊喜,实际 > X min 是焦虑
+        const estimatedSecondsCert = Math.max(900, Math.min(3300, Math.round(themes.length * 300)))
+        const hardMaxSecondsCert = 3600   // 60 min 硬超时(冗余:LLM call timeout 45 min + 业务侧 buffer)
+      %>
+      <div id="cert-run-progress" class="mt-4 <%= certRunInFlight ? '' : 'hidden' %>"
+           data-started="<%= certRunStarted || '' %>"
+           data-estimated="<%= estimatedSecondsCert %>"
+           data-hard-max="<%= hardMaxSecondsCert %>">
+        <div class="rounded-xl border border-blue-200 bg-white/70 p-4">
+          <div class="flex items-center gap-3">
+            <svg class="h-5 w-5 animate-spin text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-semibold text-blue-900">正在跑主题级 GRADE + CERQual rollup</p>
+              <p class="mt-0.5 text-xs text-blue-700">
+                <%= themes.length %> 主题 · GRADE <%= frameworkSplit.grade %> · CERQual <%= frameworkSplit.cerqual %> · Hybrid <%= frameworkSplit.hybrid %>
+              </p>
+            </div>
+          </div>
+          <div class="mt-3 grid grid-cols-3 gap-3 text-center">
+            <div class="rounded-lg bg-blue-50 p-2">
+              <p class="text-[10px] uppercase tracking-wide text-blue-600">已用</p>
+              <p class="mt-0.5 text-xl font-mono font-bold text-blue-900"><span id="cert-elapsed">0:00</span></p>
+            </div>
+            <div class="rounded-lg bg-emerald-50 p-2">
+              <p class="text-[10px] uppercase tracking-wide text-emerald-600">预估</p>
+              <p class="mt-0.5 text-xl font-mono font-bold text-emerald-800">~<%= Math.round(estimatedSecondsCert / 60) %>:00</p>
+              <p class="text-[9px] text-emerald-500"><%= themes.length %> 主题按 3 min/主题</p>
+            </div>
+            <div class="rounded-lg bg-amber-50 p-2">
+              <p class="text-[10px] uppercase tracking-wide text-amber-600">最长(硬超时)</p>
+              <p class="mt-0.5 text-xl font-mono font-bold text-amber-800"><%= Math.round(hardMaxSecondsCert / 60) %>:00</p>
+              <p class="text-[9px] text-amber-500">超时会自动中断</p>
+            </div>
+          </div>
+          <div class="mt-3 h-2 w-full rounded-full bg-blue-100 overflow-hidden">
+            <div id="cert-progress-bar" class="h-full bg-blue-500 transition-all duration-1000" style="width: 0%"></div>
+          </div>
+          <div class="mt-2 flex items-center justify-between text-[11px]">
+            <span id="cert-stage-hint" class="text-blue-600">📡 提交 LLM 中…(可以关闭页面,评估会在后台继续)</span>
+            <span id="cert-heartbeat" class="text-slate-500 font-mono">💓 等待心跳…</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 失败 / 成功摘要 -->
+      <% if (!certRunInFlight && (certRunStatus === 'failed' || certRunStatus === 'aborted_by_restart')) { %>
+        <div class="mt-4 rounded-xl border border-rose-200 bg-white p-4">
+          <p class="text-sm font-semibold text-rose-900">⚠ 上次评估失败<% if (certRunStatus === 'aborted_by_restart') { %>(服务重启中断)<% } %></p>
+          <% if (certRunError) { %>
+            <pre class="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-900"><%= certRunError %></pre>
+          <% } %>
+          <p class="mt-2 text-xs text-rose-700">直接点 ⚡ 重试即可。</p>
+        </div>
+      <% } %>
+      <% if (!certRunInFlight && certRunStatus === 'success' && certRunMeta) { %>
+        <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
+          <p class="text-xs text-emerald-800">
+            ✓ 上次评估成功 ·
+            <%= certRunMeta.themes_count || '?' %> 个主题 ·
+            <%= certRunMeta.duration_ms ? Math.round(certRunMeta.duration_ms / 1000) + 's' : '' %> ·
+            <%= certRunMeta.model || '' %>
+            <% if (certRunFinished) { %>· <%= certRunFinished %> UTC<% } %>
+            <% if (certRunMeta.cleared_outcomes > 0) { %>
+              <br><span class="text-amber-700">⚠ 同时清除了 <%= certRunMeta.cleared_outcomes %> 个旧 outcome 评估(评估前提变了)— 请按需重新点 ⚡ 让 AI 提议 outcome</span>
+            <% } %>
+          </p>
+        </div>
+      <% } %>
+
+      <!-- 顶部导出按钮 -->
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+        <p class="text-xs text-slate-500">导出供论文 / 审稿人:</p>
+        <div class="flex flex-wrap gap-2">
+          <a href="/projects/<%= project.id %>/certainty/evidence-profile.md"
+             class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+            ⬇ Evidence Profile (MD)
+          </a>
+          <a href="/projects/<%= project.id %>/certainty/evidence-profile.csv"
+             class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+            ⬇ Evidence Profile (CSV)
+          </a>
+          <a href="/projects/<%= project.id %>/certainty/summary-findings.md"
+             class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+            ⬇ Summary Findings (per theme)
+          </a>
+          <a href="/projects/<%= project.id %>/certainty/sof.md"
+             class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+            ⬇ SoF (outcome 级 · MD)
+          </a>
+          <a href="/projects/<%= project.id %>/certainty/sof.csv"
+             class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+            ⬇ SoF (outcome 级 · CSV)
+          </a>
+        </div>
       </div>
     </div>
 
@@ -43,39 +264,245 @@
       <!-- 每个 theme 一张卡片 -->
       <% themes.forEach((theme) => {
            const tAssessments = assessmentsByTheme[theme.id] || []
+           const tc = themeCertaintyMap[theme.id] || null
+           const frameworkLabel = ({ grade: 'GRADE', cerqual: 'CERQual', hybrid: 'GRADE + CERQual' })[theme.grading_framework] || theme.grading_framework || '?'
+           const frameworkChipCls = ({
+             grade:   'bg-emerald-100 text-emerald-800 border-emerald-300',
+             cerqual: 'bg-violet-100 text-violet-800 border-violet-300',
+             hybrid:  'bg-amber-100 text-amber-800 border-amber-300',
+           })[theme.grading_framework] || 'bg-slate-100 text-slate-700 border-slate-300'
+           const tcCertaintyCls = ({
+             high:     'bg-emerald-100 text-emerald-800 border-emerald-300',
+             moderate: 'bg-blue-100 text-blue-800 border-blue-300',
+             low:      'bg-amber-100 text-amber-800 border-amber-300',
+             very_low: 'bg-rose-100 text-rose-800 border-rose-300',
+           })[tc?.overall_certainty] || 'bg-slate-100 text-slate-500 border-slate-300'
+           const tcCertaintyText = ({
+             high: '高 ⊕⊕⊕⊕', moderate: '中 ⊕⊕⊕○', low: '低 ⊕⊕○○', very_low: '极低 ⊕○○○',
+           })[tc?.overall_certainty] || '未评'
       %>
         <div id="theme-<%= theme.id %>" class="rounded-2xl border border-slate-200 bg-white shadow-card overflow-hidden">
           <!-- theme header -->
           <div class="flex items-start justify-between gap-3 border-b border-slate-200 bg-slate-50/60 px-5 py-3.5">
             <div class="min-w-0 flex-1">
-              <h3 class="text-base font-semibold text-slate-900"><%= theme.name %></h3>
+              <div class="flex flex-wrap items-baseline gap-2">
+                <h3 class="text-base font-semibold text-slate-900"><%= theme.name %></h3>
+                <span class="rounded-full border px-2 py-0.5 text-[10px] font-medium <%= frameworkChipCls %>"><%= frameworkLabel %></span>
+              </div>
               <% if (theme.description) { %>
                 <p class="mt-0.5 text-xs text-slate-500"><%= theme.description %></p>
               <% } %>
               <p class="mt-1 text-[11px] text-slate-400">
-                <%= (theme.supporting_record_ids || []).length %> 篇支撑研究 · <%= tAssessments.length %> 个 outcome 已评
+                <%= (theme.supporting_record_ids || []).length %> 篇支撑研究 ·
+                study_design_mix=<%= JSON.stringify(theme.study_design_mix || {}) %> ·
+                rob_profile=<%= JSON.stringify(theme.rob_profile || {}) %>
               </p>
             </div>
-            <div class="flex flex-none gap-2">
-              <form method="post" action="/projects/<%= project.id %>/certainty/ai-suggest/<%= theme.id %>"
-                    onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').innerText='AI 评估中…';">
-                <button type="submit"
-                        class="rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700 disabled:bg-slate-500 disabled:cursor-wait shadow-subtle">
-                  让 AI 评估
+            <div class="flex-none">
+              <div class="rounded-lg border px-3 py-2 text-center <%= tcCertaintyCls %>">
+                <p class="text-[10px] uppercase tracking-wide opacity-70">主题总体证据强度</p>
+                <p class="mt-0.5 text-sm font-bold"><%= tcCertaintyText %></p>
+              </div>
+              <% if (tc?.iteration_n) { %>
+                <p class="mt-1 text-[10px] text-slate-400 text-center">iter <%= tc.iteration_n %></p>
+              <% } %>
+            </div>
+          </div>
+
+          <!-- M30 主题级 rollup 详情 -->
+          <% if (tc) { %>
+            <div class="border-b border-slate-100 px-5 py-4">
+              <% if (tc.body_of_evidence_summary) { %>
+                <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Body of evidence</p>
+                <p class="mt-1 text-sm text-slate-800 leading-relaxed"><%= tc.body_of_evidence_summary %></p>
+              <% } %>
+              <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                <% if (tc.implications_for_practice) { %>
+                  <div class="rounded-lg border border-blue-200 bg-blue-50/40 p-3">
+                    <p class="text-[11px] font-medium uppercase tracking-wide text-blue-700">Implications for practice</p>
+                    <p class="mt-1 text-xs text-slate-800 leading-relaxed"><%= tc.implications_for_practice %></p>
+                  </div>
+                <% } %>
+                <% if (tc.implications_for_research) { %>
+                  <div class="rounded-lg border border-violet-200 bg-violet-50/40 p-3">
+                    <p class="text-[11px] font-medium uppercase tracking-wide text-violet-700">Implications for research</p>
+                    <p class="mt-1 text-xs text-slate-800 leading-relaxed"><%= tc.implications_for_research %></p>
+                  </div>
+                <% } %>
+              </div>
+
+              <% if (tc.grade_risk_of_bias || tc.grading_framework === 'grade' || tc.grading_framework === 'hybrid') { %>
+                <details class="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/30 p-3">
+                  <summary class="cursor-pointer text-xs font-medium text-emerald-800">GRADE 5 下调维度 + 3 上调因素 ▾</summary>
+                  <div class="mt-3 space-y-1.5 text-xs">
+                    <% [['risk_of_bias','RoB'],['inconsistency','Incons'],['indirectness','Indir'],['imprecision','Imprec'],['publication_bias','PubBias']].forEach(([k,short]) => {
+                         const lv = tc['grade_' + k]
+                         const cls = ({not_serious:'text-emerald-700', serious:'text-amber-700', very_serious:'text-rose-700', undetected:'text-emerald-700', suspected:'text-amber-700', strongly_suspected:'text-rose-700'})[lv] || 'text-slate-500'
+                         const rat = (tc.grade_rationales && tc.grade_rationales[k]) || ''
+                    %>
+                      <div class="flex items-start gap-2">
+                        <span class="flex-none w-28 text-slate-600 font-medium"><%= short %>:</span>
+                        <span class="flex-none <%= cls %> font-medium"><%= lv || '—' %></span>
+                        <% if (rat) { %><span class="text-slate-600">— <%= rat %></span><% } %>
+                      </div>
+                    <% }) %>
+                    <div class="mt-2 pt-2 border-t border-emerald-200 text-[11px] text-slate-500">
+                      升级因素 · large_effect: <%= tc.grade_large_effect || '—' %> · dose_response: <%= tc.grade_dose_response ? 'yes' : 'no' %> · plausible_confounding: <%= tc.grade_plausible_confounding || '—' %>
+                    </div>
+                  </div>
+                </details>
+              <% } %>
+
+              <% if (tc.cerqual_methodological_limitations || tc.grading_framework === 'cerqual' || tc.grading_framework === 'hybrid') { %>
+                <details class="mt-3 rounded-lg border border-violet-200 bg-violet-50/30 p-3">
+                  <summary class="cursor-pointer text-xs font-medium text-violet-800">CERQual 4 维度 ▾</summary>
+                  <div class="mt-3 space-y-1.5 text-xs">
+                    <% [['methodological_limitations','MethLim'],['relevance','Rel'],['coherence','Coh'],['adequacy_of_data','Adeq']].forEach(([k,short]) => {
+                         const lv = tc['cerqual_' + k]
+                         const cls = ({no_or_minor_concerns:'text-emerald-700', minor_concerns:'text-emerald-600', moderate_concerns:'text-amber-700', serious_concerns:'text-rose-700'})[lv] || 'text-slate-500'
+                         const rat = (tc.cerqual_rationales && tc.cerqual_rationales[k]) || ''
+                    %>
+                      <div class="flex items-start gap-2">
+                        <span class="flex-none w-28 text-slate-600 font-medium"><%= short %>:</span>
+                        <span class="flex-none <%= cls %> font-medium"><%= lv || '—' %></span>
+                        <% if (rat) { %><span class="text-slate-600">— <%= rat %></span><% } %>
+                      </div>
+                    <% }) %>
+                  </div>
+                </details>
+              <% } %>
+            </div>
+          <% } else { %>
+            <div class="border-b border-slate-100 bg-slate-50/30 px-5 py-3 text-xs text-slate-500">
+              主题级评估未完成 — 点上方 ⚡ 跑全主题级 rollup,或下面 outcome 级单独评。
+            </div>
+          <% } %>
+
+          <!-- 兼容:outcome 级 drill-down(折叠)-->
+          <%
+            const outcomeRunInFlight = theme.outcome_run_in_flight
+            const outcomeRunMeta = theme.outcome_run_meta_parsed
+            const outcomeRunStatus = theme.outcome_run_status
+            const outcomeStarted = theme.outcome_run_started_at
+            const outcomeFailed = (outcomeRunStatus === 'failed' || outcomeRunStatus === 'aborted_by_restart') && !outcomeRunInFlight
+          %>
+          <details class="border-b border-slate-100 bg-slate-50/20 px-5 py-3" <%= (tAssessments.length || outcomeRunInFlight || outcomeFailed) ? 'open' : '' %>>
+            <summary class="cursor-pointer text-xs font-medium text-slate-600">
+              Outcome 级 SoF drill-down(<%= tAssessments.length %> 个 outcome 已评)— Cochrane 经典 SoF 表,适合量化效应
+              <% if (outcomeRunInFlight) { %>
+                <span class="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-800">⏳ AI 评估中</span>
+              <% } else if (outcomeFailed) { %>
+                <span class="ml-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-medium text-rose-800">⚠ 上次失败</span>
+              <% } %>
+            </summary>
+            <!-- 用途说明 -->
+            <div class="mt-2 rounded-md border border-slate-200 bg-white/60 px-3 py-2 text-[11px] text-slate-600 leading-relaxed">
+              <strong class="text-slate-700">这一层做什么?</strong>
+              主题级是"整体证据体"的总评(本主题强度=<span class="font-mono"><%= tc?.overall_certainty || '未评' %></span>),Outcome 级把它拆成"<strong>具体结局指标</strong>"——比如该主题下 <em>"Post-test knowledge retention"</em> 的 effect size + GRADE 评级、<em>"Cognitive load"</em> 的 effect size + GRADE 评级,各 1 行。
+              <br>
+              <span class="text-slate-500">这是 <strong>Cochrane Summary of Findings 表</strong> 的标准格式,SLR 论文 Results 章直接放进去。</span>
+              <br>
+              <strong class="text-slate-700">什么时候用?</strong>
+              <% if (theme.grading_framework === 'cerqual') { %>
+                <span class="text-violet-700">质性主题(CERQual)— Outcome 级意义不大,主题级 body_of_evidence 已足够。可跳过。</span>
+              <% } else if (theme.grading_framework === 'grade') { %>
+                <span class="text-emerald-700">量化主题(GRADE)— <strong>强烈建议跑</strong>,产出标准 SoF 表行。</span>
+              <% } else { %>
+                <span class="text-amber-700">混合主题(Hybrid)— 量化 outcome 部分有用(如 RCT 子集的 post-test score);质性部分跳过。</span>
+              <% } %>
+            </div>
+
+            <!-- 操作按钮组 -->
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <% if (outcomeRunInFlight) { %>
+                <button type="button" disabled
+                        class="cursor-not-allowed rounded-md bg-blue-200 px-3 py-1.5 text-[11px] font-medium text-blue-800">
+                  ⏳ AI 评估中…
                 </button>
-              </form>
-              <details class="relative">
-                <summary class="cursor-pointer rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">+ 手动新增</summary>
+              <% } else { %>
+                <form id="outcome-suggest-form-<%= theme.id %>" method="post"
+                      action="/projects/<%= project.id %>/certainty/ai-suggest/<%= theme.id %>"
+                      onsubmit="return confirm('将调用 Opus 给主题 \&quot;<%= theme.name.replace(/'/g, '') %>\&quot; 提议 1-3 个量化 outcome 评估(~5-10 min,后台跑,可关页面)。继续?')"
+                      class="inline">
+                  <button type="submit"
+                          class="rounded-md bg-slate-900 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-slate-700 shadow-subtle">
+                    ⚡ 让 AI 提议 outcome
+                  </button>
+                </form>
+              <% } %>
+              <details class="relative inline-block">
+                <summary class="cursor-pointer rounded-md border border-slate-300 px-3 py-1.5 text-[11px] text-slate-700 hover:bg-slate-50">+ 手动新增</summary>
                 <form method="post" action="/projects/<%= project.id %>/certainty/manual-add/<%= theme.id %>"
-                      class="absolute right-0 mt-1 z-10 w-72 rounded-lg border border-slate-200 bg-white p-3 shadow-hover">
-                  <p class="text-xs text-slate-500 mb-2">结局指标名(如:学习成绩 / 学生参与度)</p>
-                  <input name="outcome_label" required maxlength="200"
+                      class="absolute left-0 mt-1 z-10 w-72 rounded-lg border border-slate-200 bg-white p-3 shadow-hover">
+                  <p class="text-xs text-slate-500 mb-2">Outcome 名(如:Post-test knowledge retention / Task completion time)</p>
+                  <input name="outcome_label" required maxlength="200" placeholder="英文 outcome 标签"
                          class="w-full rounded-md border-slate-300 px-2 py-1 text-sm">
                   <button type="submit" class="mt-2 w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs text-white">新增</button>
                 </form>
               </details>
             </div>
-          </div>
+
+            <!-- in-flight 进度卡(per-theme)-->
+            <% if (outcomeRunInFlight) { %>
+              <%
+                const outcomeEstimatedS = 480    // 8 min 预估
+                const outcomeHardMaxS = 1200     // 20 min 硬上限
+              %>
+              <div id="outcome-run-progress-<%= theme.id %>" class="mt-3 rounded-xl border border-blue-200 bg-blue-50/40 p-3"
+                   data-started="<%= outcomeStarted || '' %>"
+                   data-estimated="<%= outcomeEstimatedS %>"
+                   data-hard-max="<%= outcomeHardMaxS %>"
+                   data-theme-id="<%= theme.id %>">
+                <div class="flex items-center gap-2">
+                  <svg class="h-4 w-4 animate-spin text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                  </svg>
+                  <span class="text-xs font-medium text-blue-900">AI 正在分析该主题下的具体 outcome…</span>
+                </div>
+                <div class="mt-2 grid grid-cols-3 gap-2 text-center">
+                  <div class="rounded bg-white p-1.5">
+                    <p class="text-[9px] uppercase tracking-wide text-blue-600">已用</p>
+                    <p class="text-sm font-mono font-bold text-blue-900"><span class="outcome-elapsed">0:00</span></p>
+                  </div>
+                  <div class="rounded bg-white p-1.5">
+                    <p class="text-[9px] uppercase tracking-wide text-emerald-600">预估</p>
+                    <p class="text-sm font-mono font-bold text-emerald-800">~<%= Math.round(outcomeEstimatedS/60) %>:00</p>
+                  </div>
+                  <div class="rounded bg-white p-1.5">
+                    <p class="text-[9px] uppercase tracking-wide text-amber-600">最长</p>
+                    <p class="text-sm font-mono font-bold text-amber-800"><%= Math.round(outcomeHardMaxS/60) %>:00</p>
+                  </div>
+                </div>
+                <div class="mt-2 h-1.5 w-full rounded-full bg-blue-100 overflow-hidden">
+                  <div class="outcome-progress-bar h-full bg-blue-500 transition-all duration-1000" style="width: 0%"></div>
+                </div>
+                <p class="mt-1.5 flex items-center justify-between text-[10px]">
+                  <span class="outcome-stage-hint text-blue-600">📡 提交 LLM 中…</span>
+                  <span class="outcome-heartbeat text-slate-500 font-mono">💓 等待心跳…</span>
+                </p>
+              </div>
+            <% } %>
+
+            <!-- 失败信息 -->
+            <% if (outcomeFailed) { %>
+              <div class="mt-3 rounded-xl border border-rose-200 bg-rose-50/40 p-3">
+                <p class="text-xs font-semibold text-rose-900">⚠ 上次 AI outcome 提议失败<% if (outcomeRunStatus === 'aborted_by_restart') { %>(服务重启中断)<% } %></p>
+                <% if (theme.outcome_run_error) { %>
+                  <pre class="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-rose-200 bg-white p-2 text-[10px] text-rose-900"><%= theme.outcome_run_error %></pre>
+                <% } %>
+                <p class="mt-1 text-[10px] text-rose-700">直接点 ⚡ 重试即可。</p>
+              </div>
+            <% } %>
+
+            <!-- 上次成功摘要 -->
+            <% if (!outcomeRunInFlight && outcomeRunStatus === 'success' && outcomeRunMeta && !outcomeRunMeta.heartbeat) { %>
+              <p class="mt-2 text-[10px] text-emerald-700">
+                ✓ 上次 AI 提议成功 · <%= outcomeRunMeta.outcomes_count || '?' %> outcomes ·
+                <%= outcomeRunMeta.duration_ms ? Math.round(outcomeRunMeta.duration_ms / 1000) + 's' : '' %>
+              </p>
+            <% } %>
+          </details>
 
           <!-- assessments(outcomes) -->
           <% if (tAssessments.length === 0) { %>
@@ -276,5 +703,259 @@
 
   </section>
 </div>
+
+<script>
+(function () {
+  // ============================================================
+  // M30: Certainty run-themes 异步进度(镜像 synthesis 模式)
+  // ============================================================
+  function fmtElapsed(s) {
+    var m = Math.floor(s / 60)
+    var ss = s % 60
+    return m + ':' + (ss < 10 ? '0' : '') + ss
+  }
+  function startCertProgressTicker() {
+    var pane = document.getElementById('cert-run-progress')
+    if (!pane || pane.classList.contains('hidden')) return null
+    var startedISO = pane.getAttribute('data-started')
+    var startedMs = startedISO ? Date.parse(startedISO.replace(' ', 'T') + 'Z') : Date.now()
+    if (!isFinite(startedMs)) startedMs = Date.now()
+    var elapsedEl = document.getElementById('cert-elapsed')
+    var barEl = document.getElementById('cert-progress-bar')
+    var stageEl = document.getElementById('cert-stage-hint')
+    var ESTIMATED_S = parseInt(pane.getAttribute('data-estimated') || '1500', 10) || 1500
+    var HARD_TIMEOUT_S = parseInt(pane.getAttribute('data-hard-max') || '2700', 10) || 2700
+    function tick() {
+      var s = Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
+      if (elapsedEl) elapsedEl.textContent = fmtElapsed(s)
+      if (barEl) {
+        var pct = Math.min(95, Math.round((s / HARD_TIMEOUT_S) * 100))
+        barEl.style.width = pct + '%'
+      }
+      if (stageEl) {
+        if (s < 30) stageEl.textContent = '📡 提交 LLM 中(Opus 4.8 + ultrathink 启动中)…'
+        else if (s < 180) stageEl.textContent = '🧠 模型阅读全主题 + RoB + matrix(thinking 阶段不出 token,正常)…'
+        else if (s < ESTIMATED_S * 0.6) stageEl.textContent = '🔍 ultrathink 推理中(GRADE 5 维 + CERQual 4 维评级 + body of evidence narrative)…'
+        else if (s < ESTIMATED_S) stageEl.textContent = '✍️ 输出阶段(JSON 序列化所有主题评估)…'
+        else if (s < HARD_TIMEOUT_S) stageEl.textContent = '⏳ 已超预估(' + Math.round(ESTIMATED_S/60) + ' min),但硬超时(' + Math.round(HARD_TIMEOUT_S/60) + ' min)内都正常…'
+        else stageEl.textContent = '⚠ 已达硬超时(' + Math.round(HARD_TIMEOUT_S/60) + ' min),正在中断…'
+      }
+    }
+    tick()
+    return setInterval(tick, 1000)
+  }
+  function startCertPolling() {
+    var pane = document.getElementById('cert-run-progress')
+    if (!pane || pane.classList.contains('hidden')) return
+    var tickerId = startCertProgressTicker()
+    var hbEl = document.getElementById('cert-heartbeat')
+    var pollId = setInterval(function() {
+      fetch('/projects/<%= project.id %>/certainty/run/status.json', {
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          // 心跳显示:每 30s 后台 setImmediate 写一次 last_heartbeat_at
+          //   > 90s 没更新 → 标 ⚠ (可能卡死;或刚启动还没第一次心跳)
+          if (hbEl) {
+            if (s.heartbeat_ago_s == null) {
+              hbEl.textContent = '💓 等待第一次心跳…'
+              hbEl.className = 'text-amber-500 font-mono'
+            } else if (s.heartbeat_ago_s < 60) {
+              hbEl.textContent = '💓 ' + s.heartbeat_ago_s + 's 前(后台真的在跑)'
+              hbEl.className = 'text-emerald-600 font-mono'
+            } else if (s.heartbeat_ago_s < 90) {
+              hbEl.textContent = '💓 ' + s.heartbeat_ago_s + 's 前(下次 30s 内)'
+              hbEl.className = 'text-amber-500 font-mono'
+            } else {
+              hbEl.textContent = '⚠ 心跳停 ' + s.heartbeat_ago_s + 's(可能卡死,等硬超时)'
+              hbEl.className = 'text-rose-600 font-mono'
+            }
+          }
+          if (s.in_flight) return
+          clearInterval(pollId)
+          if (tickerId) clearInterval(tickerId)
+          var barEl = document.getElementById('cert-progress-bar')
+          if (barEl) barEl.style.width = '100%'
+          setTimeout(function() { window.location.reload() }, 600)
+        }).catch(function() {})
+    }, 5000)
+  }
+  startCertPolling()
+
+  // Run 按钮 AJAX 提交
+  var certForm = document.getElementById('cert-run-form')
+  var certBtn = document.getElementById('cert-run-btn')
+  if (certForm && certBtn) {
+    certForm.addEventListener('submit', function(ev) {
+      ev.preventDefault()
+      if (certBtn.disabled) return
+      var orig = certBtn.textContent
+      certBtn.disabled = true
+      certBtn.textContent = '⏳ 启动中…'
+      fetch(certForm.action, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'X-Requested-With': 'fetch' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.json().catch(function() { return { ok: false, error: 'bad_response' } }) })
+        .then(function(j) {
+          if (j && j.ok && j.in_flight) {
+            window.location.reload()
+          } else if (j && j.error_code === 'in_flight') {
+            window.location.reload()
+          } else {
+            certBtn.disabled = false
+            certBtn.textContent = orig
+            alert('启动失败:' + ((j && j.message) || (j && j.error) || '未知错误'))
+          }
+        }).catch(function(e) {
+          certBtn.disabled = false
+          certBtn.textContent = orig
+          alert('请求失败:' + (e?.message || '网络错误'))
+        })
+    })
+  }
+
+  // ============================================================
+  // M31: Outcome 级 ai-suggest 异步进度(per-theme,可并行)
+  // ============================================================
+  function startOutcomePollingForTheme(themeId) {
+    var pane = document.getElementById('outcome-run-progress-' + themeId)
+    if (!pane) return
+    var startedISO = pane.getAttribute('data-started')
+    var startedMs = startedISO ? Date.parse(startedISO.replace(' ', 'T') + 'Z') : Date.now()
+    if (!isFinite(startedMs)) startedMs = Date.now()
+    var ESTIMATED_S = parseInt(pane.getAttribute('data-estimated') || '480', 10) || 480
+    var HARD_TIMEOUT_S = parseInt(pane.getAttribute('data-hard-max') || '1200', 10) || 1200
+    var elapsedEl = pane.querySelector('.outcome-elapsed')
+    var barEl = pane.querySelector('.outcome-progress-bar')
+    var stageEl = pane.querySelector('.outcome-stage-hint')
+    var hbEl = pane.querySelector('.outcome-heartbeat')
+    function tick() {
+      var s = Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
+      if (elapsedEl) elapsedEl.textContent = fmtElapsed(s)
+      if (barEl) barEl.style.width = Math.min(95, Math.round((s / HARD_TIMEOUT_S) * 100)) + '%'
+      if (stageEl) {
+        if (s < 20) stageEl.textContent = '📡 提交 LLM 中…'
+        else if (s < 60) stageEl.textContent = '🧠 阅读主题 + 论文 matrix(thinking 不出 token)…'
+        else if (s < ESTIMATED_S) stageEl.textContent = '🔍 GRADE 5 维 + outcome 提议中…'
+        else if (s < HARD_TIMEOUT_S) stageEl.textContent = '⏳ 已超预估,' + Math.round(HARD_TIMEOUT_S/60) + ' min 内都正常…'
+        else stageEl.textContent = '⚠ 已达硬超时…'
+      }
+    }
+    tick()
+    var tickerId = setInterval(tick, 1000)
+    var pollId = setInterval(function() {
+      fetch('/projects/<%= project.id %>/certainty/ai-suggest/' + themeId + '/status.json', {
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          if (hbEl) {
+            if (s.heartbeat_ago_s == null) {
+              hbEl.textContent = '💓 等待第一次心跳…'
+              hbEl.className = 'outcome-heartbeat text-amber-500 font-mono'
+            } else if (s.heartbeat_ago_s < 60) {
+              hbEl.textContent = '💓 ' + s.heartbeat_ago_s + 's 前'
+              hbEl.className = 'outcome-heartbeat text-emerald-600 font-mono'
+            } else if (s.heartbeat_ago_s < 90) {
+              hbEl.textContent = '💓 ' + s.heartbeat_ago_s + 's 前'
+              hbEl.className = 'outcome-heartbeat text-amber-500 font-mono'
+            } else {
+              hbEl.textContent = '⚠ 心跳停 ' + s.heartbeat_ago_s + 's'
+              hbEl.className = 'outcome-heartbeat text-rose-600 font-mono'
+            }
+          }
+          if (s.in_flight) return
+          clearInterval(pollId); clearInterval(tickerId)
+          if (barEl) barEl.style.width = '100%'
+          setTimeout(function() { window.location.reload() }, 600)
+        }).catch(function() {})
+    }, 5000)
+  }
+  // 自动为所有 in-flight outcome theme 启 polling
+  document.querySelectorAll('[id^="outcome-run-progress-"]').forEach(function(pane) {
+    var themeId = pane.getAttribute('data-theme-id')
+    if (themeId) startOutcomePollingForTheme(themeId)
+  })
+
+  // Outcome ai-suggest form AJAX submit(per-theme)
+  document.querySelectorAll('[id^="outcome-suggest-form-"]').forEach(function(form) {
+    form.addEventListener('submit', function(ev) {
+      ev.preventDefault()
+      var btn = form.querySelector('button[type="submit"]')
+      if (!btn || btn.disabled) return
+      var orig = btn.textContent
+      btn.disabled = true
+      btn.textContent = '⏳ 启动中…'
+      fetch(form.action, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'X-Requested-With': 'fetch' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.json().catch(function() { return { ok: false } }) })
+        .then(function(j) {
+          if (j && j.ok && j.in_flight) {
+            window.location.reload()
+          } else if (j && j.error_code === 'in_flight') {
+            window.location.reload()
+          } else {
+            btn.disabled = false
+            btn.textContent = orig
+            alert('启动失败:' + ((j && j.message) || (j && j.error) || '未知'))
+          }
+        }).catch(function(e) {
+          btn.disabled = false
+          btn.textContent = orig
+          alert('请求失败:' + (e?.message || '网络错误'))
+        })
+    })
+  })
+
+  // Overlay 状态 5s 轮询
+  var ovBadge = document.getElementById('cert-overlay-status')
+  if (ovBadge) {
+    var t = setInterval(function() {
+      fetch('/projects/<%= project.id %>/certainty/optimize-overlay/status.json', { headers: { Accept: 'application/json' } })
+        .then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          if (!s.in_flight) { clearInterval(t); window.location.reload() }
+        }).catch(function() {})
+    }, 5000)
+  }
+
+  // Overlay 按钮 AJAX 提交
+  var ovForm = document.getElementById('cert-overlay-form')
+  var ovBtn = document.getElementById('cert-overlay-btn')
+  if (ovForm && ovBtn) {
+    ovForm.addEventListener('submit', function(ev) {
+      ev.preventDefault()
+      if (ovBtn.disabled) return
+      var orig = ovBtn.textContent
+      ovBtn.disabled = true
+      ovBtn.textContent = '⏳ 启动中…'
+      fetch(ovForm.action, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'X-Requested-With': 'fetch' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.json().catch(function() { return { ok: false } }) })
+        .then(function(j) {
+          if (j && j.ok) window.location.reload()
+          else {
+            ovBtn.disabled = false
+            ovBtn.textContent = orig
+            alert('启动失败:' + ((j && j.error_code) || (j && j.error) || '未知'))
+          }
+        }).catch(function(e) {
+          ovBtn.disabled = false
+          ovBtn.textContent = orig
+          alert('请求失败:' + (e?.message || '网络错误'))
+        })
+    })
+  }
+})()
+</script>
 
 <%- include('../partials/footer') %>

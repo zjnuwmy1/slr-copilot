@@ -432,7 +432,7 @@ export function upsertMatrixRow(db, { projectId, recordId, fields, filledBy = 'u
       `UPDATE literature_matrix
           SET fields = ?, filled_by = ?, completeness = ?,
               notes = COALESCE(?, notes),
-              updated_at = datetime('now')
+              updated_at = datetime('now', '+8 hours')
         WHERE id = ?`
     ).run(JSON.stringify(merged), filledBy, completeness, notes ?? null, existing.id)
     return { id: existing.id, fields: merged, completeness }
@@ -1132,8 +1132,12 @@ export const MATRIX_BATCH_SYSTEM = `你是一位严谨的 SLR(系统性文献综
  * window 留出充足 thinking + output 空间;覆盖 95%+ 论文全文(典型 STEM 论文
  * 正文 50-150K chars,长综述 / 大型 RCT 偶尔超 200K)。
  * 历史上这里是 80K,对 200K window 时代合理,对 1M 模型偏小 → 升到 250K。
+ *
+ * sectionFilter(可选):只保留指定 section_type 的 chunks(其他段去掉)。
+ *   例:RoB 评估只关心 methods/results/limitations/discussion,传 ['methods',...]。
+ *   不传 / 空数组 → 全部 section,跟原行为一致。abstract 始终保留(meta 信息)。
  */
-export function buildPaperTextFromChunks(db, recordId, record, { maxChars = 250_000 } = {}) {
+export function buildPaperTextFromChunks(db, recordId, record, { maxChars = 250_000, sectionFilter = null } = {}) {
   const chunks = db.prepare(`
     SELECT section_type, heading, text, chunk_index, page_start
       FROM paper_chunks
@@ -1159,8 +1163,14 @@ export function buildPaperTextFromChunks(db, recordId, record, { maxChars = 250_
   let out = `## Title\n${__cleanTitle}\n\n`
   if (record?.abstract) out += `## Abstract\n${record.abstract}\n\n`
   let bySection = new Map()
+  // sectionFilter:abstract 始终保留(meta);其他 section 只保留白名单内的。
+  //   传 null/空数组 → 不过滤,跟原行为一致。
+  const filterSet = (Array.isArray(sectionFilter) && sectionFilter.length)
+    ? new Set(sectionFilter.map((s) => String(s).toLowerCase()))
+    : null
   for (const c of chunks) {
     const k = c.section_type || 'other'
+    if (filterSet && k !== 'abstract' && !filterSet.has(k)) continue
     if (!bySection.has(k)) bySection.set(k, [])
     bySection.get(k).push(c)
   }

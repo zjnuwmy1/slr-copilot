@@ -76,11 +76,14 @@
             </a>
           <% } %>
           <!-- 删除按钮:hover 卡片才显示,点击不触发卡片链接 -->
+          <!-- 优化打磨包:防误操作 — 必须输入完整项目名才能提交;输入 confirm_title 同步入 hidden input -->
           <form method="post" action="/projects/<%= p.id %>/delete"
-                onsubmit="return confirm('确认删除项目「<%= p.title %>」?\n该项目的协议、检索式、文献、抽取、主题、综述草稿以及上传的 PDF 都会一并清除,无法撤销。')"
+                data-project-title="<%= p.title %>"
+                onsubmit="return slrConfirmDeleteProject(this);"
                 class="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition">
+            <input type="hidden" name="confirm_title" value="">
             <button type="submit"
-                    title="删除项目"
+                    title="删除项目(需输入项目名确认)"
                     class="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 hover:border-rose-300 shadow-subtle">
               ✕
             </button>
@@ -90,5 +93,36 @@
     </div>
   <% } %>
 </section>
+
+<script>
+  // 优化打磨包:删除项目前必须精确输入项目名
+  window.slrConfirmDeleteProject = function(form) {
+    if (!form) return false
+    var title = (form.getAttribute('data-project-title') || '').trim()
+    if (!title) {
+      return confirm('确认删除此项目?\n该项目的协议、检索式、文献、抽取、主题、综述草稿以及 PDF 都会被清除,不可撤销。')
+    }
+    var first = confirm(
+      '⚠ 删除项目「' + title + '」\n\n' +
+      '会清除该项目的协议、检索式、文献、抽取、主题、综述草稿以及上传的 PDF 文件。\n' +
+      '此操作 不可撤销。\n\n' +
+      '点击"确定"进入下一步(需要输入项目名再次确认)。'
+    )
+    if (!first) return false
+    var typed = prompt(
+      '为防止误操作,请精确输入项目名以确认删除:\n\n' + title + '\n\n' +
+      '(大小写、空格、标点都需一致;输入空白或不匹配会取消)'
+    )
+    if (typed == null) return false
+    typed = String(typed).trim()
+    if (typed !== title) {
+      alert('输入不匹配:你输入的是「' + typed + '」,需要输入「' + title + '」。已取消删除。')
+      return false
+    }
+    var hidden = form.querySelector('input[name="confirm_title"]')
+    if (hidden) hidden.value = typed
+    return true
+  }
+</script>
 
 <%- include('../partials/footer') %>

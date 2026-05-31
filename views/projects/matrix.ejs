@@ -563,7 +563,7 @@
             因为这俩是天然的"两步走":先让 AI 定列,再让 AI 用列 + 协议 + 论文样本写总 prompt %>
         <% if (aiC.locked && aiC.customizedAtVersion && !opt.hasOptimized && !optNoProtocol) { %>
           <span class="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700 ring-1 ring-indigo-300 animate-pulse"
-                title="你已经定制过专属列了,顺手再点 ⚙️ 让 AI 把总 prompt 也优化一遍(用 Opus 4.7 + ultrathink),批量抽取质量会显著提升">
+                title="你已经定制过专属列了,顺手再点 ⚙️ 让 AI 把总 prompt 也优化一遍(用 Opus 4.8 + ultrathink),批量抽取质量会显著提升">
             ↑ 推荐顺手优化总 prompt
           </span>
         <% } %>
@@ -1008,7 +1008,7 @@
   // ============================================================
   // ⚙️ 一键优化总 prompt(meta-prompt 写作)— 长任务体验设计
   //
-  // 这是 Opus 4.7 + ultrathink/think_harder 的 meta-prompt 调用,实测 3-8 分钟。
+  // 这是 Opus 4.8 + ultrathink/think_harder 的 meta-prompt 调用,实测 3-8 分钟。
   // 长任务有几个 UX 陷阱要避免:
   //   - 浏览器在 5 分钟左右可能 abort 长 fetch(取决于 OS / 网络栈)→ 用户看到 catch
   //   - 用户合上 laptop / 切 wifi → fetch 失败,但服务端 LLM 调用仍在跑
@@ -1061,11 +1061,11 @@
       if (!confirm(
         '让 AI 优化"一次性总 prompt"?\n\n' +
         '【会做什么】\n' +
-        '· 用 Opus 4.7 + 最高推理强度,综合:协议 + AI 定制的矩阵列 + 4 篇代表性 include 论文样本\n' +
+        '· 用 Opus 4.8 + 最高推理强度,综合:协议 + AI 定制的矩阵列 + 4 篇代表性 include 论文样本\n' +
         '· LLM 产出两份 prompt:批量抽取用的精细版(可含 few-shot)+ 用户复制版(简化)\n' +
         '· 写入项目后,下一次「⚡ 启动批量抽取」会自动用优化版\n\n' +
         '【时间】\n' +
-        '· Opus 4.7 + ultrathink 实测 3-8 分钟(meta-prompt 任务推理深)\n' +
+        '· Opus 4.8 + ultrathink 实测 3-8 分钟(meta-prompt 任务推理深)\n' +
         '· 可以关页面 — 服务端会自己跑完写库,刷新页面即可看到结果\n\n' +
         '【限制】\n' +
         '· 每个协议版本只能调一次(改协议重审批后才能再调)\n\n' +

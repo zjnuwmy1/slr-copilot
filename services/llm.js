@@ -34,6 +34,7 @@ import { checkQuotaBeforeCall } from './quota.js'
 import { getPlatformCredentialRow, PROVIDERS as PLATFORM_PROVIDERS } from './platform-credentials.js'
 import * as anthropicApi from './providers/anthropic-api.js'
 import * as anthropicCli from './providers/anthropic-cli.js'
+import * as anthropicCliFileops from './providers/anthropic-cli-fileops.js'
 import * as openaiApi from './providers/openai-api.js'
 import * as openaiCli from './providers/openai-cli.js'
 
@@ -298,7 +299,7 @@ function recordUsage(db, fields) {
     INSERT INTO usage_logs
       (user_id, credential_id, project_id, action_type, provider, auth_type, model,
        prompt_tokens, completion_tokens, duration_ms, status, error_message, finished_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'))
   `)
   const r = stmt.run(
     fields.userId,
@@ -340,6 +341,11 @@ export async function runLlm(db, opts) {
     // 默认 null = 全部 disable(适合 JSON 输出场景)。详见 openai-cli.js DISABLABLE_TOOL_FEATURES。
     // Anthropic 路径目前不使用此参数。
     enabledTools = null,
+    // 优化打磨包 / Session-continuity (anthropic-cli only):
+    //   sessionId + resumeSession 一起串起多次 LLM call 成同一对话
+    //   非 anthropic+oauth 路径会静默忽略 — 调用方应只在确认是 claude CLI 时使用
+    sessionId = null,
+    resumeSession = false,
   } = opts
 
   if (!userId) {
@@ -449,6 +455,9 @@ export async function runLlm(db, opts) {
         homePath: decrypted.home_path,
         model, system, prompt, reasoning,
         timeoutMs: timeoutMs ?? 180_000,
+        // 优化打磨包 / Session-continuity:仅 anthropic-cli 路径透传 session 参数
+        sessionId: sessionId || null,
+        resumeSession: !!resumeSession,
       })
     } else if (cred.provider === 'openai' && cred.auth_type === 'api_key') {
       providerResult = await withTimeout(
@@ -511,7 +520,7 @@ export async function runLlm(db, opts) {
 
   // 7. 更新凭证 last_used_at
   try {
-    db.prepare(`UPDATE user_credentials SET last_used_at = datetime('now') WHERE id = ?`).run(cred.id)
+    db.prepare(`UPDATE user_credentials SET last_used_at = datetime('now', '+8 hours') WHERE id = ?`).run(cred.id)
   } catch {}
 
   return {
@@ -527,6 +536,8 @@ export async function runLlm(db, opts) {
     durationMs,
     usage,
     usageLogId,
+    // 优化打磨包 / Session-continuity:Claude CLI 路径会带回 sessionId,其他 provider 是 undefined
+    sessionId: providerResult?.sessionId || null,
   }
 }
 
@@ -547,4 +558,153 @@ function inferErrorStatus(msg) {
   if (/timeout/i.test(msg)) return 'timeout'
   if (/rate.?limit|429|usage.?limit/i.test(msg)) return 'rate_limited'
   return 'error'
+}
+
+// ============================================================
+// 2026-05-26 — runFileOpsLlm
+// ------------------------------------------------------------
+// 跟 runLlm 平行的 file-ops 路径:不走单次 JSON 输出,而是让 Claude CLI
+// 在 sandbox 工作目录里 Read/Write/Edit 文件。专门为 LaTeX fill 设计
+// (论文已锁,任务是文件转换),也可复用于其他文件密集型任务。
+//
+// 只支持 anthropic + oauth(Claude CLI 才有 file tools;API key / OpenAI 不支持)。
+// usage_logs 不记 token(CLI tool mode 无 reliable token report),只记
+// duration_ms + status + stdout/stderr tail 给超管诊断。
+// ============================================================
+export async function runFileOpsLlm(db, opts) {
+  const {
+    userId,
+    actionType,
+    projectId,
+    cwd,
+    prompt,
+    allowedTools,
+    timeoutMs,
+    fallbackModel = 'claude-sonnet-4-6',  // Opus overloaded 时自动降级
+    model: modelHint,
+    preferredProvider,
+    credId: credIdOverride,
+    preferredAuthType = 'oauth',          // 默认 oauth(file ops 唯一支持的)
+  } = opts
+
+  if (!userId)     return { ok: false, status: 'config_error', error: 'missing_userId' }
+  if (!actionType) return { ok: false, status: 'config_error', error: 'missing_actionType' }
+  if (!cwd)        return { ok: false, status: 'config_error', error: 'missing_cwd' }
+  if (!prompt)    return { ok: false, status: 'config_error', error: 'missing_prompt' }
+
+  // 1. 选凭证 — 必须是 anthropic oauth(Claude CLI 才有 file tools)
+  let effectivePreferredProvider = preferredProvider || 'anthropic'
+  const pick = pickCredential(db, {
+    userId,
+    credentialId: credIdOverride,
+    preferredProvider: effectivePreferredProvider,
+    preferredAuthType,
+  })
+  if (!pick.ok) {
+    return { ok: false, status: 'no_credential', error: pick.reason, errorDetail: pick.detail }
+  }
+  const cred = pick.cred
+  if (cred.provider !== 'anthropic' || cred.auth_type !== 'oauth') {
+    return {
+      ok: false,
+      status: 'config_error',
+      error: 'fileops_requires_anthropic_oauth',
+      errorDetail: `got provider=${cred.provider}, authType=${cred.auth_type}`,
+    }
+  }
+
+  // 2. 配额
+  const q = checkQuotaBeforeCall(db, { userId, provider: cred.provider, authType: cred.auth_type })
+  if (!q.ok) {
+    const usageLogId = recordUsage(db, {
+      userId, credentialId: cred.id, projectId, actionType,
+      provider: cred.provider, authType: cred.auth_type,
+      durationMs: 0, status: 'quota_exceeded', errorMessage: q.message,
+    })
+    return {
+      ok: false, status: 'quota_exceeded', error: q.reason, errorDetail: q.message,
+      provider: cred.provider, authType: cred.auth_type, credentialId: cred.id, usageLogId,
+    }
+  }
+
+  // 3. 解密
+  let decrypted
+  try {
+    decrypted = getDecryptedForUsage(db, { userId, credentialId: cred.id })
+  } catch (e) {
+    return { ok: false, status: 'config_error', error: 'decrypt_failed', errorDetail: e.message }
+  }
+
+  // 4. 解析 model
+  const model = resolveModel(db, { model: modelHint, provider: cred.provider, actionType, userId })
+
+  // 5. 调 Claude CLI(file-ops 模式)
+  const started = Date.now()
+  let cliRes
+  try {
+    cliRes = await anthropicCliFileops.runFileOpsClaude({
+      homePath: decrypted.home_path,
+      model,
+      fallbackModel,
+      cwd,
+      prompt,
+      allowedTools,
+      timeoutMs: timeoutMs ?? (45 * 60 * 1000),
+    })
+  } catch (e) {
+    const durationMs = Date.now() - started
+    const errMsg = e?.message || String(e)
+    const status = inferErrorStatus(errMsg)
+    const usageLogId = recordUsage(db, {
+      userId, credentialId: cred.id, projectId, actionType,
+      provider: cred.provider, authType: cred.auth_type, model,
+      durationMs, status, errorMessage: errMsg.slice(0, 1000),
+    })
+    return {
+      ok: false, status, error: errMsg,
+      provider: cred.provider, authType: cred.auth_type, credentialId: cred.id,
+      model, durationMs, usageLogId,
+    }
+  }
+
+  const durationMs = Date.now() - started
+
+  // 6. 落 usage_logs
+  //    file-ops mode 没 token 数(stdout 是 tool-call 摘要,不是 envelope JSON);
+  //    成功 / 失败仅看 exit code + timedOut + 输出文件存在性(caller 判断)
+  const ok = cliRes.exitCode === 0 && !cliRes.timedOut
+  const status = cliRes.timedOut ? 'timeout' : (ok ? 'success' : 'error')
+  const errorMessage = ok ? null : (
+    [`exitCode=${cliRes.exitCode}`,
+     cliRes.timedOut ? 'timedOut=true' : null,
+     cliRes.signal ? `signal=${cliRes.signal}` : null,
+     cliRes.stderr ? `stderr(first 2000):\n${cliRes.stderr.slice(0, 2000)}` : null,
+     cliRes.stdout ? `stdout(first 4000):\n${cliRes.stdout.slice(0, 4000)}` : null,
+    ].filter(Boolean).join('\n')
+  )
+  const usageLogId = recordUsage(db, {
+    userId, credentialId: cred.id, projectId, actionType,
+    provider: cred.provider, authType: cred.auth_type, model,
+    durationMs, status, errorMessage,
+  })
+
+  // 7. 更新 last_used_at
+  try {
+    db.prepare(`UPDATE user_credentials SET last_used_at = datetime('now', '+8 hours') WHERE id = ?`).run(cred.id)
+  } catch {}
+
+  return {
+    ok,
+    status,
+    exitCode: cliRes.exitCode,
+    timedOut: cliRes.timedOut || false,
+    stdout: cliRes.stdout || '',
+    stderr: cliRes.stderr || '',
+    model,
+    provider: cred.provider,
+    authType: cred.auth_type,
+    credentialId: cred.id,
+    durationMs,
+    usageLogId,
+  }
 }

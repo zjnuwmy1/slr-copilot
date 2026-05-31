@@ -38,8 +38,14 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-900 antialiased font-sans">
+  <%# 2026-05-26 — wideLayout: 给有右侧浮动子导航的页面(目前 /report)用宽 main,
+       避免 stepper(260px) + 浮条(192px) 把 1024px main 挤到内容只剩 ~530px。
+       caller 传 wideLayout: true → header/flash/main 一律切到 max-w-7xl (1280px)。
+       未传 / false → 维持原 max-w-5xl(零回归,其他页不变)。 %>
+  <% const _wideLayout = (typeof wideLayout !== 'undefined') && !!wideLayout %>
+  <% const _mwCls = _wideLayout ? 'max-w-7xl' : 'max-w-5xl' %>
   <header class="sticky top-0 z-30 border-b border-slate-200/80 bg-white/85 backdrop-blur">
-    <div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-3.5">
+    <div class="mx-auto flex <%= _mwCls %> items-center justify-between px-6 py-3.5">
       <a href="/" class="flex items-center gap-2 text-base font-semibold tracking-tight text-slate-900 hover:text-slate-700 transition">
         <span class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-slate-900 to-slate-700 text-[11px] font-bold text-white">SLR</span>
         Copilot
@@ -74,10 +80,10 @@
     </div>
   </header>
   <% if (typeof flash !== 'undefined' && flash) { %>
-    <div class="mx-auto max-w-5xl px-6 pt-4">
+    <div class="mx-auto <%= _mwCls %> px-6 pt-4">
       <div class="rounded-lg border <%= flash.type === 'error' ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800' %> px-4 py-2 text-sm">
         <%= flash.message %>
       </div>
     </div>
   <% } %>
-  <main class="mx-auto max-w-5xl px-6 py-10">
+  <main class="mx-auto <%= _mwCls %> px-6 py-10">

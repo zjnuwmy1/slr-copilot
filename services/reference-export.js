@@ -161,6 +161,10 @@ export function exportBibTeX(records, { collectionName = 'slr' } = {}) {
       if (r.publisher) s += bibtexField('publisher', r.publisher);
     }
 
+    // 2026-05-25 M35:BibTeX volume / number / pages — Zotero 高质量字段
+    if (r.volume) s += bibtexField('volume', r.volume);
+    if (r.issue)  s += bibtexField('number', r.issue);
+    if (r.pages)  s += bibtexField('pages', String(r.pages).replace(/-/g, '--'));
     if (r.doi) {
       const d = String(r.doi).trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '');
       s += bibtexField('doi', d);
@@ -242,6 +246,18 @@ export function exportRIS(records) {
       if (r.publisher) s += risLine('PB', r.publisher);
     }
 
+    // 2026-05-25 M35:RIS VL / IS / SP / EP — Zotero 高质量字段
+    if (r.volume) s += risLine('VL', r.volume);
+    if (r.issue)  s += risLine('IS', r.issue);
+    if (r.pages) {
+      // 如 "123-145" 拆 SP / EP;若单页或非范围,只写 SP
+      const m = String(r.pages).match(/^(\d+)\s*-\s*(\d+)$/)
+      if (m) {
+        s += risLine('SP', m[1]); s += risLine('EP', m[2]);
+      } else {
+        s += risLine('SP', r.pages);
+      }
+    }
     if (r.doi) {
       const d = String(r.doi).trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '');
       s += risLine('DO', d);
@@ -296,6 +312,10 @@ function toCslItem(r, usedKeys) {
   const venue = getJournalOrVenue(r);
   if (venue) item['container-title'] = venue;
   if (r.publisher && r.publisher !== r.journal) item.publisher = r.publisher;
+  // 2026-05-25 M35:CSL volume / issue / page — Zotero 高质量字段
+  if (r.volume) item.volume = r.volume;
+  if (r.issue)  item.issue  = r.issue;
+  if (r.pages)  item.page   = r.pages;
   if (r.doi) {
     item.DOI = String(r.doi).trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '');
   }
@@ -317,6 +337,89 @@ export function exportCslJson(records) {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 行内引文短形(给 preview 页 [rec_xxx] 占位转成 "(Smith 2024)" 等用)
+// ---------------------------------------------------------------------------
+/**
+ * 给一条 record 输出短行内引文文本(APA author-year),用于 preview 页的 [rec_xxx]
+ * placeholder 替换 + LaTeX-fill 的引文小抄。
+ *
+ *   1 author:  Smith (2024)
+ *   2 authors: Smith & Brown (2024)
+ *   3+ author: Smith et al. (2024)
+ *   missing:   ? (n.d.)
+ *
+ * 注意:刻意不带括号、不带分号 — 调用方按 [rec_xxx] 上下文自己包装。
+ *
+ * @param {object} raw  record(任意形态,内部 normalize)
+ * @returns {string}
+ */
+export function inlineCitationShort(raw) {
+  if (!raw) return '? (n.d.)'
+  const r = normalizeRecord(raw)
+  const yr = getYear(r) || 'n.d.'
+  let authors = Array.isArray(r.authors) ? r.authors : []
+  if (!authors.length) return `Anon. (${yr})`
+
+  // 2026-05-26 数据质量防御:某些导入(WoS/Scopus 老数据 / Zotero 没规范)
+  //   把多作者 smushed 成一条字符串 — "Dubey A.; Baghel D.; Kalita R.; ..."
+  //   normalizeRecord 拿到 authors_json 是 1 条 → 走 1 author 分支 →
+  //   surnameOf 把整串当 surname → 输出 "(Dubey A.; Baghel D.; ...; Lashkari 2026)" 怪格式。
+  //   防御:如果 authors.length === 1 且 first item 含 ; / | / 多个逗号(逗号分隔的姓),
+  //   按这些分隔符再分一次,let downstream 走 multi-author 分支正确出 "Dubey et al."
+  if (authors.length === 1) {
+    const first = typeof authors[0] === 'string' ? authors[0]
+                 : (authors[0]?.full || authors[0]?.surname || '')
+    if (typeof first === 'string' && /[;|]/.test(first)) {
+      // 用 ; 或 | 分割(这两个绝对不会出现在合法 surname 里)
+      const parts = first.split(/[;|]/).map(s => s.trim()).filter(Boolean)
+      if (parts.length > 1) authors = parts
+    } else if (typeof first === 'string' && (first.match(/,/g) || []).length >= 2) {
+      // 3+ 个逗号 → 多半是 "Surname1, Initial1, Surname2, Initial2, ..." 之类的 smushed
+      //   (Last, First) 格式正常是 1 个逗号,2+ 逗号通常说明含多作者
+      const parts = first.split(/,\s*/).map(s => s.trim()).filter(Boolean)
+      if (parts.length >= 4) {
+        // 每 2 个 token 凑一个作者(Surname, Initial 形式)
+        const grouped = []
+        for (let i = 0; i < parts.length; i += 2) {
+          const surname = parts[i] || ''
+          const initial = parts[i + 1] || ''
+          grouped.push(initial ? `${surname}, ${initial}` : surname)
+        }
+        if (grouped.length > 1) authors = grouped
+      }
+    }
+  }
+
+  const sur1 = surnameOf(authors[0]) || 'Anon.'
+  if (authors.length === 1) return `${sur1} (${yr})`
+  if (authors.length === 2) {
+    const sur2 = surnameOf(authors[1]) || 'Anon.'
+    return `${sur1} & ${sur2} (${yr})`
+  }
+  return `${sur1} et al. (${yr})`
+}
+
+/**
+ * 批量给一组 records 构造 record_id → 短引文 + anchor id 的 map。
+ * preview 页用这个 map 把 [rec_xxx] 占位换成 <a href="#ref-rec_xxx">(Smith 2024)</a>。
+ *
+ * @param {Array} records
+ * @returns {Object<string, {short: string, anchor: string}>}
+ */
+export function buildInlineCitationMap(records) {
+  const out = {}
+  if (!Array.isArray(records)) return out
+  for (const r of records) {
+    if (!r?.id) continue
+    out[r.id] = {
+      short: inlineCitationShort(r),
+      anchor: 'ref-' + r.id,
+    }
+  }
+  return out
+}
+
 // Markdown References 章节
 // ---------------------------------------------------------------------------
 
@@ -355,10 +458,13 @@ export function exportReferencesSection(records, { style = 'apa' } = {}) {
   const lines = ['## References', ''];
   sorted.forEach((r, i) => {
     const cite = formatCitation(r, style);
+    // 2026-05-25:每条加一个不可见 anchor span 让 preview 页 [rec_xxx] 引文可以
+    // 滚动定位过来。导出 Markdown 时 anchor 仍然有效(GitHub / VS Code 都识别 HTML)。
+    const anchor = r && r.id ? `<span id="ref-${r.id}"></span>` : '';
     if (isIeee) {
-      lines.push(`[${i + 1}] ${cite}`);
+      lines.push(`${anchor}[${i + 1}] ${cite}`);
     } else {
-      lines.push(cite);
+      lines.push(`${anchor}${cite}`);
     }
     lines.push('');
   });

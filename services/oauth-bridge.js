@@ -513,7 +513,7 @@ async function finalizeSuccess(db, sessionId, entry, req) {
     db.prepare(
       `INSERT INTO user_credentials
          (id, user_id, provider, auth_type, label, credential_blob_enc, status, last_validated_at)
-       VALUES (?, ?, ?, 'oauth', ?, ?, 'active', datetime('now'))`
+       VALUES (?, ?, ?, 'oauth', ?, ?, 'active', datetime('now', '+8 hours'))`
     ).run(credentialId, row.user_id, row.provider, label, blob)
   } catch (e) {
     updateSession(db, sessionId, {

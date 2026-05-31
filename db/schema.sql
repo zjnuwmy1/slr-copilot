@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
   is_active INTEGER NOT NULL DEFAULT 1,
   invite_code_used TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   last_login_at TEXT
 );
 
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS invite_codes (
   used_by_user_id TEXT,
   used_at TEXT,
   expires_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (created_by_user_id) REFERENCES users(id),
   FOREIGN KEY (used_by_user_id) REFERENCES users(id)
 );
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS user_credentials (
   last_validated_at TEXT,
   last_validation_error TEXT,
   last_used_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS user_quotas (
   allowed_providers TEXT,              -- JSON 数组,NULL = 全允许
   allowed_auth_types TEXT,             -- JSON 数组,NULL = 全允许
   notes TEXT,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   updated_by_user_id TEXT,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   duration_ms INTEGER,
   status TEXT NOT NULL,                -- success | rate_limited | timeout | error | quota_exceeded
   error_message TEXT,
-  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  started_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   finished_at TEXT,
   FOREIGN KEY (user_id) REFERENCES users(id),
   FOREIGN KEY (credential_id) REFERENCES user_credentials(id)
@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   payload TEXT,                        -- JSON
   ip_address TEXT,
   user_agent TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_project ON audit_events(project_id);
@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS oauth_bind_sessions (
   prompt_url TEXT,                     -- 从 CLI stdout 抓到的授权 URL
   error_message TEXT,
   expires_at TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   finished_at TEXT,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -153,8 +153,8 @@ CREATE TABLE IF NOT EXISTS projects (
   document_types TEXT,                 -- JSON array
   seed_titles TEXT,                    -- JSON array of seed 文献题名
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','protocol_pending','protocol_approved','searching','screening','extracting','synthesizing','complete','archived')),
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS protocols (
   approved_by_user INTEGER NOT NULL DEFAULT 0,
   approved_at TEXT,
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
@@ -204,7 +204,7 @@ CREATE TABLE IF NOT EXISTS search_strategies (
   generated_by TEXT NOT NULL DEFAULT 'ai' CHECK (generated_by IN ('ai','user','ai_edited')),
   model TEXT,
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS prisma_checklist (
   status TEXT NOT NULL DEFAULT 'not_started' CHECK (status IN ('not_started','in_progress','done','not_applicable')),
   notes TEXT,
   evidence_url TEXT,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   UNIQUE (project_id, item_number)
 );
@@ -244,7 +244,7 @@ CREATE TABLE IF NOT EXISTS credential_shares (
   shared_with_user_id TEXT NOT NULL,
   shared_by_user_id TEXT NOT NULL,        -- 同 owner,记录冗余便于查询
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   PRIMARY KEY (credential_id, shared_with_user_id),
   FOREIGN KEY (credential_id) REFERENCES user_credentials(id) ON DELETE CASCADE,
   FOREIGN KEY (shared_with_user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -275,7 +275,7 @@ CREATE TABLE IF NOT EXISTS zotero_packages (
   total_duplicates INTEGER,
   manifest TEXT,                         -- JSON dump 完整 manifest
   error_message TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   parsed_at TEXT,
   ingested_at TEXT,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
@@ -309,7 +309,7 @@ CREATE TABLE IF NOT EXISTS records (
   has_pdf INTEGER NOT NULL DEFAULT 0,
   duplicate_group_id TEXT,               -- 去重后同组指同一个 group id;NULL 表示无重复
   duplicate_of_record_id TEXT,           -- 如果是被合并的副本,指向主记录
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   FOREIGN KEY (package_id) REFERENCES zotero_packages(id) ON DELETE SET NULL
 );
@@ -332,7 +332,8 @@ CREATE TABLE IF NOT EXISTS attachments (
   size_bytes INTEGER,
   mime_type TEXT,
   zotero_item_id TEXT,                   -- '#item_1366' 在 RDF 里的 id
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  pdf_offloaded_at TEXT,                 -- 非空=PDF 源文件已删(chunk 后腾空间);storage_path 保留作审计
   FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
   FOREIGN KEY (package_id) REFERENCES zotero_packages(id) ON DELETE SET NULL
 );
@@ -356,7 +357,7 @@ CREATE TABLE IF NOT EXISTS paper_chunks (
   chunk_index INTEGER,
   text TEXT NOT NULL,
   token_count INTEGER,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
   FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE
 );
@@ -381,8 +382,8 @@ CREATE TABLE IF NOT EXISTS screening_decisions (
   human_reason TEXT,
   decided_at TEXT,
   decided_by TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   UNIQUE(record_id, stage)
@@ -403,8 +404,8 @@ CREATE TABLE IF NOT EXISTS extractions (
   human_verified INTEGER NOT NULL DEFAULT 0,
   human_notes TEXT,
   requires_manual_check TEXT,   -- JSON array
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   UNIQUE(record_id)
@@ -428,8 +429,8 @@ CREATE TABLE IF NOT EXISTS themes (
   generated_by TEXT NOT NULL DEFAULT 'ai',
   model TEXT,
   display_order INTEGER,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_themes_project ON themes(project_id);
@@ -446,7 +447,7 @@ CREATE TABLE IF NOT EXISTS evidence_points (
   page INTEGER,
   chunk_id TEXT,                -- 反向链回 paper_chunks
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
   FOREIGN KEY (theme_id) REFERENCES themes(id) ON DELETE SET NULL,
@@ -466,8 +467,8 @@ CREATE TABLE IF NOT EXISTS draft_sections (
   prompt_version TEXT,
   user_edited INTEGER NOT NULL DEFAULT 0,
   version INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   UNIQUE(project_id, section_name, version)
 );
@@ -482,7 +483,7 @@ CREATE INDEX IF NOT EXISTS idx_draft_project ON draft_sections(project_id);
 CREATE TABLE IF NOT EXISTS system_settings (
   key TEXT PRIMARY KEY,
   value TEXT,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   updated_by_user_id TEXT
 );
 
@@ -540,8 +541,8 @@ CREATE TABLE IF NOT EXISTS grade_assessments (
   notes TEXT,
   display_order INTEGER,
 
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
 
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   FOREIGN KEY (theme_id) REFERENCES themes(id) ON DELETE CASCADE,
@@ -566,8 +567,8 @@ CREATE TABLE IF NOT EXISTS literature_matrix (
     CHECK (filled_by IN ('user', 'ai', 'ai_edited')),
   completeness REAL NOT NULL DEFAULT 0,       -- 0..1
   notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   FOREIGN KEY (record_id) REFERENCES records(id) ON DELETE CASCADE,
   UNIQUE(project_id, record_id)
@@ -585,7 +586,7 @@ CREATE TABLE IF NOT EXISTS matrix_columns (
   is_quantitative INTEGER NOT NULL DEFAULT 0, -- 1 = 要数字,UI 渲染 number input
   is_default INTEGER NOT NULL DEFAULT 0,      -- 1 = 系统默认列,用户也能改
   display_order INTEGER NOT NULL DEFAULT 100,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   UNIQUE(project_id, key)
 );
@@ -604,7 +605,7 @@ CREATE TABLE IF NOT EXISTS target_journal_templates (
                                               --         style_notes, citation_density, figure_types }
   extracted_at TEXT,
   uploaded_by_user_id TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now', '+8 hours')),
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   UNIQUE(project_id)  -- 每个项目最多 1 个模板(若想换就替换)
 );

@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %></title>
+
+  <!-- ────────────────────────────────────────────────────────────────────── -->
+  <!--  preview.ejs — 综述初稿排版预览页(2026-05-25 新加)                   -->
+  <!--                                                                        -->
+  <!--  目标:用户不想读 raw markdown,要看排版好的稿,带 mermaid PRISMA flow  -->
+  <!--  / 真实表格 / 上传的 figure / 可点击的 (Smith 2024) 引文 + 跳转到       -->
+  <!--  References 锚点。                                                     -->
+  <!--                                                                        -->
+  <!--  栈:Tailwind CDN(跟其他页同款)+ marked.js + mermaid + 纯 CSS print  -->
+  <!--  ────────────────────────────────────────────────────────────────────  -->
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+
+  <style>
+    :root {
+      --serif: 'Crimson Pro', Georgia, 'PingFang SC', 'Microsoft YaHei', serif;
+      --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+      --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    body {
+      background: #f5f5f4;
+      font-family: var(--sans);
+      color: #1e293b;
+    }
+
+    /* 学术期刊式排版 — 主稿区 */
+    .ms {
+      font-family: var(--serif);
+      font-size: 17px;
+      line-height: 1.75;
+      color: #1a1a1a;
+    }
+    .ms h1 { font-size: 2rem; font-weight: 700; line-height: 1.25; margin: 2rem 0 1.25rem; letter-spacing: -0.01em; }
+    .ms h2 { font-size: 1.45rem; font-weight: 700; line-height: 1.3; margin: 2.25rem 0 0.85rem; padding-bottom: 0.35rem; border-bottom: 1px solid #e7e5e4; }
+    .ms h3 { font-size: 1.18rem; font-weight: 600; line-height: 1.35; margin: 1.6rem 0 0.65rem; color: #292524; }
+    .ms h4 { font-size: 1.02rem; font-weight: 600; line-height: 1.4; margin: 1.2rem 0 0.5rem; color: #44403c; }
+    .ms p { margin: 0 0 1rem; text-align: justify; hyphens: auto; }
+    .ms ul, .ms ol { margin: 0 0 1.1rem 1.4rem; }
+    .ms li { margin-bottom: 0.35rem; }
+    .ms strong { font-weight: 600; color: #0c0a09; }
+    .ms em { font-style: italic; }
+    .ms blockquote { border-left: 3px solid #d6d3d1; padding-left: 1rem; margin: 1rem 0; color: #57534e; font-style: italic; }
+    .ms a:not(.citation):not(.fig-ref):not(.tbl-ref) {
+      color: #1d4ed8; text-decoration: underline; text-decoration-color: rgba(29, 78, 216, 0.3); text-underline-offset: 2px;
+    }
+    .ms hr { border: none; border-top: 1px solid #d6d3d1; margin: 2rem 0; }
+
+    /* 表格 — 期刊 inline 风 */
+    .ms table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5rem 0;
+      font-family: var(--sans);
+      font-size: 13.5px;
+      line-height: 1.5;
+      background: #fff;
+      border: 1px solid #d6d3d1;
+    }
+    .ms thead th {
+      background: #f5f5f4;
+      font-weight: 600;
+      text-align: left;
+      padding: 0.55rem 0.75rem;
+      border-bottom: 2px solid #a8a29e;
+      color: #1c1917;
+    }
+    .ms tbody td {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid #e7e5e4;
+      vertical-align: top;
+    }
+    .ms tbody tr:last-child td { border-bottom: none; }
+    .ms tbody tr:nth-child(even) { background: #fafaf9; }
+
+    /* 图 — caption 居中 + 边框 */
+    .ms img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      margin: 1.5rem auto 0.5rem;
+      border: 1px solid #e7e5e4;
+      border-radius: 4px;
+      background: #fff;
+    }
+    .ms figure {
+      margin: 1.5rem 0;
+      text-align: center;
+    }
+    .ms figcaption {
+      font-family: var(--sans);
+      font-size: 12.5px;
+      color: #57534e;
+      margin-top: 0.5rem;
+      line-height: 1.5;
+    }
+
+    /* Mermaid 容器 */
+    .ms .mermaid-host {
+      margin: 1.5rem auto;
+      padding: 1rem;
+      background: #fff;
+      border: 1px solid #e7e5e4;
+      border-radius: 6px;
+      text-align: center;
+      overflow-x: auto;     /* SVG 用自然宽度时,长图横向滚动 */
+      overflow-y: hidden;
+    }
+    /* 2026-05-26 — SVG 节点 label 文字不要被父容器裁切;打印时按页面宽缩放 */
+    .ms .mermaid-host svg {
+      max-width: none;       /* 屏幕浏览时让 SVG 用自然宽度 */
+      height: auto;
+    }
+    @media print {
+      .ms .mermaid-host {
+        overflow: visible;
+        page-break-inside: avoid;
+      }
+      .ms .mermaid-host svg {
+        max-width: 100% !important;   /* 打印时让 SVG 缩到页面宽度,文字仍清晰 */
+        height: auto !important;
+      }
+    }
+
+    /* 行内引文 badge */
+    .citation {
+      display: inline-block;
+      padding: 0 0.3rem;
+      margin: 0 0.05rem;
+      background: rgba(29, 78, 216, 0.08);
+      border-radius: 3px;
+      color: #1d4ed8;
+      text-decoration: none;
+      font-family: var(--sans);
+      font-size: 0.88em;
+      font-weight: 500;
+      transition: background 0.15s;
+      cursor: pointer;
+    }
+    .citation:hover { background: rgba(29, 78, 216, 0.18); }
+    .citation.missing {
+      background: rgba(239, 68, 68, 0.12);
+      color: #b91c1c;
+    }
+    .citation.missing::after { content: '⚠'; margin-left: 0.15rem; font-size: 0.85em; }
+
+    /* Fig / Table inline ref(post-process 后是 Figure 1 / Table 3a) */
+    .fig-ref, .tbl-ref {
+      color: #0e7490;
+      font-weight: 500;
+      text-decoration: none;
+    }
+
+    /* References 列表 */
+    .ms #references-section + p,
+    .ms h2 + p { margin-top: 0.5rem; }
+    .ms p:has(span[id^="ref-"]) {
+      font-family: var(--sans);
+      font-size: 13.5px;
+      line-height: 1.55;
+      padding-left: 1.5rem;
+      text-indent: -1.5rem;
+      margin: 0 0 0.55rem;
+    }
+    .ms span[id^="ref-"]:target + br + *,
+    .ms span[id^="ref-"]:target,
+    .ms p:has(span[id^="ref-"]:target) {
+      background: linear-gradient(transparent 60%, rgba(250, 204, 21, 0.45) 60%);
+      transition: background 0.3s;
+    }
+
+    /* 行内 code + fenced(非 mermaid) */
+    .ms code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: #f5f5f4;
+      padding: 0.1em 0.3em;
+      border-radius: 3px;
+      color: #7c2d12;
+    }
+    .ms pre {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      background: #f5f5f4;
+      border: 1px solid #e7e5e4;
+      border-radius: 4px;
+      padding: 0.8rem 1rem;
+      margin: 1rem 0;
+      overflow-x: auto;
+    }
+    .ms pre code { background: none; padding: 0; color: inherit; }
+
+    /* TOC sidebar */
+    .toc a {
+      display: block;
+      padding: 0.25rem 0.5rem;
+      color: #44403c;
+      font-size: 13px;
+      line-height: 1.4;
+      border-left: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .toc a:hover { background: #f5f5f4; color: #0c0a09; }
+    .toc a.h3 { padding-left: 1.25rem; font-size: 12px; color: #57534e; }
+    .toc a.h4 { padding-left: 2.25rem; font-size: 11.5px; color: #78716c; }
+    .toc a.active { border-left-color: #1d4ed8; background: #eff6ff; color: #1d4ed8; font-weight: 500; }
+
+    /* Toolbar */
+    .toolbar { position: sticky; top: 0; z-index: 30; backdrop-filter: blur(8px); }
+
+    /* Print — 给用户 Cmd-P 出 PDF */
+    @media print {
+      body { background: #fff; }
+      .no-print { display: none !important; }
+      .ms { font-size: 11pt; line-height: 1.5; }
+      .ms h1 { font-size: 18pt; }
+      .ms h2 { font-size: 14pt; page-break-after: avoid; }
+      .ms h3 { font-size: 12pt; page-break-after: avoid; }
+      .ms table, .ms figure, .ms .mermaid-host { page-break-inside: avoid; }
+      .ms p { orphans: 3; widows: 3; }
+      @page { margin: 2cm; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ─── 顶部工具栏 ───────────────────────────────────────────────────────── -->
+<div class="toolbar no-print bg-white/85 border-b border-slate-200 px-4 py-2.5">
+  <div class="mx-auto max-w-6xl flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-3 min-w-0">
+      <a href="/projects/<%= project.id %>/report"
+         class="text-sm text-slate-500 hover:text-slate-900">← 返回撰写</a>
+      <div class="hidden sm:block h-4 w-px bg-slate-200"></div>
+      <h1 class="text-sm font-semibold text-slate-800 truncate" title="<%= project.title %>"><%= project.title %></h1>
+      <span class="text-[10px] uppercase tracking-wider rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">预览</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-slate-500"><%= includedCount %> 篇引文池</span>
+      <% if ((unknownTables && unknownTables.length) || (unknownFigures && unknownFigures.length)) { %>
+        <span class="text-[11px] rounded-full bg-amber-100 px-2 py-0.5 text-amber-800" title="LLM 引了未知 [tbl:]/[fig:] key — 见正文中 [unknown] 标记">⚠ <%= (unknownTables||[]).length + (unknownFigures||[]).length %> 未知占位</span>
+      <% } %>
+
+      <!-- 2026-05-25 P2-16:引文格式切换 chip (5 styles) -->
+      <%
+        const _STYLE_LABEL = {
+          apa: 'APA', ieee: 'IEEE', chicago: 'Chicago', mla: 'MLA', gbt7714: 'GB/T 7714'
+        }
+        const _curStyle = (typeof citationStyle === 'string' ? citationStyle : 'apa')
+        const _styles = Array.isArray(availableStyles) && availableStyles.length
+          ? availableStyles
+          : ['apa','ieee','chicago','mla','gbt7714']
+      %>
+      <div class="hidden md:flex items-center gap-0.5 rounded-md border border-slate-300 bg-white p-0.5"
+           title="切换 References 段引文格式 — 也会同步影响下方 ⬇.md 下载">
+        <span class="px-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">引文</span>
+        <% _styles.forEach(function(s) { %>
+          <a href="?style=<%= s %>"
+             class="rounded px-1.5 py-0.5 text-[11px] font-medium <%= s === _curStyle ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100' %>"
+             title="按 <%= _STYLE_LABEL[s] || s %> 渲染 References"><%= _STYLE_LABEL[s] || s %></a>
+        <% }) %>
+      </div>
+
+      <a href="/projects/<%= project.id %>/report/export.md?style=<%= _curStyle %>"
+         class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+         title="下载 .md(含当前选择的引文格式 References)">⬇ .md</a>
+      <button type="button" onclick="window.print()"
+              class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">🖨 打印 / 存 PDF</button>
+    </div>
+  </div>
+</div>
+
+<div class="mx-auto max-w-6xl px-4 py-6 grid gap-6 lg:grid-cols-[200px_1fr]">
+  <!-- ─── 侧边 TOC ────────────────────────────────────────────────────────── -->
+  <aside class="no-print">
+    <div class="toc sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white p-2">
+      <p class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">目录</p>
+      <div id="toc-list"></div>
+    </div>
+  </aside>
+
+  <!-- ─── 主稿区 ────────────────────────────────────────────────────────── -->
+  <main>
+    <article id="manuscript" class="ms rounded-2xl border border-slate-200 bg-white px-8 py-10 lg:px-16 shadow-sm">
+      <p class="text-center text-slate-400 text-sm">渲染中…</p>
+    </article>
+    <% if ((unknownTables && unknownTables.length) || (unknownFigures && unknownFigures.length)) { %>
+      <div class="no-print mt-4 rounded-lg border border-amber-200 bg-amber-50/40 p-3 text-xs text-amber-900">
+        <p class="font-semibold">⚠ 占位符警告(LLM 引了不存在的 key)</p>
+        <% if (unknownTables && unknownTables.length) { %>
+          <p class="mt-1">未知表 key:<code class="font-mono"><%= unknownTables.join(', ') %></code></p>
+        <% } %>
+        <% if (unknownFigures && unknownFigures.length) { %>
+          <p class="mt-1">未知图 id:<code class="font-mono"><%= unknownFigures.join(', ') %></code></p>
+        <% } %>
+        <p class="mt-1 text-amber-700">这些在正文里被标成 <code>[unknown table key]</code> / <code>[unknown figure id]</code>,需要手动修正或重生成对应章节。</p>
+      </div>
+    <% } %>
+  </main>
+</div>
+
+<!-- ─── 数据 + 渲染脚本 ─────────────────────────────────────────────────── -->
+<!--
+  把 markdown 内联进 <script type="text/markdown">,前端 .textContent 读取。
+  关键安全:必须把 markdown 里的 </script 转义成 <\/script,否则 HTML parser 提前
+  关掉这个 script tag(academic prose 一般不会出现,但 Methods 段可能有
+  "</script tag" 这类引号字符串 — 给 chunked content / search query 用)
+-->
+<script id="ms-markdown" type="text/markdown"><%- String(markdown || '').replace(/<\/script/gi, '<\\/script') %></script>
+<script id="ms-citation-map" type="application/json"><%- JSON.stringify(citationMap || {}).replace(/<\/script/gi, '<\\/script') %></script>
+
+<script>
+(function() {
+  const RAW_MD = document.getElementById('ms-markdown').textContent
+  let CITATION_MAP = {}
+  try {
+    CITATION_MAP = JSON.parse(document.getElementById('ms-citation-map').textContent || '{}')
+  } catch (e) { CITATION_MAP = {} }
+
+  // marked configuration — GFM tables + linkify
+  marked.setOptions({ gfm: true, breaks: false, headerIds: true, mangle: false })
+
+  // 1) Pre-process markdown:把 ```mermaid 块抽出来 → 占位符,渲染完后再注入 SVG
+  //    (避免 marked 把 mermaid 源码当 fenced code 显示出来)
+  const mermaidBlocks = []
+  const mdNoMermaid = RAW_MD.replace(/```mermaid\s*\n([\s\S]*?)```/g, (m, src) => {
+    const idx = mermaidBlocks.length
+    mermaidBlocks.push(src.trim())
+    return `<div class="mermaid-host" data-mermaid-idx="${idx}">[loading PRISMA flow…]</div>`
+  })
+
+  // 2) marked → HTML
+  let html = marked.parse(mdNoMermaid)
+
+  // 3) Replace [rec_xxx] / [rec_a, rec_b] citation placeholders → clickable badges
+  //    顺便处理 fig/tbl inline ref:[unknown ...] 留原样;Figure N / Table N
+  //    是 post-process 后的纯文本,marked 自然渲染。
+  html = html.replace(/\[(rec_[A-Za-z0-9_,;\s-]+)\]/g, function(match, inner) {
+    const ids = inner.split(/[,;]\s*/).map(s => s.trim()).filter(s => /^rec_[A-Za-z0-9_-]+$/.test(s))
+    if (ids.length === 0) return match
+    return '(' + ids.map(rid => {
+      const ent = CITATION_MAP[rid]
+      if (ent) {
+        return '<a href="#' + ent.anchor + '" class="citation" data-rec="' + rid + '" title="' + rid + ' — click to jump to References">' + ent.short.replace(/[()]/g, '').trim() + '</a>'
+      }
+      return '<span class="citation missing" title="' + rid + ' — not in include set (LLM hallucination?)">' + rid + '</span>'
+    }).join('; ') + ')'
+  })
+
+  // 4) Inject HTML
+  const article = document.getElementById('manuscript')
+  article.innerHTML = html
+
+  // 5) Render mermaid blocks
+  if (mermaidBlocks.length > 0 && window.mermaid) {
+    // 2026-05-26 PRISMA 节点 label 跨行被裁切修:
+    //   - useMaxWidth: false → SVG 用自然宽度,容器 .mermaid-host 有 overflow-x: auto,长图横向滚
+    //   - wrappingWidth: 220 → 节点内文字按 220px 软包行(默认 200 偏紧)
+    //   - nodeSpacing/rankSpacing: 让 4 swimlane 之间不挤
+    //   - themeCSS: 节点 padding + 字号统一,避免缩放后文字 5px 不可读
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'neutral',
+      flowchart: {
+        useMaxWidth: false,
+        htmlLabels: true,
+        wrappingWidth: 220,
+        nodeSpacing: 40,
+        rankSpacing: 55,
+        padding: 12,
+      },
+      themeCSS: `
+        .node rect, .node polygon { stroke-width: 1.5px !important; }
+        .node .label, .node text { font-size: 12.5px !important; font-family: system-ui, -apple-system, sans-serif !important; }
+        .cluster rect { rx: 8px; ry: 8px; }
+        .cluster .nodeLabel { font-size: 13px !important; font-weight: 600 !important; }
+      `,
+    })
+    const hosts = article.querySelectorAll('.mermaid-host[data-mermaid-idx]')
+    hosts.forEach(async (host) => {
+      const idx = parseInt(host.getAttribute('data-mermaid-idx'), 10)
+      const src = mermaidBlocks[idx]
+      try {
+        const { svg } = await mermaid.render('mermaid-svg-' + idx, src)
+        host.innerHTML = svg
+      } catch (e) {
+        host.innerHTML = '<pre class="text-rose-600 text-left">[Mermaid render failed: ' + (e.message || e) + ']\n\n' + src.replace(/</g, '&lt;') + '</pre>'
+      }
+    })
+  }
+
+  // 6) Build sidebar TOC from h2 / h3 / h4 headings (P2-12 加 h4 收集)
+  const toc = document.getElementById('toc-list')
+  const headings = article.querySelectorAll('h2, h3, h4')
+  let h2Idx = 0
+  headings.forEach((h) => {
+    const id = h.id || ('sec-' + (h.textContent || 'x').replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase().slice(0, 40))
+    if (!h.id) h.id = id
+    const a = document.createElement('a')
+    a.href = '#' + id
+    a.textContent = h.textContent.replace(/^#+\s*/, '').slice(0, 50)
+    if (h.tagName === 'H3') a.className = 'h3'
+    else if (h.tagName === 'H4') a.className = 'h4'
+    toc.appendChild(a)
+    if (h.tagName === 'H2') h2Idx++
+  })
+
+  // 7) Highlight TOC active section while scrolling
+  const tocLinks = toc.querySelectorAll('a')
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      if (e.isIntersecting) {
+        tocLinks.forEach(l => l.classList.remove('active'))
+        const link = toc.querySelector('a[href="#' + e.target.id + '"]')
+        if (link) link.classList.add('active')
+      }
+    })
+  }, { rootMargin: '-30% 0px -60% 0px' })
+  headings.forEach(h => observer.observe(h))
+
+  // 8) Smooth scroll for in-page anchor clicks (citations + TOC)
+  document.addEventListener('click', (ev) => {
+    const a = ev.target.closest('a[href^="#"]')
+    if (!a) return
+    const href = a.getAttribute('href')
+    if (href === '#' || href.length < 2) return
+    const tgt = document.querySelector(href)
+    if (tgt) {
+      ev.preventDefault()
+      tgt.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // brief highlight
+      tgt.style.background = 'rgba(250, 204, 21, 0.4)'
+      setTimeout(() => { tgt.style.transition = 'background 0.6s'; tgt.style.background = '' }, 1200)
+      history.replaceState(null, '', href)
+    }
+  })
+})()
+</script>
+
+</body>
+</html>

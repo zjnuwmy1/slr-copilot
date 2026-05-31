@@ -286,6 +286,51 @@ function extractKeywords(node) {
   return result
 }
 
+// ============================================================
+// 2026-05-25 M35:Zotero RDF 高质量字段 — volume / issue / pages
+// ============================================================
+// Zotero 输出 RDF 时 volume / issue / pages 的位置较散:
+//   - record 上 prism:volume / prism:number / prism:pageRange / prism:startingPage / prism:endingPage
+//   - record 上 bib:volume / bib:issue / bib:pages
+//   - 也可能挂在内联 bib:Journal 上(罕见)
+// 各 helper 用层叠 fallback,优先 PRISM(Zotero 主流输出),再 BIB,再 Journal 节点。
+
+function extractVolume(node, partOfJournal) {
+  const v =
+       asText(node['prism:volume'])
+    || asText(node['bib:volume'])
+    || (partOfJournal ? asText(partOfJournal['prism:volume']) : '')
+    || (partOfJournal ? asText(partOfJournal['bib:volume']) : '')
+  return (v || '').trim().slice(0, 60)
+}
+
+function extractIssue(node, partOfJournal) {
+  const v =
+       asText(node['prism:number'])
+    || asText(node['bib:issue'])
+    || asText(node['prism:issue'])
+    || (partOfJournal ? asText(partOfJournal['prism:number']) : '')
+    || (partOfJournal ? asText(partOfJournal['bib:issue']) : '')
+  return (v || '').trim().slice(0, 60)
+}
+
+function extractPages(node, partOfJournal) {
+  // 1) prism:pageRange ("123-145") 直接给页码范围
+  const range = asText(node['prism:pageRange']) || asText(node['bib:pages'])
+  if (range && range.trim()) return range.trim().slice(0, 60)
+  // 2) prism:startingPage + prism:endingPage 拼
+  const start = asText(node['prism:startingPage'])
+  const end   = asText(node['prism:endingPage'])
+  if (start && end) return `${start.trim()}-${end.trim()}`.slice(0, 60)
+  if (start) return String(start).trim().slice(0, 60)
+  // 3) Journal 节点上的兜底(罕见)
+  if (partOfJournal) {
+    const j = asText(partOfJournal['prism:pageRange']) || asText(partOfJournal['bib:pages'])
+    if (j) return j.trim().slice(0, 60)
+  }
+  return ''
+}
+
 /** 抽出 record 关联的 attachment item id 列表(从 link:link 节点) */
 function extractAttachmentRefs(node) {
   const out = []
@@ -507,6 +552,17 @@ export function parseZoteroRdf({ rdfText, packageRootPath }) {
       const abstract = extractAbstract(node)
       const keywords = extractKeywords(node)
 
+      // 2026-05-25 M35: volume / issue / pages — Zotero RDF 高质量字段
+      //   常见位置:
+      //     - record 上 prism:volume / prism:number / prism:pageRange / prism:startingPage / prism:endingPage
+      //     - record 上 bib:volume / bib:issue / bib:pages
+      //     - 内联的 bib:Journal / bib:Series / bib:Issue 节点上也有
+      //   过去 zotero-ingest 完全没读这 3 字段 → reference-export 输出 "半残" 引文。
+      //   现在抽出来落 records.volume / .issue / .pages,5 个 citation 格式函数都用。
+      const volume = extractVolume(node, journalNode)
+      const issue  = extractIssue(node, journalNode)
+      const pages  = extractPages(node, journalNode)
+
       // 附件
       const attachmentRefs = extractAttachmentRefs(node)
       const attachments = []
@@ -581,6 +637,10 @@ export function parseZoteroRdf({ rdfText, packageRootPath }) {
         notes,
         attachments,
         has_pdf: hasPdf,
+        // 2026-05-25 M35:Zotero 高质量引文字段
+        volume,
+        issue,
+        pages,
       })
     } catch (e) {
       errors.push(`parse record failed: ${e.message}`)
@@ -614,19 +674,22 @@ export function persistParseResult(db, { projectId, userId, packageId, parseResu
     throw new Error('parseResult.records missing')
   }
 
+  // 2026-05-25 M35:加 volume / issue / pages — Zotero 高质量引文字段
   const insertRecord = db.prepare(`
     INSERT OR REPLACE INTO records (
       id, project_id, package_id,
       zotero_item_id, zotero_rdf_about, item_type,
       title, normalized_title, authors_json, authors_text,
       year, date_text, journal, publisher,
-      doi, url, abstract, keywords_json, notes, has_pdf
+      doi, url, abstract, keywords_json, notes, has_pdf,
+      volume, issue, pages
     ) VALUES (
       ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?
     )
   `)
 
@@ -677,6 +740,9 @@ export function persistParseResult(db, { projectId, userId, packageId, parseResu
         JSON.stringify(r.keywords || []),
         r.notes || null,
         r.has_pdf ? 1 : 0,
+        r.volume || null,
+        r.issue || null,
+        r.pages || null,
       )
 
       // ingest 插入 attachments 指向 extracted/(每条记录可能有多个附件,如 PDF + snapshot)。
@@ -872,7 +938,7 @@ export async function ingestPackage(db, { projectId, userId, packageId, packageR
   }
 
   // 标记 parsed(去重前)
-  db.prepare(`UPDATE zotero_packages SET status = 'parsed', parsed_at = datetime('now') WHERE id = ?`).run(packageId)
+  db.prepare(`UPDATE zotero_packages SET status = 'parsed', parsed_at = datetime('now', '+8 hours') WHERE id = ?`).run(packageId)
 
   // 跑去重
   const dedup = dedupProject(db, { projectId })
@@ -892,7 +958,7 @@ export async function ingestPackage(db, { projectId, userId, packageId, packageR
       total_with_doi = ?,
       total_duplicates = ?,
       manifest = ?,
-      ingested_at = datetime('now')
+      ingested_at = datetime('now', '+8 hours')
     WHERE id = ?
   `).run(
     summary.total_records,
@@ -902,6 +968,21 @@ export async function ingestPackage(db, { projectId, userId, packageId, packageR
     JSON.stringify(fullManifest),
     packageId,
   )
+
+  // 2026-05-31 磁盘优化:ingest 成功后删原始 upload.zip。
+  //   zip 写在 UPLOAD_ROOT/<packageId>/upload.zip,解压后 extracted/ 里才是 storage_path
+  //   指向的活 PDF,原 zip 纯冗余(一个包可达数百 MB)。只删 UPLOAD_ROOT 内的。
+  try {
+    const UPLOAD_ROOT = path.resolve(process.env.SLR_UPLOAD_ROOT || '/var/lib/slr/uploads')
+    const zipPath = path.resolve(path.join(UPLOAD_ROOT, packageId, 'upload.zip'))
+    if (zipPath.startsWith(UPLOAD_ROOT + path.sep) && fs.existsSync(zipPath)) {
+      const freed = (() => { try { return fs.statSync(zipPath).size } catch { return 0 } })()
+      fs.unlinkSync(zipPath)
+      console.log(`[zotero-ingest] deleted redundant upload.zip for ${packageId}, freed ${freed} bytes`)
+    }
+  } catch (e) {
+    console.warn('[zotero-ingest] upload.zip cleanup failed for', packageId, e.message)
+  }
 
   return {
     ...summary,

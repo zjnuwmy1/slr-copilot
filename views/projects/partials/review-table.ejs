@@ -1,0 +1,455 @@
+<%
+// ────────────────────────────────────────────────────────────────────────
+// views/projects/partials/review-table.ejs
+// 单张数据型表渲染 partial(支持 table1/2/3a/3b/4 special + table5-14 generic)
+//
+// Locals(由 caller 通过 include 传入):
+//   project        — 当前项目对象(用导出链接)
+//   tableKey       — 'table1' | 'table2' | 'table3a' | 'table3b' | 'table4' | 'table5'..'table14'
+//   tableData      — reviewTables[tableKey]:派生数据 { columns, rows, ... } or special shape
+//   tableDef       — registry def: { key, label, description, intended_section, ... }
+//   recommendation — LLM 推荐对象(可选):{ priority, intended_section, suggested_caption, why_recommended }
+//   polishedTable  — T3 LLM 精修结果(可选):{ polished_caption, polished_column_headers,
+//                     polished_paragraph_lead, polished_footnotes, row_reorder_keys,
+//                     model, generated_at, error? }
+//   polishInFlight — bool(可选):该表精修任务是否正在 10 min lease 内
+//   polishStale    — N3(可选):{ stale: bool, reason: 'system_prompt_upgraded' |
+//                     'protocol_upgraded' | 'recommendation_updated' | null }
+//
+// 视觉规则:
+//   - 有 polishedTable.polished_caption:它最优先(覆盖 recommendation 的 caption)+ 显示 paragraph_lead
+//     + 用 polished_column_headers 覆盖渲染列名 + 底部加 footnotes
+//   - 有 recommendation:用 LLM caption 作 details summary,顶部加 banner(priority chip + section chip + why)
+//   - 无 recommendation:用 tableDef.label 作 details summary
+//   - special render(table1-3b/4)和 generic render(table5-14)统一通过 partial 分发
+//   - 每张表 summary 旁边都有 ✨ LLM 精修 按钮(POST)— polished 已有则按钮变"重新精修"
+// ────────────────────────────────────────────────────────────────────────
+
+const _td = tableData
+const _rec = (typeof recommendation !== 'undefined' && recommendation) ? recommendation : null
+
+// T3 polish locals — 严格 typeof guard,partial 在没传 locals 的旧 caller 仍能用
+const _polished = (typeof polishedTable !== 'undefined' && polishedTable && polishedTable.polished_caption)
+  ? polishedTable : null
+const _polishInFlight = !!(typeof polishInFlight !== 'undefined' && polishInFlight)
+const _polishError = (typeof polishedTable !== 'undefined' && polishedTable && polishedTable.error)
+  ? polishedTable.error : null
+// N3 stale — { stale, reason } 可选
+const _polishStale = (typeof polishStale !== 'undefined' && polishStale && polishStale.stale === true)
+  ? polishStale : null
+function _polishStaleReasonLabel(reason) {
+  if (reason === 'system_prompt_upgraded')  return '通用 prompt 升级'
+  if (reason === 'protocol_upgraded')        return '协议升级'
+  if (reason === 'recommendation_updated')   return '推荐重新生成'
+  return '过期'
+}
+
+// caption 优先级:polished > recommendation > registry label
+const _label = _polished ? _polished.polished_caption
+             : (_rec ? _rec.suggested_caption : ((tableDef && tableDef.label) || tableKey))
+const _intended = _rec ? _rec.intended_section : (tableDef && tableDef.intended_section)
+const _priorityCls = ({
+  critical:      'bg-rose-100 text-rose-800 border-rose-200',
+  important:     'bg-amber-100 text-amber-800 border-amber-200',
+  supplementary: 'bg-slate-100 text-slate-700 border-slate-200',
+})[(_rec && _rec.priority) || ''] || 'bg-slate-50 text-slate-600 border-slate-200'
+
+// polish 状态 chip(summary 旁边显示)
+//   优先级:in_flight > polished+stale > polished > error
+const _polishStatusChip = _polishInFlight
+  ? '<span class="ml-2 inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">⏳ 精修中</span>'
+  : (_polished && _polishStale)
+    ? '<span class="ml-2 inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800" title="精修结果已过期(' + _polishStaleReasonLabel(_polishStale.reason) + ') — 建议重新精修">⚠ 精修过期(' + _polishStaleReasonLabel(_polishStale.reason) + ')</span>'
+    : _polished
+      ? '<span class="ml-2 inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">✓ 已精修</span>'
+      : _polishError
+        ? '<span class="ml-2 inline-flex items-center gap-1 rounded bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700" title="' + String(_polishError).replace(/"/g, '&quot;').slice(0, 200) + '">⚠ 精修失败</span>'
+        : ''
+
+// 计算 row_reorder_keys 映射(只在 generic shape 上生效:table2 / table4 / table5..14)
+//   对 multi-subtable(table1 / table3a / table3b)忽略 — 跨子表重排不安全。
+function _reorderRows(rows, keys) {
+  if (!Array.isArray(rows) || !Array.isArray(keys)) return rows
+  if (keys.length !== rows.length) return rows  // 防御性
+  const out = []
+  for (const k of keys) {
+    if (Number.isInteger(k) && k >= 0 && k < rows.length) out.push(rows[k])
+  }
+  return out.length === rows.length ? out : rows
+}
+
+// 计算 polished 列 headers 映射(只在 generic shape 上覆盖)
+//   _td.columns 是 [{key, label}],polished_column_headers 是同序的 label 数组。
+//   生成 _displayColumns:同 _td.columns,但 label 用 polished 的覆盖。
+function _applyPolishedHeaders(cols, headers) {
+  if (!Array.isArray(cols) || !Array.isArray(headers)) return cols
+  if (cols.length !== headers.length) return cols
+  return cols.map((c, i) => ({ ...c, label: headers[i] }))
+}
+
+// 圆点辅助(table3a 红绿灯用)
+function _dot(tone) {
+  const cls = ({ good: 'bg-emerald-500', middle: 'bg-amber-500', bad: 'bg-rose-500', unclear: 'bg-slate-300' })[tone] || 'bg-slate-300'
+  return `<span class="inline-block h-2.5 w-2.5 rounded-full ${cls} align-middle" title="${tone}"></span>`
+}
+
+// 数字摘要(展示在 summary 后)
+let _suffix = ''
+if (tableKey === 'table1' && _td) _suffix = `${_td.subtables?.length || 0} subtables · ${_td.total_studies || 0} studies`
+else if (tableKey === 'table2' && _td) _suffix = `${_td.total_outcomes || 0} outcomes`
+else if (tableKey === 'table3a' && _td) _suffix = `${_td.total_studies || 0} studies · ${_td.tools?.length || 0} RoB tools`
+else if (tableKey === 'table3b' && _td) _suffix = 'GRADEpro style'
+else if (tableKey === 'table4' && _td) _suffix = `${_td.total_themes || 0} themes · 12 维评级`
+else if (_td && Array.isArray(_td.rows)) _suffix = `${_td.rows.length} rows`
+
+const _empty = !_td || (
+  (tableKey === 'table1' && (!_td.subtables || _td.subtables.length === 0)) ||
+  (tableKey === 'table3a' && (!_td.tools || _td.tools.length === 0)) ||
+  (tableKey === 'table3b' && (!_td.tools || _td.tools.length === 0)) ||
+  (!['table1','table3a','table3b'].includes(tableKey) && (!_td.rows || _td.rows.length === 0))
+)
+%>
+
+<details class="mt-3 rounded-lg border <%= _polished ? 'border-emerald-200 bg-emerald-50/10' : (_rec ? 'border-indigo-200 bg-indigo-50/10' : 'border-slate-200 bg-white') %> p-3">
+  <summary class="cursor-pointer text-sm font-semibold text-slate-800 hover:text-slate-900">
+    <% if (_rec) { %>
+      <span class="inline-block rounded border px-1.5 py-0.5 text-[10px] font-medium mr-1 <%= _priorityCls %>"><%= _rec.priority %></span>
+    <% } %>
+    <span><%= _label %></span>
+    <% if (_suffix && !_empty) { %>
+      <span class="ml-2 text-[11px] font-normal text-slate-500">— <%= _suffix %></span>
+    <% } else if (_empty) { %>
+      <span class="ml-2 text-[11px] font-normal text-amber-700">— 无数据</span>
+    <% } %>
+    <% if (_intended) { %>
+      <span class="ml-2 rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-normal text-violet-700">→ <%= _intended %></span>
+    <% } %>
+    <span class="ml-2 text-[10px] text-slate-400">[<%= tableKey %>]</span>
+    <%- _polishStatusChip %>
+  </summary>
+
+  <%# 推荐 banner(why_recommended)%>
+  <% if (_rec && _rec.why_recommended) { %>
+    <div class="mt-2 rounded border border-indigo-100 bg-indigo-50/30 p-2 text-[11px] text-indigo-900">
+      <p><strong>Why recommended:</strong> <%= _rec.why_recommended %></p>
+    </div>
+  <% } %>
+
+  <%# N3 — 精修过期提示(优先于 paragraph 显示) %>
+  <% if (_polished && _polishStale) { %>
+    <div class="mt-2 rounded border border-amber-200 bg-amber-50/60 p-2 text-[11px] text-amber-900">
+      <p><strong>⚠ 精修结果已过期</strong> — 原因:<%= _polishStaleReasonLabel(_polishStale.reason) %>。建议点击 ✨ 重新精修 让 Opus 重新生成。</p>
+    </div>
+  <% } %>
+
+  <%# T3 — 精修 paragraph_lead(显示在表上方,作为正文引子) %>
+  <% if (_polished && _polished.polished_paragraph_lead) { %>
+    <div class="mt-2 rounded border border-emerald-100 bg-emerald-50/30 p-2 text-[11px] text-slate-800">
+      <p class="text-[10px] font-medium uppercase tracking-wide text-emerald-700 mb-1">Manuscript paragraph (LLM polished)<% if (_polishStale) { %> <span class="text-amber-700">(过期)</span><% } %></p>
+      <p class="leading-relaxed"><%= _polished.polished_paragraph_lead %></p>
+    </div>
+  <% } %>
+
+  <%# T3 — 精修失败错误信息(显示但不阻断渲染) %>
+  <% if (_polishError) { %>
+    <div class="mt-2 rounded border border-rose-100 bg-rose-50/30 p-2 text-[11px] text-rose-800">
+      <p><strong>精修失败:</strong> <%= String(_polishError).slice(0, 400) %></p>
+      <p class="mt-0.5 text-[10px] text-rose-600">继续显示原派生表(0 token 渲染)。再点 ✨ 重新精修 可重试。</p>
+    </div>
+  <% } %>
+
+  <%# 描述 + 导出链接 + T3 精修按钮 %>
+  <% if (tableDef && tableDef.description && !_rec && !_polished) { %>
+    <p class="mt-2 text-[11px] text-slate-500"><%= tableDef.description %></p>
+  <% } %>
+  <div class="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-slate-500">
+    <span>导出:</span>
+    <a href="/projects/<%= project.id %>/report/tables/<%= tableKey %>.md" class="rounded bg-slate-100 px-2 py-0.5 text-slate-700 hover:bg-slate-200">.md</a>
+    <a href="/projects/<%= project.id %>/report/tables/<%= tableKey %>.csv" class="rounded bg-slate-100 px-2 py-0.5 text-slate-700 hover:bg-slate-200">.csv</a>
+    <a href="/projects/<%= project.id %>/report/tables/<%= tableKey %>.latex" class="rounded bg-slate-100 px-2 py-0.5 text-slate-700 hover:bg-slate-200">.tex</a>
+
+    <%# T3 ✨ LLM 精修按钮(POST form,X-Requested-With 头判定后端 redirect vs JSON) %>
+    <% if (!_empty) { %>
+      <form method="post" action="/projects/<%= project.id %>/report/tables/polish/<%= tableKey %>" class="inline-block ml-2">
+        <button type="submit"
+                class="rounded border <%= _polishInFlight ? 'border-amber-200 bg-amber-50 text-amber-700 cursor-wait' : ((_polished && _polishStale) ? 'border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200' : (_polished ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100')) %> px-2 py-0.5 text-[11px]"
+                <%= _polishInFlight ? 'disabled' : '' %>
+                title="<%= _polished ? ((_polishStale ? '精修过期(' + _polishStaleReasonLabel(_polishStale.reason) + ') — ' : '已精修 by ') + (_polished.model || 'Opus') + ' at ' + (_polished.generated_at || '') + ' — 点击重新精修') : 'Opus 把派生表当原料二次精修(caption / column labels / paragraph_lead / footnotes,反编造校验)' %>">
+          <% if (_polishInFlight) { %>⏳ 精修中…
+          <% } else if (_polished && _polishStale) { %>⚠ 重新精修
+          <% } else if (_polished) { %>✨ 重新精修
+          <% } else { %>✨ LLM 精修
+          <% } %>
+        </button>
+      </form>
+    <% } %>
+
+    <% if (tableKey === 'table3a' && !_empty) { %>
+      <span class="ml-3">图例:</span>
+      <%- _dot('good') %> Low/Yes
+      <%- _dot('middle') %> Some/Moderate
+      <%- _dot('bad') %> High/No
+      <%- _dot('unclear') %> Unclear/n.r.
+    <% } %>
+  </div>
+
+  <%# ─────────── 渲染表数据,按 tableKey 分流 ─────────── %>
+
+  <% if (_empty) { %>
+    <p class="mt-3 text-xs text-amber-700">
+      <% if (tableKey === 'table2') { %>⚠ 还没有 outcome 级 GRADE 评估 — 去 Step 7「证据强度」页给每主题加 outcome。
+      <% } else if (tableKey === 'table4') { %>⚠ 还没有主题级证据强度评估 — 去 Step 7 跑 "⚡ 评全部主题"。
+      <% } else { %>⚠ 此表暂无数据 — 检查上游 Step 4 matrix / Step 6 主题元数据 / Step 7 GRADE 是否填全。<% } %>
+    </p>
+  <% } else if (tableKey === 'table1') { %>
+    <%# Table 1: subtables by theme — polished_column_headers 应用到每个子表(假设各子表 columns 同构) %>
+    <% _td.subtables.forEach((sub, si) => {
+         const _t1cols = (_polished && _polished.polished_column_headers
+                          && sub.columns.length === _polished.polished_column_headers.length)
+                       ? _applyPolishedHeaders(sub.columns, _polished.polished_column_headers)
+                       : sub.columns
+    %>
+      <details class="mt-3 rounded border border-slate-200 bg-slate-50/30" <%= si === 0 ? 'open' : '' %>>
+        <summary class="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700">
+          <%= sub.theme_label %>. <%= sub.theme_name %>
+          <span class="ml-2 font-normal text-slate-500">(N=<%= sub.theme_count %>)</span>
+        </summary>
+        <div class="overflow-x-auto px-3 pb-3">
+          <table class="mt-2 w-full text-[11px]">
+            <thead>
+              <tr class="border-b border-slate-300 text-left text-slate-600">
+                <% _t1cols.forEach(c => { %>
+                  <th class="px-2 py-1 font-medium"><%= c.label %></th>
+                <% }) %>
+              </tr>
+            </thead>
+            <tbody>
+              <%# 2026-05-26 — study cell 现在带 "[rec_<id>]" 占位,渲染时拆出来,
+                   plain text 保留,占位转 small clickable "cite" badge 链接到 records 详情。 %>
+              <% sub.rows.forEach(r => { %>
+                <tr class="border-b border-slate-100 align-top">
+                  <% _t1cols.forEach(c => {
+                       const raw = String(r[c.key] != null ? r[c.key] : '—')
+                       const m = c.key === 'study' ? raw.match(/^(.+?)\s*\[(rec_[^\]]+)\]\s*$/) : null
+                  %>
+                    <% if (m) { %>
+                      <td class="px-2 py-1.5 text-slate-700">
+                        <span><%= m[1] %></span>
+                        <a href="/projects/<%= project.id %>/records/<%= m[2] %>"
+                           class="ml-1 inline-block rounded bg-indigo-50 px-1 py-0.5 text-[9.5px] font-medium text-indigo-700 hover:bg-indigo-100"
+                           title="跳转到 records 详情(rec_<%= m[2] %>)">cite</a>
+                      </td>
+                    <% } else { %>
+                      <td class="px-2 py-1.5 text-slate-700"><%= raw %></td>
+                    <% } %>
+                  <% }) %>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    <% }) %>
+  <% } else if (tableKey === 'table2') { %>
+    <%# Table 2: SoF table with certainty color — generic single shape,polished 列名 + 行序都适用 %>
+    <%
+      const _t2cols = (_polished && _polished.polished_column_headers
+                       && _td.columns.length === _polished.polished_column_headers.length)
+                    ? _applyPolishedHeaders(_td.columns, _polished.polished_column_headers)
+                    : _td.columns
+      const _t2rows = (_polished && _polished.row_reorder_keys)
+                    ? _reorderRows(_td.rows, _polished.row_reorder_keys)
+                    : _td.rows
+    %>
+    <div class="mt-3 overflow-x-auto">
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr class="border-b border-slate-300 text-left text-slate-600">
+            <% _t2cols.forEach(c => { %>
+              <th class="px-2 py-1 font-medium"><%= c.label %></th>
+            <% }) %>
+          </tr>
+        </thead>
+        <tbody>
+          <% _t2rows.forEach(r => { %>
+            <tr class="border-b border-slate-100 align-top">
+              <% _t2cols.forEach(c => {
+                  const isCert = c.key === 'certainty'
+                  const certCls = ({ high: 'text-emerald-700 font-semibold', moderate: 'text-blue-700 font-semibold', low: 'text-amber-700 font-semibold', very_low: 'text-rose-700 font-semibold' })[r.certainty_raw] || 'text-slate-700'
+              %>
+                <td class="px-2 py-1.5 <%= isCert ? certCls : 'text-slate-700' %>"><%= r[c.key] || '—' %></td>
+              <% }) %>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } else if (tableKey === 'table3a') { %>
+    <%# Table 3a: RoB Traffic Light per tool %>
+    <% _td.tools.forEach(tg => { %>
+      <details class="mt-3 rounded border border-slate-200 bg-slate-50/30">
+        <summary class="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700">
+          <%= tg.label %> <span class="ml-2 font-normal text-slate-500">(N=<%= tg.study_count %>)</span>
+        </summary>
+        <div class="overflow-x-auto px-3 pb-3">
+          <table class="mt-2 w-full text-[11px]">
+            <thead>
+              <tr class="border-b border-slate-300 text-slate-600">
+                <th class="px-2 py-1 text-left font-medium">Study</th>
+                <% tg.domains.forEach(d => { %>
+                  <th class="px-2 py-1 text-center font-medium" title="<%= d.label %>"><%= d.short %></th>
+                <% }) %>
+                <th class="px-2 py-1 text-center font-medium">Overall</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% tg.studies.forEach(s => {
+                   const rawStudy = String(s.study || '')
+                   const m = rawStudy.match(/^(.+?)\s*\[(rec_[^\]]+)\]\s*$/)
+              %>
+                <tr class="border-b border-slate-100">
+                  <% if (m) { %>
+                    <td class="px-2 py-1.5 text-slate-700">
+                      <span><%= m[1] %></span>
+                      <a href="/projects/<%= project.id %>/records/<%= m[2] %>"
+                         class="ml-1 inline-block rounded bg-indigo-50 px-1 py-0.5 text-[9.5px] font-medium text-indigo-700 hover:bg-indigo-100"
+                         title="跳转到 records 详情(rec_<%= m[2] %>)">cite</a>
+                    </td>
+                  <% } else { %>
+                    <td class="px-2 py-1.5 text-slate-700"><%= rawStudy %></td>
+                  <% } %>
+                  <% s.cells.forEach(c => { %>
+                    <td class="px-2 py-1.5 text-center" title="<%= c.rating || 'n.r.' %>"><%- _dot(c.tone) %></td>
+                  <% }) %>
+                  <td class="px-2 py-1.5 text-center" title="<%= s.overall.rating || 'n.r.' %>"><%- _dot(s.overall.tone) %></td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    <% }) %>
+  <% } else if (tableKey === 'table3b') { %>
+    <%# Table 3b: stacked bar by tool %>
+    <% _td.tools.forEach(tg => { %>
+      <div class="mt-3 rounded border border-slate-200 bg-slate-50/30 p-3">
+        <p class="text-xs font-semibold text-slate-700"><%= tg.label %> <span class="font-normal text-slate-500">(N=<%= tg.study_count %>)</span></p>
+        <div class="mt-2 space-y-1.5">
+          <% tg.domain_summary.forEach(d => { %>
+            <div class="flex items-center gap-2 text-[11px]">
+              <span class="w-44 truncate text-slate-700" title="<%= d.domain_label %>"><%= d.domain_label %></span>
+              <div class="flex h-3 flex-1 overflow-hidden rounded border border-slate-300 bg-slate-200">
+                <% if (d.good > 0)    { %><div class="bg-emerald-500" style="width: <%= d.pct_good %>%"    title="Low: <%= d.good %> (<%= d.pct_good %>%)"></div><% } %>
+                <% if (d.middle > 0)  { %><div class="bg-amber-500"   style="width: <%= d.pct_middle %>%"  title="Some: <%= d.middle %> (<%= d.pct_middle %>%)"></div><% } %>
+                <% if (d.bad > 0)     { %><div class="bg-rose-500"    style="width: <%= d.pct_bad %>%"     title="High: <%= d.bad %> (<%= d.pct_bad %>%)"></div><% } %>
+                <% if (d.unclear > 0) { %><div class="bg-slate-300"   style="width: <%= d.pct_unclear %>%" title="Unclear: <%= d.unclear %> (<%= d.pct_unclear %>%)"></div><% } %>
+              </div>
+              <span class="w-32 text-right font-mono text-slate-500">
+                <span class="text-emerald-700"><%= d.good %></span>·<span class="text-amber-700"><%= d.middle %></span>·<span class="text-rose-700"><%= d.bad %></span>·<span class="text-slate-500"><%= d.unclear %></span>
+              </span>
+            </div>
+          <% }) %>
+        </div>
+      </div>
+    <% }) %>
+  <% } else if (tableKey === 'table4') { %>
+    <%# Table 4: Evidence Profile — generic single shape,polished 列名 + 行序适用 %>
+    <%
+      const _t4cols = (_polished && _polished.polished_column_headers
+                       && _td.columns.length === _polished.polished_column_headers.length)
+                    ? _applyPolishedHeaders(_td.columns, _polished.polished_column_headers)
+                    : _td.columns
+      const _t4rows = (_polished && _polished.row_reorder_keys)
+                    ? _reorderRows(_td.rows, _polished.row_reorder_keys)
+                    : _td.rows
+    %>
+    <div class="mt-3 overflow-x-auto">
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr class="border-b border-slate-300 text-left text-slate-600">
+            <% _t4cols.forEach(c => { %>
+              <th class="px-1.5 py-1 font-medium" title="<%= c.label %>"><%= c.label %></th>
+            <% }) %>
+          </tr>
+        </thead>
+        <tbody>
+          <% _t4rows.forEach(r => {
+               const certCls = ({ high: 'bg-emerald-100 text-emerald-800', moderate: 'bg-blue-100 text-blue-800', low: 'bg-amber-100 text-amber-800', very_low: 'bg-rose-100 text-rose-800' })[r.overall_raw] || 'bg-slate-100 text-slate-700'
+               const fwCls = ({ grade: 'bg-emerald-50 text-emerald-700', cerqual: 'bg-violet-50 text-violet-700', hybrid: 'bg-amber-50 text-amber-700' })[r.framework] || 'bg-slate-50 text-slate-600'
+          %>
+            <tr class="border-b border-slate-100 align-top">
+              <% _t4cols.forEach(c => {
+                   if (c.key === 'overall_certainty') { %>
+                     <td class="px-1.5 py-1.5"><span class="rounded px-2 py-0.5 text-[10px] font-semibold <%= certCls %>"><%= r[c.key] %></span></td>
+              <% } else if (c.key === 'framework') { %>
+                     <td class="px-1.5 py-1.5"><span class="rounded px-1.5 py-0.5 text-[10px] font-medium <%= fwCls %>"><%= r[c.key] %></span></td>
+              <% } else { %>
+                     <td class="px-1.5 py-1.5 text-slate-700"><%= r[c.key] || '—' %></td>
+              <% } }) %>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } else { %>
+    <%# Table 5-14: generic { columns, rows } — polished 列名 + 行序都适用 %>
+    <%
+      const _gcols = (_polished && _polished.polished_column_headers
+                      && _td.columns.length === _polished.polished_column_headers.length)
+                   ? _applyPolishedHeaders(_td.columns, _polished.polished_column_headers)
+                   : _td.columns
+      const _grows = (_polished && _polished.row_reorder_keys)
+                   ? _reorderRows(_td.rows, _polished.row_reorder_keys)
+                   : _td.rows
+    %>
+    <div class="mt-3 overflow-x-auto">
+      <table class="w-full text-[11px]">
+        <thead>
+          <tr class="border-b border-slate-300 text-left text-slate-600">
+            <% _gcols.forEach(c => { %>
+              <th class="px-1.5 py-1 font-medium" title="<%= c.full_label || c.label %>"><%= c.label %></th>
+            <% }) %>
+          </tr>
+        </thead>
+        <tbody>
+          <% _grows.forEach(r => { %>
+            <tr class="border-b border-slate-100 align-top">
+              <% _gcols.forEach(c => { %>
+                <td class="px-1.5 py-1.5 text-slate-700"><%= r[c.key] != null ? r[c.key] : '—' %></td>
+              <% }) %>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+    <% if (_td.total_unique_countries && _td.total_unique_countries > _td.rows.length) { %>
+      <p class="mt-2 text-[11px] text-slate-500">显示 top <%= _td.rows.length %> · 共 <%= _td.total_unique_countries %> 个唯一值</p>
+    <% } else if (_td.total_unique_frameworks && _td.total_unique_frameworks > _td.rows.length) { %>
+      <p class="mt-2 text-[11px] text-slate-500">显示 top <%= _td.rows.length %> · 共 <%= _td.total_unique_frameworks %> 个唯一值</p>
+    <% } else if (_td.total_unique_instruments && _td.total_unique_instruments > _td.rows.length) { %>
+      <p class="mt-2 text-[11px] text-slate-500">显示 top <%= _td.rows.length %> · 共 <%= _td.total_unique_instruments %> 个唯一值</p>
+    <% } %>
+    <% if (_td.note) { %><p class="mt-2 text-[11px] text-slate-500"><%= _td.note %></p><% } %>
+  <% } %>
+
+  <%# T3 — 精修 footnotes(显示在表下方) %>
+  <% if (_polished && Array.isArray(_polished.polished_footnotes) && _polished.polished_footnotes.length > 0) { %>
+    <div class="mt-3 border-t border-emerald-100 pt-2 text-[11px] text-slate-600">
+      <p class="text-[10px] font-medium uppercase tracking-wide text-emerald-700 mb-1">Footnotes (LLM polished)</p>
+      <ul class="list-none space-y-0.5 pl-0">
+        <% _polished.polished_footnotes.forEach((fn, i) => { %>
+          <li><sup class="mr-1 text-emerald-700"><%= i + 1 %></sup><%= fn %></li>
+        <% }) %>
+      </ul>
+    </div>
+  <% } %>
+
+  <%# T3 — 精修元信息(模型 / 时间戳 / 行重排提示) %>
+  <% if (_polished && _polished.generated_at) { %>
+    <p class="mt-2 text-[10px] text-emerald-700/70">
+      ✓ Polished by <%= _polished.model || 'Opus' %> at <%= _polished.generated_at %>
+      <% if (_polished.row_reorder_keys) { %> · 已应用行序重排<% } %>
+      <% if (_polished.system_version) { %> · prompt <%= _polished.system_version %><% } %>
+    </p>
+  <% } %>
+</details>

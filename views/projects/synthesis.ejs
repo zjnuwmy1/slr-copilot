@@ -1,152 +1,571 @@
 <%- include('../partials/header', { title: project.title + ' · ' + stepLabel }) %>
 <%- include('partials/project-header', { project, currentStep: 'synthesis' }) %>
 
-<div class="grid gap-6 lg:grid-cols-[260px_1fr]">
+<%
+  // ---- 视图辅助 ----
+  function strengthCfg(s) {
+    return ({
+      strong:   ['bg-emerald-100 text-emerald-700 border-emerald-200', '强'],
+      moderate: ['bg-blue-100 text-blue-700 border-blue-200',           '中'],
+      weak:     ['bg-amber-100 text-amber-700 border-amber-200',         '弱'],
+      unclear:  ['bg-slate-100 text-slate-500 border-slate-200',         '不确定'],
+    })[s] || ['bg-slate-100 text-slate-500 border-slate-200', s || '—']
+  }
+  function pct(n, total) {
+    if (!total) return 0
+    return Math.round((n / total) * 100)
+  }
+  const minViableV2 = 5
+  // 真正可纳入 synthesis 的样本量 = Step 3 include - post-RoB 排除
+  const effectiveN = (typeof effectiveSynthesisCount === 'number') ? effectiveSynthesisCount : includeCount
+  const canRunV2 = (typeof matrixCoverage === 'number') && matrixCoverage >= Math.min(5, effectiveN * 0.5) && effectiveN >= minViableV2
+%>
+
+<div class="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
   <%- include('partials/stepper', { project, progress, currentStep: 'synthesis' }) %>
 
-  <section class="space-y-6">
+  <section class="space-y-6 min-w-0">
     <%- include('partials/step-banner', {
       stepNum: 6,
       stepTitle: '主题综合',
-      stepIntro: '跨研究归纳规律 —— 哪些发现一致、哪些矛盾、哪里存在空白?AI 协助进行主题聚类,由您审阅与调整最终主题结构。',
+      stepIntro: '跨研究归纳规律 — 哪些发现一致、哪些矛盾、哪里存在空白?接入 Step 1-5 全部定稿数据(协议 / 检索词 / 筛选理由 / 矩阵 / RoB),让主题锚定 PICO + 质量加权 + 方法学聚类感。',
       prismaItems: (stepItems || []).map((it) => `#${it.item_number}`).join(' · '),
     }) %>
 
-    <!-- 运行聚类卡 -->
+    <!-- ============================================================ -->
+    <!-- Card 1: 数据可用性 + 协议覆盖 -->
+    <!-- ============================================================ -->
     <div class="rounded-2xl border border-slate-200 bg-white p-6">
-      <div class="flex items-start justify-between gap-4">
-        <div>
-          <h2 class="text-lg font-semibold text-slate-800">主题聚类(Thematic Synthesis)</h2>
-          <p class="mt-1 text-sm text-slate-500">
-            从已抽取并核实的论文中跨研究聚出主题、识别一致结论 / 矛盾结论 / 证据空白。
-          </p>
-          <p class="mt-2 text-xs text-slate-500">
-            当前已核实抽取:<span class="font-semibold text-slate-700"><%= verifiedCount %></span> 篇
-            <span class="text-slate-400">/ 最低要求 <%= minVerified %> 篇</span>
+      <div class="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 class="text-base font-semibold text-slate-900">📊 数据可用性</h2>
+        <p class="text-xs text-slate-500">v2 聚类要求:include ≥ 5 篇 + matrix 覆盖 ≥ 50%(或 ≥5 篇)</p>
+      </div>
+      <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div class="rounded-lg border <%= effectiveN >= minViableV2 ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-200 bg-amber-50/40' %> p-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500">可纳入 Synthesis</p>
+          <p class="mt-1 text-2xl font-bold text-slate-900 leading-none"><%= effectiveN %></p>
+          <% if (postRobExcluded > 0) { %>
+            <p class="mt-0.5 text-[10px] text-slate-400"><%= includeCount %> Step3 − <%= postRobExcluded %> post-RoB 排除</p>
+          <% } else { %>
+            <p class="mt-0.5 text-[10px] text-slate-400">Step 3 include 全部纳入</p>
+          <% } %>
+        </div>
+        <div class="rounded-lg border <%= matrixCoverage >= Math.min(5, effectiveN*0.5) ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-200 bg-amber-50/40' %> p-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500">Matrix 已抽</p>
+          <p class="mt-1 text-2xl font-bold text-slate-900 leading-none"><%= matrixCoverage %> / <%= effectiveN %></p>
+          <p class="mt-0.5 text-[10px] text-slate-400"><%= pct(matrixCoverage, effectiveN) %>%</p>
+        </div>
+        <div class="rounded-lg border <%= robCoverage >= Math.min(5, effectiveN*0.5) ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200 bg-slate-50/40' %> p-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500">RoB 已评</p>
+          <p class="mt-1 text-2xl font-bold text-slate-900 leading-none"><%= robCoverage %> / <%= effectiveN %></p>
+          <p class="mt-0.5 text-[10px] text-slate-400"><%= pct(robCoverage, effectiveN) %>%</p>
+        </div>
+        <div class="rounded-lg border <%= themes.length > 0 ? 'border-violet-200 bg-violet-50/40' : 'border-slate-200 bg-slate-50/40' %> p-3">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500">已生成主题</p>
+          <p class="mt-1 text-2xl font-bold text-slate-900 leading-none"><%= themes.length %></p>
+        </div>
+      </div>
+
+      <% if (protocolFull && protocolFull.research_questions && protocolFull.research_questions.length) { %>
+        <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50/40 p-3">
+          <p class="text-xs font-medium uppercase tracking-wide text-slate-500 mb-2">PICO 覆盖反查(协议 v<%= protocolFull.version %>)</p>
+          <ul class="space-y-1.5 text-xs">
+            <% protocolFull.research_questions.forEach((q, i) => {
+                 const rqKey = 'RQ' + (i+1)
+                 const cover = synthesisMeta && synthesisMeta.protocol_coverage && synthesisMeta.protocol_coverage.coveredBy && synthesisMeta.protocol_coverage.coveredBy[rqKey] || []
+                 const covered = cover.length > 0
+            %>
+              <li class="flex items-start gap-2">
+                <span class="flex-none rounded px-1.5 py-0.5 text-[10px] font-mono <%= covered ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700' %>"><%= rqKey %></span>
+                <div class="min-w-0 flex-1">
+                  <p class="text-slate-700"><%= typeof q === 'string' ? q.slice(0, 200) : (q.text || q.label || JSON.stringify(q)).slice(0, 200) %></p>
+                  <% if (covered) { %>
+                    <p class="text-[10px] text-emerald-700 mt-0.5">✓ 覆盖于 <%= cover.length %> 个主题</p>
+                  <% } else if (themes.length > 0) { %>
+                    <p class="text-[10px] text-rose-700 mt-0.5">⚠ 0 主题覆盖 — 证据空白(PRISMA 2020 Item 21)</p>
+                  <% } else { %>
+                    <p class="text-[10px] text-slate-400 mt-0.5">尚未聚类</p>
+                  <% } %>
+                </div>
+              </li>
+            <% }) %>
+          </ul>
+          <% if (synthesisMeta && synthesisMeta.protocol_coverage && synthesisMeta.protocol_coverage.uncovered && synthesisMeta.protocol_coverage.uncovered.length) { %>
+            <p class="mt-2 text-[11px] text-rose-700 border-t border-slate-200 pt-2">
+              <strong>未覆盖 RQ:</strong> <%= synthesisMeta.protocol_coverage.uncovered.join(', ') %> — 写综述时要把这些列为"evidence gaps for future research"
+            </p>
+          <% } %>
+        </div>
+      <% } %>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- Card 2: 项目专用 Overlay -->
+    <!-- ============================================================ -->
+    <div class="rounded-2xl border <%= overlay && !overlayStale ? 'border-emerald-200 bg-emerald-50/30' : (overlayInFlight ? 'border-blue-200 bg-blue-50/30' : 'border-amber-200 bg-amber-50/30') %> p-6">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2">
+            <h2 class="text-base font-semibold text-slate-900">⚙️ 项目专用聚类指引(overlay)</h2>
+            <% if (overlay && !overlayStale) { %>
+              <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">✓ 协议 v<%= overlayAtVersion %></span>
+            <% } else if (overlay && overlayStale) { %>
+              <%
+                const synStaleLabel = ({
+                  protocol_upgraded:        '⚠ 协议已升级',
+                  system_prompt_upgraded:   '⚠ 通用 prompt 已升级',
+                  old_overlay_no_version:   '⚠ 旧版 overlay,需重新生成',
+                })[typeof overlayStaleReason !== 'undefined' ? overlayStaleReason : ''] || '⚠ 已过期'
+              %>
+              <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800"><%= synStaleLabel %></span>
+            <% } else { %>
+              <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">未生成</span>
+            <% } %>
+          </div>
+          <p class="mt-2 text-sm text-slate-600 leading-relaxed">
+            Opus 4.8 + ultrathink 基于<strong>完整协议 + 3-4 篇代表性论文</strong>一次性生成 — 告诉聚类 LLM 这个项目优先按什么维度分主题(GenAI 角色 / DT 阶段 / 元认知组件等),避免泛主题。每协议版本 1 次。
           </p>
         </div>
-        <form method="post" action="/projects/<%= project.id %>/synthesis/run"
-              onsubmit="return confirm('将调用 LLM 聚类(单次 12K tokens / ~10 分钟)。如已有 themes 会被覆盖。是否继续?')">
-          <% if (verifiedCount >= minVerified) { %>
-            <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
-              <%= themes.length ? '重新运行聚类' : '运行主题聚类' %>
+        <div class="flex flex-none flex-col items-end gap-2">
+          <% if (overlayInFlight) { %>
+            <span id="overlay-status" class="rounded-lg bg-blue-100 px-3 py-2 text-xs font-mono text-blue-800" data-started="<%= overlayLockStarted %>">
+              ⏳ 生成中
+            </span>
+          <% } else if (!protocolApproved) { %>
+            <span class="text-xs text-rose-700">先审批协议</span>
+          <% } else if (overlay && !overlayStale) { %>
+            <span class="text-xs text-emerald-700 text-right max-w-[220px]">
+              基于协议 v<%= overlayAtVersion %> 已生成<br>
+              <span class="text-slate-400">改协议后才能重新生成</span>
+            </span>
+          <% } else { %>
+            <form id="overlay-form" method="post" action="/projects/<%= project.id %>/synthesis/optimize-overlay">
+              <button type="submit" id="overlay-btn"
+                      class="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-600 transition disabled:opacity-60"
+                      title="Opus 4.8 + ultrathink, 5-8 分钟">
+                <%= overlay ? '↻ 重新生成(协议已升级)' : '⚙️ 生成项目专用 overlay' %>
+              </button>
+            </form>
+          <% } %>
+        </div>
+      </div>
+
+      <% if (overlay && !overlayStale) { %>
+        <details class="mt-4 text-xs">
+          <summary class="cursor-pointer text-emerald-800 hover:text-emerald-900 font-medium">查看 overlay 内容 ▾</summary>
+          <pre class="mt-3 whitespace-pre-wrap rounded-lg border border-emerald-200 bg-white p-3 text-slate-700 leading-relaxed"><%= overlay.overlay_text || overlay.text || JSON.stringify(overlay, null, 2) %></pre>
+        </details>
+      <% } %>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- Card 3: 运行聚类(M29:异步 + 实时进度) -->
+    <!-- ============================================================ -->
+    <div id="synth-run-card"
+         class="rounded-2xl border <%= synthRunInFlight ? 'border-blue-300 bg-blue-50/40' : (synthRunStatus === 'failed' ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200 bg-white') %> p-6">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div class="min-w-0 flex-1">
+          <h2 class="text-base font-semibold text-slate-900">⚡ 主题聚类(Thematic Synthesis)</h2>
+          <p class="mt-1 text-sm text-slate-500">
+            一次 LLM call 喂全部 <%= effectiveN %> 篇 + matrix + RoB + 协议 + overlay。Opus 4.8 + ultrathink,~20-40 min(thinking 时间不出 token,正常)。可关闭页面,后台继续跑。
+          </p>
+          <% if (!overlay && !synthRunInFlight) { %>
+            <p class="mt-2 text-xs text-amber-700">⚠ 未生成 overlay 也可跑,但有 overlay 主题更聚焦项目核心维度。建议先点 ⚙️</p>
+          <% } %>
+        </div>
+        <form id="synth-run-form" method="post" action="/projects/<%= project.id %>/synthesis/run"
+              onsubmit="return confirm('将调用 Opus 4.8 + ultrathink 聚类(单次 ~20-40 分钟,后台跑,可关闭页面)。如已有 themes 会被覆盖。继续?')">
+          <% if (synthRunInFlight) { %>
+            <button type="button" disabled
+                    class="cursor-not-allowed rounded-lg bg-blue-200 px-4 py-2 text-sm font-medium text-blue-800">
+              ⏳ 运行中…
             </button>
+          <% } else if (canRunV2) { %>
+            <% if (upstreamUnchanged) { %>
+              <div class="flex flex-col items-end gap-1">
+                <button type="button" disabled
+                        class="cursor-not-allowed rounded-lg bg-slate-200 px-4 py-2 text-sm font-medium text-slate-500"
+                        title="上游数据(协议 / include / matrix / RoB / overlay)自上次成功以来未变化 — 重跑会得到几乎相同结果">
+                  ✓ 上次结果有效(上游未变更)
+                </button>
+                <form method="post" action="/projects/<%= project.id %>/synthesis/run" class="inline"
+                      onsubmit="return confirm('上游没变化时强制重跑会得到非常相似的结果且烧 token,确认继续?')">
+                  <input type="hidden" name="force" value="1">
+                  <button type="submit" class="text-[11px] text-rose-600 hover:text-rose-800 underline">⚠ 强制重跑(浪费 token)</button>
+                </form>
+              </div>
+            <% } else { %>
+              <button type="submit" id="synth-run-btn"
+                      class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 transition">
+                <%= themes.length ? '↻ 重新聚类(上游已变更)' : '⚡ 运行主题聚类' %>
+              </button>
+            <% } %>
           <% } else { %>
             <button type="button" disabled class="cursor-not-allowed rounded-lg bg-slate-200 px-4 py-2 text-sm font-medium text-slate-400">
-              先抽取 ≥ <%= minVerified %> 篇
+              数据不足
             </button>
           <% } %>
         </form>
       </div>
+
+      <!-- In-flight 进度卡(M30+:已用 / 预估 / 最长 3 段计时,基于纳入文献数动态预估) -->
+      <%
+        // 预估总时长(秒):17 min(1020s)是 117 篇实测均值,按 papers 数线性外推
+        //   公式:max(10min, papers * 9s);117 篇 → ~17.5 min;50 篇 → 10 min;300 篇 → 45 min
+        const estimatedSecondsSynth = Math.max(600, Math.round(effectiveN * 9))
+        const hardMaxSecondsSynth = 2700   // 45 min 后端硬 timeout(对齐 routes/projects/synthesis.js)
+      %>
+      <div id="synth-run-progress" class="mt-4 <%= synthRunInFlight ? '' : 'hidden' %>"
+           data-started="<%= synthRunStarted || '' %>"
+           data-estimated="<%= estimatedSecondsSynth %>"
+           data-hard-max="<%= hardMaxSecondsSynth %>">
+        <div class="rounded-xl border border-blue-200 bg-white/70 p-4">
+          <div class="flex items-center gap-3">
+            <svg class="h-5 w-5 animate-spin text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-semibold text-blue-900">正在运行主题聚类(Opus 4.8 + ultrathink)</p>
+              <p class="mt-0.5 text-xs text-blue-700">
+                喂入 <%= effectiveN %> 篇 · matrix <%= matrixCoverage %> · RoB <%= robCoverage %><%= overlay ? ' · overlay' : '' %> · 协议 v<%= protocolFull ? protocolFull.version : '?' %>
+              </p>
+            </div>
+          </div>
+          <!-- 3 段计时:已用 / 预估 / 最长 -->
+          <div class="mt-3 grid grid-cols-3 gap-3 text-center">
+            <div class="rounded-lg bg-blue-50 p-2">
+              <p class="text-[10px] uppercase tracking-wide text-blue-600">已用</p>
+              <p class="mt-0.5 text-xl font-mono font-bold text-blue-900"><span id="synth-elapsed">0:00</span></p>
+            </div>
+            <div class="rounded-lg bg-emerald-50 p-2">
+              <p class="text-[10px] uppercase tracking-wide text-emerald-600">预估</p>
+              <p class="mt-0.5 text-xl font-mono font-bold text-emerald-800">~<%= Math.round(estimatedSecondsSynth / 60) %>:00</p>
+              <p class="text-[9px] text-emerald-500"><%= effectiveN %> 篇按 9s/篇</p>
+            </div>
+            <div class="rounded-lg bg-amber-50 p-2">
+              <p class="text-[10px] uppercase tracking-wide text-amber-600">最长(硬超时)</p>
+              <p class="mt-0.5 text-xl font-mono font-bold text-amber-800"><%= Math.round(hardMaxSecondsSynth / 60) %>:00</p>
+              <p class="text-[9px] text-amber-500">超时会自动中断</p>
+            </div>
+          </div>
+          <!-- 进度条:基于"已用/最长" -->
+          <div class="mt-3 h-2 w-full rounded-full bg-blue-100 overflow-hidden">
+            <div id="synth-progress-bar" class="h-full bg-blue-500 transition-all duration-1000" style="width: 0%"></div>
+          </div>
+          <p class="mt-2 text-[11px] text-blue-600">
+            <span id="synth-stage-hint">📡 提交 LLM 中…(可以关闭页面,聚类会在后台继续)</span>
+          </p>
+        </div>
+      </div>
+
+      <!-- 上次失败信息(只在 failed/aborted 时显示) -->
+      <% if (!synthRunInFlight && (synthRunStatus === 'failed' || synthRunStatus === 'aborted_by_restart')) { %>
+        <div class="mt-4 rounded-xl border border-rose-200 bg-white p-4">
+          <div class="flex items-start gap-2">
+            <span class="text-rose-600">⚠</span>
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-semibold text-rose-900">
+                上次聚类失败 <% if (synthRunStatus === 'aborted_by_restart') { %>(服务重启中断)<% } %>
+              </p>
+              <% if (synthRunFinished) { %>
+                <p class="mt-0.5 text-[11px] text-rose-600">完成时间:<%= synthRunFinished %> UTC</p>
+              <% } %>
+              <% if (synthRunError) { %>
+                <pre class="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-900"><%= synthRunError %></pre>
+              <% } %>
+              <p class="mt-2 text-xs text-rose-700">直接点 ⚡ 重试即可。</p>
+            </div>
+          </div>
+        </div>
+      <% } %>
+
+      <!-- 上次成功信息(只在成功 + 未在跑 + 有 meta 时显示一个小摘要) -->
+      <% if (!synthRunInFlight && synthRunStatus === 'success' && synthRunMeta) { %>
+        <div class="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/40 p-3">
+          <p class="text-xs text-emerald-800">
+            ✓ 上次聚类成功 ·
+            <%= synthRunMeta.themes_count || '?' %> 个主题 ·
+            <%= synthRunMeta.papers_count || '?' %> 篇论文 ·
+            <%= synthRunMeta.duration_ms ? Math.round(synthRunMeta.duration_ms / 1000) + 's' : '' %> ·
+            <%= synthRunMeta.model || '' %>
+            <% if (synthRunFinished) { %>· <%= synthRunFinished %> UTC<% } %>
+          </p>
+        </div>
+      <% } %>
     </div>
 
     <% if (themes.length === 0) { %>
       <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
         <p class="text-2xl">📊</p>
         <h3 class="mt-2 text-base font-semibold text-slate-800">尚未生成主题</h3>
-        <p class="mt-1 text-sm text-slate-500">完成抽取核实后点上方按钮跑聚类。</p>
+        <p class="mt-1 text-sm text-slate-500">先确认上面数据可用性 + 生成 overlay,再点上方 ⚡ 跑聚类。</p>
       </div>
     <% } else { %>
 
-      <!-- 主题列表 -->
-      <div class="space-y-4">
-        <div class="flex items-center justify-between">
-          <h3 class="text-sm font-medium uppercase text-slate-400">主题(<%= themes.length %> 个)</h3>
+      <!-- ============================================================ -->
+      <!-- Card 4: 主题列表 -->
+      <!-- ============================================================ -->
+      <div class="space-y-3">
+        <div class="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 class="text-base font-semibold text-slate-900">主题(<%= themes.length %> 个)</h3>
           <a href="/projects/<%= project.id %>/synthesis/matrix.csv"
-             class="text-xs text-slate-500 hover:text-slate-900">⬇ 导出 Evidence Matrix CSV</a>
+             class="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-50">⬇ Evidence Matrix CSV</a>
         </div>
-        <% themes.forEach((t, idx) => {
-          const strengthCfg = ({
-            strong:   ['bg-emerald-100 text-emerald-700', '强'],
-            moderate: ['bg-blue-100 text-blue-700',       '中'],
-            weak:     ['bg-amber-100 text-amber-700',     '弱'],
-            unclear:  ['bg-slate-100 text-slate-500',     '不确定'],
-          })[t.evidence_strength] || ['bg-slate-100 text-slate-500', t.evidence_strength || '—']
-        %>
-          <div class="rounded-2xl border border-slate-200 bg-white p-5">
-            <details>
-              <summary class="cursor-pointer list-none">
-                <div class="flex items-start justify-between gap-4">
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2">
-                      <span class="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700"><%= idx + 1 %></span>
-                      <h4 class="text-base font-semibold text-slate-800"><%= t.name %></h4>
-                      <span class="flex-none rounded-full px-2 py-0.5 text-[10px] <%= strengthCfg[0] %>">证据 <%= strengthCfg[1] %></span>
-                      <span class="text-xs text-slate-400"><%= t.supporting_record_ids.length %> 篇支持</span>
-                    </div>
-                    <% if (t.description) { %>
-                      <p class="mt-2 text-sm text-slate-600"><%= t.description %></p>
-                    <% } %>
-                  </div>
-                </div>
-              </summary>
 
-              <div class="mt-4 grid gap-4 md:grid-cols-3 text-sm">
+        <% if (synthesisMeta && synthesisMeta.cross_cutting_observations && synthesisMeta.cross_cutting_observations.length) { %>
+          <div class="rounded-lg border border-violet-200 bg-violet-50/40 p-3">
+            <p class="text-xs font-medium uppercase tracking-wide text-violet-700 mb-2">🔭 跨主题观察(cross-cutting)</p>
+            <ul class="space-y-1 text-xs text-violet-900">
+              <% synthesisMeta.cross_cutting_observations.forEach(o => { %>
+                <li>· <%= o %></li>
+              <% }) %>
+            </ul>
+          </div>
+        <% } %>
+
+        <% themes.forEach((t, idx) => {
+          const sCfg = strengthCfg(t.evidence_strength)
+          const rob = t.rob_profile || {}
+          const designMix = t.study_design_mix || {}
+          const totalSupport = (t.supporting_record_ids || []).length || 1
+        %>
+          <details class="rounded-xl border border-slate-200 bg-white">
+            <summary class="cursor-pointer list-none p-4 hover:bg-slate-50/60 rounded-xl">
+              <div class="flex flex-wrap items-center gap-3">
+                <span class="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-700"><%= idx + 1 %></span>
+                <h4 class="text-sm font-semibold text-slate-900 min-w-0 flex-1"><%= t.name %></h4>
+                <span class="flex-none rounded border px-2 py-0.5 text-[11px] <%= sCfg[0] %>">证据 <%= sCfg[1] %></span>
+                <span class="text-[11px] text-slate-500"><%= totalSupport %> 篇</span>
+              </div>
+              <% if (t.maps_to_research_questions && t.maps_to_research_questions.length) { %>
+                <div class="mt-1.5 ml-9 flex flex-wrap gap-1">
+                  <% t.maps_to_research_questions.forEach(rq => { %>
+                    <span class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-mono text-indigo-700"><%= rq %></span>
+                  <% }) %>
+                  <% (t.maps_to_pico_concepts || []).forEach(c => { %>
+                    <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600"><%= c %></span>
+                  <% }) %>
+                </div>
+              <% } %>
+              <% if (t.description) { %>
+                <p class="mt-1.5 ml-9 text-xs text-slate-600 leading-relaxed"><%= t.description %></p>
+              <% } %>
+
+              <!-- RoB + design 微缩条 -->
+              <div class="mt-2 ml-9 grid gap-2 sm:grid-cols-2 text-[11px]">
+                <div class="rounded border border-slate-200 bg-slate-50/40 p-1.5">
+                  <span class="text-slate-500 mr-1">RoB:</span>
+                  <% if (rob.good) { %><span class="text-emerald-700 mr-2">✓<%= rob.good %></span><% } %>
+                  <% if (rob.middle) { %><span class="text-amber-700 mr-2">?<%= rob.middle %></span><% } %>
+                  <% if (rob.bad) { %><span class="text-rose-700 mr-2">✗<%= rob.bad %></span><% } %>
+                  <% if (rob.unrated) { %><span class="text-slate-400">—<%= rob.unrated %></span><% } %>
+                </div>
+                <div class="rounded border border-slate-200 bg-slate-50/40 p-1.5">
+                  <span class="text-slate-500 mr-1">设计:</span>
+                  <% Object.entries(designMix).forEach(([k, v]) => { %>
+                    <span class="mr-2 text-slate-700"><%= k %>:<%= v %></span>
+                  <% }) %>
+                </div>
+              </div>
+            </summary>
+
+            <div class="border-t border-slate-100 p-4 space-y-3">
+              <% if (t.methodological_note) { %>
+                <p class="rounded bg-amber-50 border border-amber-200 p-2 text-[11px] text-amber-800"><strong>方法学:</strong> <%= t.methodological_note %></p>
+              <% } %>
+
+              <div class="grid gap-3 md:grid-cols-3 text-xs">
                 <div>
-                  <p class="text-xs font-medium uppercase tracking-wider text-emerald-700">一致结论</p>
-                  <% if (t.consistent_findings.length === 0) { %>
-                    <p class="mt-1 text-xs text-slate-400">—</p>
+                  <p class="text-[11px] font-medium uppercase tracking-wider text-emerald-700">一致结论</p>
+                  <% if (!t.consistent_findings || !t.consistent_findings.length) { %>
+                    <p class="mt-1 text-slate-400">—</p>
                   <% } else { %>
-                    <ul class="mt-1 space-y-1 text-xs text-slate-700">
-                      <% t.consistent_findings.forEach(f => { %>
-                        <li>· <%= f %></li>
+                    <ul class="mt-1.5 space-y-2">
+                      <% t.consistent_findings.forEach(f => {
+                           const ftext = typeof f === 'string' ? f : (f.finding || '')
+                           const hq = typeof f === 'object' && f.high_quality_only
+                           const quotes = typeof f === 'object' ? (f.evidence_quote_examples || []) : []
+                      %>
+                        <li class="rounded bg-emerald-50/40 border border-emerald-200 p-1.5">
+                          <p class="text-slate-700"><%= ftext %></p>
+                          <% if (typeof f === 'object' && f.high_quality_only === true) { %>
+                            <p class="mt-0.5 text-[10px] text-emerald-700">✓ 基于高质量论文</p>
+                          <% } else if (typeof f === 'object' && f.high_quality_only === false) { %>
+                            <p class="mt-0.5 text-[10px] text-amber-700">⚠ 含低质量论文支持</p>
+                          <% } %>
+                          <% if (quotes.length) { %>
+                            <ul class="mt-1 space-y-0.5">
+                              <% quotes.slice(0, 2).forEach(q => { %>
+                                <li class="text-[10px] italic text-slate-500">"<%= q %>"</li>
+                              <% }) %>
+                            </ul>
+                          <% } %>
+                        </li>
                       <% }) %>
                     </ul>
                   <% } %>
                 </div>
                 <div>
-                  <p class="text-xs font-medium uppercase tracking-wider text-amber-700">矛盾结论</p>
-                  <% if (t.conflicting_findings.length === 0) { %>
-                    <p class="mt-1 text-xs text-slate-400">无</p>
+                  <p class="text-[11px] font-medium uppercase tracking-wider text-amber-700">矛盾结论</p>
+                  <% if (!t.conflicting_findings || !t.conflicting_findings.length) { %>
+                    <p class="mt-1 text-slate-400">无</p>
                   <% } else { %>
-                    <ul class="mt-1 space-y-1 text-xs text-slate-700">
-                      <% t.conflicting_findings.forEach(f => { %>
-                        <li>· <%= f %></li>
+                    <ul class="mt-1.5 space-y-2">
+                      <% t.conflicting_findings.forEach(f => {
+                           const ctext = typeof f === 'string' ? f : (f.claim_a || '')
+                           const cb = typeof f === 'object' ? f.claim_b : null
+                           const reason = typeof f === 'object' ? f.possible_reason : null
+                      %>
+                        <li class="rounded bg-amber-50/40 border border-amber-200 p-1.5">
+                          <p class="text-slate-700"><strong>A:</strong> <%= ctext %></p>
+                          <% if (cb) { %><p class="mt-0.5 text-slate-700"><strong>B:</strong> <%= cb %></p><% } %>
+                          <% if (reason) { %><p class="mt-0.5 text-[10px] text-slate-500">原因:<%= reason %></p><% } %>
+                        </li>
                       <% }) %>
                     </ul>
                   <% } %>
                 </div>
                 <div>
-                  <p class="text-xs font-medium uppercase tracking-wider text-slate-500">证据空白</p>
-                  <% if (t.evidence_gaps.length === 0) { %>
-                    <p class="mt-1 text-xs text-slate-400">—</p>
+                  <p class="text-[11px] font-medium uppercase tracking-wider text-slate-500">证据空白</p>
+                  <% if (!t.evidence_gaps || !t.evidence_gaps.length) { %>
+                    <p class="mt-1 text-slate-400">—</p>
                   <% } else { %>
-                    <ul class="mt-1 space-y-1 text-xs text-slate-700">
-                      <% t.evidence_gaps.forEach(f => { %>
-                        <li>· <%= f %></li>
+                    <ul class="mt-1.5 space-y-1">
+                      <% t.evidence_gaps.forEach(g => { %>
+                        <li class="text-slate-600">· <%= g %></li>
                       <% }) %>
                     </ul>
                   <% } %>
                 </div>
               </div>
 
-              <!-- 编辑表单 -->
-              <form method="post" action="/projects/<%= project.id %>/synthesis/themes/<%= t.id %>/edit"
-                    class="mt-4 grid gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm">
-                <div class="grid gap-2 md:grid-cols-[1fr_140px]">
-                  <input type="text" name="name" value="<%= t.name %>" class="rounded border border-slate-300 px-2 py-1" required>
-                  <select name="evidence_strength" class="rounded border border-slate-300 px-2 py-1">
-                    <% ['strong','moderate','weak','unclear'].forEach(s => { %>
-                      <option value="<%= s %>" <%= t.evidence_strength === s ? 'selected' : '' %>><%= s %></option>
-                    <% }) %>
-                  </select>
+              <!-- supporting records -->
+              <details class="text-[11px]">
+                <summary class="cursor-pointer text-slate-500 hover:text-slate-700">支持论文 <%= totalSupport %> 篇 ▾</summary>
+                <div class="mt-2 flex flex-wrap gap-1">
+                  <% (t.supporting_record_ids || []).forEach(rid => { %>
+                    <a href="/projects/<%= project.id %>/records/<%= rid %>" class="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-mono text-slate-700 hover:bg-slate-100"><%= rid.slice(0, 16) %></a>
+                  <% }) %>
                 </div>
-                <textarea name="description" rows="2" class="rounded border border-slate-300 px-2 py-1" placeholder="主题描述"><%= t.description || '' %></textarea>
-                <div class="flex justify-end gap-2">
-                  <button type="submit" class="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700">保存</button>
-                </div>
-              </form>
-              <form method="post" action="/projects/<%= project.id %>/synthesis/themes/<%= t.id %>/delete"
-                    class="mt-2 text-right"
-                    onsubmit="return confirm('删除主题“<%= t.name %>”?evidence_points 不会被删,但会失去主题关联。')">
-                <button type="submit" class="text-xs text-rose-600 hover:underline">删除主题</button>
-              </form>
-            </details>
-          </div>
+              </details>
+
+              <!-- 编辑 + 删除(分两个 form,HTML 不允许嵌套)-->
+              <div class="grid gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs">
+                <form method="post" action="/projects/<%= project.id %>/synthesis/themes/<%= t.id %>/edit" class="space-y-2">
+                  <div class="grid gap-2 md:grid-cols-[1fr_140px]">
+                    <input type="text" name="name" value="<%= t.name %>" class="rounded border border-slate-300 px-2 py-1" required>
+                    <select name="evidence_strength" class="rounded border border-slate-300 px-2 py-1">
+                      <% ['strong','moderate','weak','unclear'].forEach(s => { %>
+                        <option value="<%= s %>" <%= t.evidence_strength === s ? 'selected' : '' %>><%= s %></option>
+                      <% }) %>
+                    </select>
+                  </div>
+                  <textarea name="description" rows="2" class="w-full rounded border border-slate-300 px-2 py-1" placeholder="主题描述"><%= t.description || '' %></textarea>
+                  <div class="flex justify-end">
+                    <button type="submit" class="rounded bg-slate-900 px-3 py-1 text-xs text-white hover:bg-slate-700">保存编辑</button>
+                  </div>
+                </form>
+                <form method="post" action="/projects/<%= project.id %>/synthesis/themes/<%= t.id %>/delete"
+                      class="text-right border-t border-slate-200 pt-2"
+                      onsubmit="return confirm('删除主题 <%= t.name %> ?evidence_points 不会被删,但会失去主题关联。')">
+                  <button type="submit" class="text-xs text-rose-600 hover:underline">删除主题</button>
+                </form>
+              </div>
+            </div>
+          </details>
         <% }) %>
       </div>
 
-      <!-- Evidence Matrix -->
+      <!-- ============================================================ -->
+      <!-- Card 4.5: 主题-论文 网络图(vis-network)+ RoB 着色 -->
+      <!-- ============================================================ -->
+      <div class="rounded-2xl border border-slate-200 bg-white p-5">
+        <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+          <h3 class="text-base font-semibold text-slate-900">🕸 主题-论文 网络图</h3>
+          <p class="text-[11px] text-slate-500">
+            主题(大圆,按 evidence_strength 着色)— 论文(小圆,按 RoB valence 着色)
+            <br>点主题/论文聚焦;拖动布局
+          </p>
+        </div>
+        <div id="synth-network" class="rounded-lg border border-slate-200 bg-slate-50/40" style="height: 480px;"></div>
+        <div class="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+          <span class="inline-flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500"></span>RoB 好 / 主题 strong</span>
+          <span class="inline-flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-full bg-amber-500"></span>中 / moderate</span>
+          <span class="inline-flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-full bg-rose-500"></span>差 / weak</span>
+          <span class="inline-flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-full bg-slate-400"></span>未评 / unclear</span>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Card 4.6: 主题强度概览 — interim "forest"(无真实效应量,改用 vote-count + RoB 分层 + study_design)-->
+      <!-- ============================================================ -->
+      <div class="rounded-2xl border border-slate-200 bg-white p-5">
+        <div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+          <h3 class="text-base font-semibold text-slate-900">📊 主题强度概览</h3>
+          <p class="text-[11px] text-slate-500">
+            每主题:支持论文数(按 RoB 分层)+ study_design mix + 一致 / 矛盾 / 空白 count
+            <br><span class="text-amber-700">⚠ 注</span>:真正数值 forest plot(Cohen's d + CI)需要先在 Step 4 matrix 加结构化效应量列(Phase 2);当前是 vote-count 视图
+          </p>
+        </div>
+        <div class="space-y-2 text-xs">
+          <% themes.forEach((t, idx) => {
+               const rob = t.rob_profile || {}
+               const total = (t.supporting_record_ids || []).length || 1
+               const robGood = rob.good || 0
+               const robMid = rob.middle || 0
+               const robBad = rob.bad || 0
+               const robUnrated = rob.unrated || 0
+               const findingCount = (t.consistent_findings || []).length
+               const conflictCount = (t.conflicting_findings || []).length
+               const gapCount = (t.evidence_gaps || []).length
+               const sCfg = strengthCfg(t.evidence_strength)
+          %>
+            <div class="rounded-lg border border-slate-200 p-3">
+              <div class="flex flex-wrap items-baseline justify-between gap-2">
+                <p class="font-medium text-slate-800"><%= idx + 1 %>. <%= t.name %></p>
+                <span class="rounded border px-1.5 py-0.5 text-[11px] <%= sCfg[0] %>"><%= sCfg[1] %></span>
+              </div>
+              <!-- RoB stratified bar(stacked horizontal)-->
+              <div class="mt-2">
+                <p class="text-[10px] text-slate-500 mb-0.5">支持论文 <%= total %> 篇 — RoB 分布</p>
+                <div class="flex h-3 w-full overflow-hidden rounded bg-slate-100">
+                  <% if (robGood) { %><div class="bg-emerald-500" style="width: <%= robGood/total*100 %>%" title="低 RoB / 高质量 <%= robGood %> 篇"></div><% } %>
+                  <% if (robMid)  { %><div class="bg-amber-500"   style="width: <%= robMid/total*100  %>%" title="中等 <%= robMid %> 篇"></div><% } %>
+                  <% if (robBad)  { %><div class="bg-rose-500"    style="width: <%= robBad/total*100  %>%" title="高 RoB / 低质量 <%= robBad %> 篇"></div><% } %>
+                  <% if (robUnrated) { %><div class="bg-slate-400" style="width: <%= robUnrated/total*100 %>%" title="未评估 <%= robUnrated %> 篇"></div><% } %>
+                </div>
+                <p class="mt-1 text-[10px] text-slate-500">
+                  <% if (robGood) { %><span class="text-emerald-700 mr-2">好 <%= robGood %></span><% } %>
+                  <% if (robMid) { %><span class="text-amber-700 mr-2">中 <%= robMid %></span><% } %>
+                  <% if (robBad) { %><span class="text-rose-700 mr-2">差 <%= robBad %></span><% } %>
+                  <% if (robUnrated) { %><span class="text-slate-500">未评 <%= robUnrated %></span><% } %>
+                  <% const hqRatio = total ? Math.round((robGood)/total*100) : 0 %>
+                  <span class="ml-2 text-slate-400">(高质量占比 <%= hqRatio %>%)</span>
+                </p>
+              </div>
+              <!-- study_design mix -->
+              <% const dm = t.study_design_mix || {} %>
+              <% if (Object.keys(dm).length) { %>
+                <p class="mt-2 text-[10px] text-slate-500">
+                  设计:
+                  <% Object.entries(dm).forEach(([k, v]) => { %><span class="mr-2 text-slate-700"><%= k %>:<%= v %></span><% }) %>
+                </p>
+              <% } %>
+              <!-- finding / conflict / gap counts -->
+              <p class="mt-2 text-[10px] text-slate-500">
+                <span class="text-emerald-700 mr-3">✓ 一致 <%= findingCount %> 条</span>
+                <span class="text-amber-700 mr-3">⚠ 矛盾 <%= conflictCount %> 条</span>
+                <span class="text-slate-500">○ 空白 <%= gapCount %> 条</span>
+              </p>
+            </div>
+          <% }) %>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Card 5: Evidence Matrix -->
+      <!-- ============================================================ -->
       <div class="rounded-2xl border border-slate-200 bg-white p-5 overflow-x-auto">
         <h3 class="text-sm font-medium uppercase text-slate-400">Evidence Matrix</h3>
         <p class="mt-1 text-xs text-slate-500">行 = 论文 / 列 = 主题 / 单元 = 该论文在该主题下的 finding 数。</p>
@@ -200,7 +619,6 @@
           </table>
         <% } %>
       </div>
-
     <% } %>
 
     <!-- PRISMA 项展开 -->
@@ -225,5 +643,286 @@
     </div>
   </section>
 </div>
+
+<!-- vis-network — 主题-论文图。CDN 加载,无 npm 依赖 -->
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script>
+// 主题/论文 网络图数据(由 EJS 注入)
+window.SYNTH_NETWORK_DATA = {
+  themes: [
+    <% themes.forEach((t) => {
+         const rob = t.rob_profile || {}
+         const total = (t.supporting_record_ids || []).length || 1
+         const robGood = rob.good || 0
+         const robMid = rob.middle || 0
+         const robBad = rob.bad || 0
+         const hqRatio = total ? robGood / total : 0
+    %>
+    {
+      id: 'theme:<%= t.id %>',
+      label: <%- JSON.stringify((t.name || '').slice(0, 24)) %>,
+      title: <%- JSON.stringify((t.name || '') + ' · ' + total + ' 篇 · ' + (t.evidence_strength || 'unclear')) %>,
+      strength: <%- JSON.stringify(t.evidence_strength || 'unclear') %>,
+      hqRatio: <%= hqRatio.toFixed(2) %>,
+      supportCount: <%= total %>,
+      supportingIds: <%- JSON.stringify(t.supporting_record_ids || []) %>
+    },
+    <% }) %>
+  ],
+  papers: [
+    <% recordsForMatrix.forEach((r) => {
+         // 找这篇论文在哪些 theme 里支持
+         const inThemes = themes.filter(t => (t.supporting_record_ids || []).includes(r.id)).map(t => t.id)
+    %>
+    {
+      id: 'rec:<%= r.id %>',
+      label: <%- JSON.stringify(((r.title || '').slice(0, 20) + ((r.title || '').length > 20 ? '…' : ''))) %>,
+      title: <%- JSON.stringify((r.title || '') + ' · ' + (r.year || '?') + ' · RoB ' + (r.robValence || 'unrated')) %>,
+      year: <%= r.year || 0 %>,
+      // 每篇论文自己的 RoB tier(跟 Step 5 染色一致):good/middle/bad/unrated
+      robValence: <%- JSON.stringify(r.robValence || 'unrated') %>,
+      inThemes: <%- JSON.stringify(inThemes) %>
+    },
+    <% }) %>
+  ],
+}
+</script>
+<script>
+(function () {
+  // Overlay 状态 5s 轮询 — 等 Opus 跑完后 reload
+  var overlayBadge = document.getElementById('overlay-status')
+  if (overlayBadge) {
+    var t = setInterval(function() {
+      fetch('/projects/<%= project.id %>/synthesis/optimize-overlay/status.json', { headers: { Accept: 'application/json' } })
+        .then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          if (!s.in_flight) { clearInterval(t); window.location.reload() }
+        }).catch(function() {})
+    }, 5000)
+  }
+
+  // ============================================================
+  // M29:Synthesis run 异步进度
+  //   - 1s tick 更新已用时
+  //   - 5s 轮询 /run/status.json
+  //   - 完成自动 reload;失败显示错误
+  // ============================================================
+  function fmtElapsed(s) {
+    var m = Math.floor(s / 60)
+    var ss = s % 60
+    return m + ':' + (ss < 10 ? '0' : '') + ss
+  }
+  function startSynthProgressTicker() {
+    var pane = document.getElementById('synth-run-progress')
+    if (!pane || pane.classList.contains('hidden')) return null
+    var startedISO = pane.getAttribute('data-started')
+    // 后端返回的是 "YYYY-MM-DD HH:MM:SS"(UTC),JS new Date 需要 + 'Z'
+    var startedMs = startedISO ? Date.parse(startedISO.replace(' ', 'T') + 'Z') : Date.now()
+    if (!isFinite(startedMs)) startedMs = Date.now()
+    var elapsedEl = document.getElementById('synth-elapsed')
+    var barEl = document.getElementById('synth-progress-bar')
+    var stageEl = document.getElementById('synth-stage-hint')
+    // 从 DOM dataset 取动态预估 + 硬超时(server 端按 papers 数算)
+    var ESTIMATED_S = parseInt(pane.getAttribute('data-estimated') || '1500', 10) || 1500
+    var HARD_TIMEOUT_S = parseInt(pane.getAttribute('data-hard-max') || '2700', 10) || 2700
+    function tick() {
+      var s = Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
+      if (elapsedEl) elapsedEl.textContent = fmtElapsed(s)
+      if (barEl) {
+        // 进度条按"已用 / 最长"实时填(到 95% 留 5% 给真实完成事件)
+        var pct = Math.min(95, Math.round((s / HARD_TIMEOUT_S) * 100))
+        barEl.style.width = pct + '%'
+      }
+      if (stageEl) {
+        if (s < 30) stageEl.textContent = '📡 提交 LLM 中(Opus 4.8 + ultrathink 启动中)…'
+        else if (s < 180) stageEl.textContent = '🧠 模型阅读 ' + <%= effectiveN %> + ' 篇论文 + matrix + RoB + 协议(thinking 阶段不出 token,正常)…'
+        else if (s < ESTIMATED_S * 0.6) stageEl.textContent = '🔍 ultrathink 思考中(主题归纳 / PICO 锚定 / 质量加权)…'
+        else if (s < ESTIMATED_S) stageEl.textContent = '✍️ 输出阶段(主题 + findings + 协议覆盖 JSON 序列化)…'
+        else if (s < HARD_TIMEOUT_S) stageEl.textContent = '⏳ 已超预估时长(' + Math.round(ESTIMATED_S/60) + ' min),但硬超时(' + Math.round(HARD_TIMEOUT_S/60) + ' min)内都正常…'
+        else stageEl.textContent = '⚠ 已达硬超时(' + Math.round(HARD_TIMEOUT_S/60) + ' min),正在中断…'
+      }
+    }
+    tick()
+    return setInterval(tick, 1000)
+  }
+  function startSynthPolling() {
+    var pane = document.getElementById('synth-run-progress')
+    if (!pane || pane.classList.contains('hidden')) return
+    var tickerId = startSynthProgressTicker()
+    var pollId = setInterval(function() {
+      fetch('/projects/<%= project.id %>/synthesis/run/status.json', {
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.ok ? r.json() : null })
+        .then(function(s) {
+          if (!s || !s.ok) return
+          if (s.in_flight) return     // 还在跑,继续
+          // 完成了 — 停 polling + ticker,刷新页面
+          clearInterval(pollId)
+          if (tickerId) clearInterval(tickerId)
+          var barEl = document.getElementById('synth-progress-bar')
+          if (barEl) barEl.style.width = '100%'
+          // 给用户 600ms 看到 100% 再 reload
+          setTimeout(function() { window.location.reload() }, 600)
+        }).catch(function() {})
+    }, 5000)
+  }
+  startSynthPolling()
+
+  // Synthesis run 提交按钮 — AJAX 提交,拿到 in_flight 后局部插入进度卡
+  var synthForm = document.getElementById('synth-run-form')
+  var synthBtn = document.getElementById('synth-run-btn')
+  if (synthForm && synthBtn) {
+    synthForm.addEventListener('submit', function(ev) {
+      // 保留 confirm 弹窗(form 自带 onsubmit return confirm),但拦截真正的同步 POST
+      // — 让 confirm 先弹;如果用户点取消,return false 已经阻止;走到这里说明确认了
+      ev.preventDefault()
+      if (synthBtn.disabled) return
+      var origLabel = synthBtn.textContent
+      synthBtn.disabled = true
+      synthBtn.textContent = '⏳ 启动中…'
+      fetch(synthForm.action, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'X-Requested-With': 'fetch' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.json().catch(function() { return { ok: false, error: 'bad_response' } }) })
+        .then(function(j) {
+          if (j && j.ok && j.in_flight) {
+            // 启动成功 — 刷新页面进入 in-flight 渲染(简单 + 可靠)
+            window.location.reload()
+          } else if (j && j.error_code === 'in_flight') {
+            // 已有 in-flight,直接刷新看进度
+            window.location.reload()
+          } else {
+            synthBtn.disabled = false
+            synthBtn.textContent = origLabel
+            alert('启动失败:' + ((j && j.message) || (j && j.error) || '未知错误'))
+          }
+        }).catch(function(e) {
+          synthBtn.disabled = false
+          synthBtn.textContent = origLabel
+          alert('请求失败:' + (e?.message || '网络错误'))
+        })
+    })
+  }
+
+  // Overlay 提交按钮 — AJAX 不要跳 JSON 页
+  var overlayForm = document.getElementById('overlay-form')
+  var overlayBtn = document.getElementById('overlay-btn')
+  if (overlayForm && overlayBtn) {
+    overlayForm.addEventListener('submit', function(ev) {
+      ev.preventDefault()
+      if (overlayBtn.disabled) return
+      overlayBtn.disabled = true
+      overlayBtn.textContent = '⏳ 启动中...'
+      fetch(overlayForm.action, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'X-Requested-With': 'fetch' },
+        credentials: 'same-origin',
+      }).then(function(r) { return r.json().catch(function() { return { ok: false, error: 'bad response' } }) })
+        .then(function(j) {
+          if (j && j.ok) {
+            window.location.reload()
+          } else {
+            overlayBtn.disabled = false
+            overlayBtn.textContent = '⚙️ 生成项目专用 overlay'
+            alert('启动失败:' + ((j && j.error_code) || (j && j.error) || '未知'))
+          }
+        }).catch(function(e) {
+          overlayBtn.disabled = false
+          overlayBtn.textContent = '⚙️ 生成项目专用 overlay'
+          alert('请求失败:' + (e?.message || '网络错误'))
+        })
+    })
+  }
+
+  // ============================================================
+  // 主题-论文 网络图
+  // ============================================================
+  function strengthColor(s) {
+    return { strong: '#10b981', moderate: '#3b82f6', weak: '#f59e0b', unclear: '#94a3b8' }[s] || '#94a3b8'
+  }
+  function robColorFromHq(ratio) {
+    if (ratio >= 0.7) return '#10b981'   // 多数高质量 → 绿(theme 节点用)
+    if (ratio >= 0.4) return '#f59e0b'   // 中等 → 黄
+    return '#f43f5e'                      // 多数差 → 红
+  }
+  // 论文节点颜色:按每篇论文自己的 RoB tier 染色(跟 Step 5 RoB 页面完全一致)
+  //   good → 绿;middle → 黄;bad → 红;unrated → 灰
+  //   这样用户在 Step 5 看到 40+ 绿色论文,在 Step 6 网络图里也能看到对应的 40+ 绿点
+  var ROB_VALENCE_COLOR = {
+    good:    '#10b981',  // emerald-500
+    middle:  '#f59e0b',  // amber-500
+    bad:     '#f43f5e',  // rose-500
+    unrated: '#94a3b8',  // slate-400
+  }
+  function paperColor(paper) {
+    return ROB_VALENCE_COLOR[paper.robValence] || ROB_VALENCE_COLOR.unrated
+  }
+  var netContainer = document.getElementById('synth-network')
+  if (netContainer && typeof vis !== 'undefined' && window.SYNTH_NETWORK_DATA) {
+    var d = window.SYNTH_NETWORK_DATA
+    var themesById = {}
+    d.themes.forEach(function(t) { themesById[t.id.replace(/^theme:/, '')] = t })
+    var nodes = []
+    var edges = []
+    // 主题节点(大圆 + 标签)
+    d.themes.forEach(function(t) {
+      nodes.push({
+        id: t.id,
+        label: t.label,
+        title: t.title + (t.hqRatio ? ' · 高质量占 ' + Math.round(t.hqRatio*100) + '%' : ''),
+        shape: 'dot',
+        size: 18 + Math.min(t.supportCount, 25),    // 大小 = 支持论文数
+        color: { background: strengthColor(t.strength), border: '#1e293b' },
+        font: { size: 14, color: '#0f172a', face: 'sans-serif' },
+        borderWidth: 2,
+      })
+    })
+    // 论文节点(小点)
+    d.papers.forEach(function(p) {
+      var col = paperColor(p, themesById)
+      nodes.push({
+        id: p.id,
+        label: p.label,
+        title: p.title,
+        shape: 'dot',
+        size: 6,
+        color: { background: col, border: '#475569' },
+        font: { size: 9, color: '#475569', face: 'sans-serif' },
+        borderWidth: 1,
+      })
+      // 边:论文 - 每个所在主题
+      ;(p.inThemes || []).forEach(function(tid) {
+        edges.push({
+          from: p.id,
+          to: 'theme:' + tid,
+          color: { color: '#cbd5e1', highlight: '#6366f1' },
+          width: 0.5,
+        })
+      })
+    })
+    var network = new vis.Network(netContainer, { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) }, {
+      physics: {
+        stabilization: { iterations: 150 },
+        barnesHut: { gravitationalConstant: -2200, springLength: 110, springConstant: 0.03, avoidOverlap: 0.2 },
+      },
+      interaction: { hover: true, zoomView: true, dragView: true, navigationButtons: false },
+      nodes: { borderWidth: 1, shadow: false },
+      edges: { smooth: { type: 'dynamic' } },
+    })
+    network.once('stabilizationIterationsDone', function() {
+      network.setOptions({ physics: false })  // 稳定后冻结
+    })
+    // 点主题 → 高亮它的所有论文(focus)
+    network.on('click', function(e) {
+      if (e.nodes.length === 0) return
+      var id = e.nodes[0]
+      if (id.indexOf('theme:') === 0) network.focus(id, { scale: 1.2, animation: { duration: 400 } })
+    })
+  }
+})();
+</script>
 
 <%- include('../partials/footer') %>

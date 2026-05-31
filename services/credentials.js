@@ -127,7 +127,7 @@ export async function createApiKeyCredential(db, { userId, provider, label, apiK
     `INSERT INTO user_credentials
        (id, user_id, provider, auth_type, label, credential_blob_enc,
         status, last_validated_at, last_validation_error)
-     VALUES (?, ?, ?, 'api_key', ?, ?, 'active', datetime('now'), NULL)`
+     VALUES (?, ?, ?, 'api_key', ?, ?, 'active', datetime('now', '+8 hours'), NULL)`
   ).run(id, userId, provider, trimmedLabel, blob)
 
   return id
@@ -180,7 +180,7 @@ export async function retestCredential(db, { userId, credentialId }) {
     db.prepare(
       `UPDATE user_credentials
        SET status = 'error',
-           last_validated_at = datetime('now'),
+           last_validated_at = datetime('now', '+8 hours'),
            last_validation_error = ?
        WHERE id = ?`
     ).run('decrypt_failed', row.id)
@@ -192,7 +192,7 @@ export async function retestCredential(db, { userId, credentialId }) {
     db.prepare(
       `UPDATE user_credentials
        SET status = 'error',
-           last_validated_at = datetime('now'),
+           last_validated_at = datetime('now', '+8 hours'),
            last_validation_error = ?
        WHERE id = ?`
     ).run('missing_api_key', row.id)
@@ -206,7 +206,7 @@ export async function retestCredential(db, { userId, credentialId }) {
   db.prepare(
     `UPDATE user_credentials
      SET status = ?,
-         last_validated_at = datetime('now'),
+         last_validated_at = datetime('now', '+8 hours'),
          last_validation_error = ?
      WHERE id = ?`
   ).run(nextStatus, result.ok ? null : result.error || 'unknown', row.id)

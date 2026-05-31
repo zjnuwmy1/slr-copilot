@@ -73,7 +73,7 @@ function parseExpires(raw) {
   if (!trimmed) return null
   const d = new Date(trimmed)
   if (isNaN(d.getTime())) return null
-  // 返回 'YYYY-MM-DD HH:MM:SS' UTC 格式,和 SQLite datetime('now') 一致
+  // 返回 'YYYY-MM-DD HH:MM:SS' UTC 格式,和 SQLite datetime('now', '+8 hours') 一致
   return d.toISOString().slice(0, 19).replace('T', ' ')
 }
 
@@ -207,7 +207,7 @@ router.get('/', (req, res) => {
       FROM password_reset_tokens prt
       JOIN users u ON u.id = prt.user_id
       WHERE prt.used_at IS NULL
-        AND prt.expires_at > datetime('now')
+        AND prt.expires_at > datetime('now', '+8 hours')
       ORDER BY prt.created_at DESC
       LIMIT 10
     `).all()
@@ -704,14 +704,14 @@ router.post('/users/:id/quota', (req, res) => {
   db.prepare(
     `INSERT INTO user_quotas
        (user_id, daily_call_limit, monthly_token_limit, allowed_providers, allowed_auth_types, notes, updated_at, updated_by_user_id)
-     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'), ?)
      ON CONFLICT(user_id) DO UPDATE SET
        daily_call_limit = excluded.daily_call_limit,
        monthly_token_limit = excluded.monthly_token_limit,
        allowed_providers = excluded.allowed_providers,
        allowed_auth_types = excluded.allowed_auth_types,
        notes = excluded.notes,
-       updated_at = datetime('now'),
+       updated_at = datetime('now', '+8 hours'),
        updated_by_user_id = excluded.updated_by_user_id`
   ).run(id, daily, monthly, providersJson, authTypesJson, notes, req.user.id)
 

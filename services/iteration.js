@@ -138,7 +138,7 @@ export function gatherProjectSnapshot(db, projectId) {
   //
   // cap 设 2000 足以覆盖绝大多数真实 SLR 项目(典型 200-1500 条已筛 records),
   // 即便顶到 cap,排序保证最有诊断价值的(disagree)永远进得去。
-  // opus-4-7 / gpt-5.5 都有 1M context 窗口,2000 条 × ~400 字 ≈ 800K 字符
+  // opus-4-8 / gpt-5.5 都有 1M context 窗口,2000 条 × ~400 字 ≈ 800K 字符
   // ≈ 200K tokens,在窗口内且不会触发 lost-in-the-middle。
   const PER_RECORD_CAP = 2000
   const perRecordDecisions = gatherPerRecordDecisions(db, projectId, PER_RECORD_CAP)

@@ -7,3 +7,7 @@ node_modules/
 dist/
 coverage/
 .tmp/
+# 本地 dev 数据库(不入库)
+data/*.sqlite3
+data/*.db
+data/dev.sqlite3

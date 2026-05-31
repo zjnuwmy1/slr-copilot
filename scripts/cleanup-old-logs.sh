@@ -43,11 +43,14 @@ ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
 echo "[$(ts)] cleanup-old-logs start (DB=$DB_PATH, retention=${RETENTION_DAYS}d, dry_run=$DRY_RUN)"
 
+# 2026-05-31:时间戳已统一 SGT(+8h),retention 比较两边都用 SGT now,语义一致
+#   (90 天窗口下 8h 偏差可忽略,但保持一致)
+
 # 先 SELECT 计数(给日志一份"将删多少")
 AUDIT_COUNT=$(sqlite3 "$DB_PATH" \
-  "SELECT COUNT(*) FROM audit_events WHERE created_at < datetime('now','-${RETENTION_DAYS} days');")
+  "SELECT COUNT(*) FROM audit_events WHERE created_at < datetime('now','+8 hours','-${RETENTION_DAYS} days');")
 USAGE_COUNT=$(sqlite3 "$DB_PATH" \
-  "SELECT COUNT(*) FROM usage_logs WHERE started_at < datetime('now','-${RETENTION_DAYS} days');")
+  "SELECT COUNT(*) FROM usage_logs WHERE started_at < datetime('now','+8 hours','-${RETENTION_DAYS} days');")
 
 echo "[$(ts)] would delete: audit_events=$AUDIT_COUNT  usage_logs=$USAGE_COUNT"
 
@@ -59,12 +62,20 @@ fi
 # 实际删除(用单个事务,避免半途崩了一半数据被删一半保留)
 sqlite3 "$DB_PATH" <<SQL
 BEGIN;
-DELETE FROM audit_events WHERE created_at < datetime('now','-${RETENTION_DAYS} days');
-DELETE FROM usage_logs   WHERE started_at < datetime('now','-${RETENTION_DAYS} days');
+DELETE FROM audit_events WHERE created_at < datetime('now','+8 hours','-${RETENTION_DAYS} days');
+DELETE FROM usage_logs   WHERE started_at < datetime('now','+8 hours','-${RETENTION_DAYS} days');
 COMMIT;
 SQL
 
-# 不做 VACUUM:VACUUM 要 2× DB 大小的磁盘 + 独占锁,会让在线服务卡几秒。
-# 月度维护窗口里手动跑就行:`sqlite3 /var/lib/slr/db/slr.db 'VACUUM;'`
+# VACUUM:默认 NOT 跑(要 2× DB 大小磁盘 + 独占锁,会卡在线服务几秒)。
+#   日常 cron 保持非阻塞;维护窗口手动跑:`RUN_VACUUM=1 /opt/slr/scripts/cleanup-old-logs.sh`
+#   或直接 `sqlite3 /var/lib/slr/db/slr.db 'VACUUM;'`(建议先 systemctl stop slr)
+if [[ "${RUN_VACUUM:-0}" == "1" ]]; then
+  echo "[$(ts)] RUN_VACUUM=1 — running VACUUM (会独占锁,在线服务会短暂卡顿)..."
+  BEFORE=$(stat -c%s "$DB_PATH" 2>/dev/null || echo 0)
+  sqlite3 "$DB_PATH" 'VACUUM;'
+  AFTER=$(stat -c%s "$DB_PATH" 2>/dev/null || echo 0)
+  echo "[$(ts)] VACUUM done: ${BEFORE} -> ${AFTER} bytes (reclaimed $((BEFORE - AFTER)))"
+fi
 
 echo "[$(ts)] cleanup-old-logs done"

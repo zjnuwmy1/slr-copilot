@@ -26,6 +26,7 @@ import { audit } from '../../services/audit.js'
 import { getProjectProgress } from '../../services/prisma.js'
 import { runLlm } from '../../services/llm.js'
 import { requireAdvancedExtraction } from '../../middleware/auth.js'
+import { getSetting } from '../../services/settings.js'
 import * as batchJobsSvc from '../../services/batch-jobs.js'
 import { parsePdfAttachment, parseProjectPdfs } from '../../services/pdf-parse.js'
 
@@ -560,9 +561,9 @@ router.post('/:id/matrix/suggest-columns', async (req, res) => {
       prompt: userPrompt,
       expectJson: true,
       // 不写死 model — 让 resolveStepModel 跟着用户的 preset 走。
-      // performance=opus-4-7 / balanced=sonnet-4-6 / economy=haiku-4-5
+      // performance=opus-4-8 / balanced=sonnet-4-6 / economy=haiku-4-5
       maxTokens: 3000,
-      // 8 分钟 safety net:Opus 4.7 + think_hard 偶尔会跑到 5-6 分钟。
+      // 8 分钟 safety net:Opus 4.8 + think_hard 偶尔会跑到 5-6 分钟。
       timeoutMs: 480_000,
     })
 
@@ -689,7 +690,7 @@ router.post('/:id/matrix/optimize-master-prompt', requireAdvancedExtraction, asy
   // ─────────────────────────────────────────────────────────────
   const lockResult = db.prepare(
     `UPDATE projects
-        SET matrix_master_prompt_optimize_started_at = datetime('now')
+        SET matrix_master_prompt_optimize_started_at = datetime('now', '+8 hours')
       WHERE id = ?
         AND (matrix_master_prompt_optimize_started_at IS NULL
              OR matrix_master_prompt_optimize_started_at < datetime('now', '-15 minutes'))`
@@ -702,7 +703,7 @@ router.post('/:id/matrix/optimize-master-prompt', requireAdvancedExtraction, asy
     return res.status(409).json({
       ok: false,
       error_code: 'already_running',
-      error: `已有一次优化任务在跑(${row?.started || '?'} 开始,Opus 4.7 + 高推理通常 5-8 分钟)。等它跑完,或 15 分钟后视为崩溃自动解锁。`,
+      error: `已有一次优化任务在跑(${row?.started || '?'} 开始,Opus 4.8 + 高推理通常 5-8 分钟)。等它跑完,或 15 分钟后视为崩溃自动解锁。`,
       started_at: row?.started || null,
     })
   }
@@ -870,7 +871,7 @@ router.post('/:id/matrix/columns/batch-add', (req, res, next) => {
       const protocolAgain = loadApprovedProtocol(db, project.id)
       const promptStale = !promptVersion || (protocolAgain && promptVersion < protocolAgain.version)
       if (promptStale) {
-        parts.push('👉 下一步:点 ⚙️ 让 AI 用新列优化总 prompt(Opus 4.7 ultrathink,质量决定批量抽取效果)')
+        parts.push('👉 下一步:点 ⚙️ 让 AI 用新列优化总 prompt(Opus 4.8 ultrathink,质量决定批量抽取效果)')
       }
     }
 
@@ -1279,6 +1280,21 @@ router.post('/:id/matrix/parse-pdfs', requireAdvancedExtraction, (req, res) => {
         parsed, skipped, ocr_required,
         current: null,
       })
+      // 2026-05-31:chunk 成功后自动 offload PDF 源文件腾空间(pdf_auto_offload 默认 on)。
+      //   sweep 整个项目所有"有 chunks + 有未 offload PDF"的 record。
+      try {
+        const auto = getSetting(db, 'pdf_auto_offload')
+        if (auto == null || auto === 'on') {
+          const { offloadAllChunkedPdfs } = await import('../../services/pdf-offload.js')
+          const off = offloadAllChunkedPdfs(db, {
+            projectId: project.id, reason: 'auto_after_batch_chunk',
+            req: { user: { id: req.user.id }, ip: '', get: () => '' },
+          })
+          if (off.records_offloaded > 0) {
+            console.log(`[matrix parse-pdfs] auto-offloaded ${off.records_offloaded} records, freed ${off.total_bytes_freed} bytes`)
+          }
+        }
+      } catch (e) { console.warn('[matrix parse-pdfs] auto-offload sweep failed:', e.message) }
     } catch (e) {
       console.error('[matrix parse-pdfs job]', e)
       try { batchJobsSvc.updateJobProgress(db, jobId, { failed: failed + 1 }) } catch {}

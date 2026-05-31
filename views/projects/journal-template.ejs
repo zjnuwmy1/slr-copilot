@@ -14,6 +14,40 @@
       </p>
     </div>
 
+    <!-- 优化打磨包(M32-g):后台抽取进度卡 -->
+    <% if (typeof extractInFlight !== 'undefined' && extractInFlight) { %>
+      <div id="jt-extract-card"
+           class="rounded-2xl border border-blue-300 bg-blue-50/50 p-5"
+           data-started="<%= extractStarted %>"
+           data-project-id="<%= project.id %>">
+        <div class="flex items-center gap-3">
+          <svg class="h-5 w-5 animate-spin text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 008-8h-4a4 4 0 01-4 4z"></path>
+          </svg>
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-semibold text-blue-900">正在后台抽取期刊模板</p>
+            <p class="mt-0.5 text-xs text-blue-700">
+              <% if (extractPendingFilename) { %>文件:<span class="font-mono"><%= extractPendingFilename %></span> · <% } %>
+              Opus 4.8 + PDF 解析,通常 30s-2min(超大文件最多 5-8 min)。可关闭页面,后台不会中断。
+            </p>
+          </div>
+          <span class="font-mono text-sm text-blue-800"><span id="jt-extract-elapsed"><%= extractElapsedS %></span>s</span>
+        </div>
+        <p class="mt-3 text-[11px] text-blue-600">完成后页面会自动刷新(每 5 秒查询一次状态)。</p>
+      </div>
+    <% } else if (typeof extractStatus !== 'undefined' && extractStatus === 'failed' && extractError) { %>
+      <div class="rounded-2xl border border-rose-300 bg-rose-50/40 p-5">
+        <p class="text-sm font-semibold text-rose-900">⚠ 上次抽取失败</p>
+        <pre class="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-900"><%= extractError %></pre>
+        <p class="mt-2 text-xs text-rose-700">可以换一篇 PDF 重传(下方表单)。原 PDF 已清理。</p>
+      </div>
+    <% } else if (typeof extractStatus !== 'undefined' && extractStatus === 'aborted_by_restart') { %>
+      <div class="rounded-2xl border border-amber-300 bg-amber-50/40 p-4">
+        <p class="text-xs text-amber-800">⚠ 上次抽取被服务重启中断 — 请重新上传 PDF。</p>
+      </div>
+    <% } %>
+
     <!-- 当前模板状态 -->
     <% if (template) {
          const ex = template.extracted_structure || {}
@@ -79,8 +113,86 @@
           <p class="mt-2 text-xs text-slate-600"><strong>整体结构注:</strong> <%= ex.structure_notes %></p>
         <% } %>
 
+        <!-- 2026-05-25 P2-9: Abstract format 状态 + 补抽按钮 -->
+        <%
+          const _abs = ex.abstract_format || {}
+          const _absFilled = !!(_abs && _abs.shape && String(_abs.shape).length)
+        %>
+        <div class="mt-3 rounded-lg border <%= _absFilled ? 'border-slate-200 bg-white' : 'border-amber-300 bg-amber-50' %> px-3 py-2">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0 text-xs text-slate-700">
+              <p>
+                <strong>摘要格式 (abstract_format):</strong>
+                <% if (_absFilled) { %>
+                  <code class="font-mono"><%= _abs.shape %></code>
+                  <% if (_abs.has_keywords_line) { %><span class="ml-1 text-slate-500">· 末尾含 Keywords 行</span><% } %>
+                  <% if (_abs.word_count_estimate) { %><span class="ml-1 text-slate-500">· 约 <%= _abs.word_count_estimate %> 词</span><% } %>
+                <% } else { %>
+                  <span class="text-amber-800">未抽取(老项目可能没这字段)</span>
+                <% } %>
+              </p>
+              <% if (_absFilled && Array.isArray(_abs.headings_used) && _abs.headings_used.length) { %>
+                <p class="mt-1 text-slate-500">小节标题:<%= _abs.headings_used.join(' / ') %></p>
+              <% } %>
+              <% if (_absFilled && _abs.notes) { %>
+                <p class="mt-1 text-slate-500"><%= _abs.notes %></p>
+              <% } %>
+              <%# 2026-05-26 v3 — abstract 内 in-text citation count 显示 %>
+              <% if (_absFilled && typeof _abs.in_abstract_citation_count === 'number' && _abs.in_abstract_citation_count >= 0) { %>
+                <p class="mt-1">
+                  <span class="text-slate-500">摘要内引文:</span>
+                  <% if (_abs.in_abstract_citation_count === 0) { %>
+                    <span class="inline-block rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">0</span>
+                    <span class="text-slate-500 ml-1">— 摘要不带引用(LLM 写时强制 0)</span>
+                  <% } else { %>
+                    <span class="inline-block rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-[10px] text-indigo-700">~<%= _abs.in_abstract_citation_count %></span>
+                    <span class="text-slate-500 ml-1">— 该期刊摘要允许 <%= _abs.in_abstract_citation_count %> 个 in-text 引用</span>
+                  <% } %>
+                  <% if (_abs.in_abstract_citation_notes) { %>
+                    <span class="text-slate-400">· <%= _abs.in_abstract_citation_notes %></span>
+                  <% } %>
+                </p>
+              <% } else if (_absFilled) { %>
+                <p class="mt-1 text-amber-600 text-[11px]">
+                  ⚠ 摘要内引文数未抽(v2 旧模板)— 撰写时默认 ≤6,可能与目标期刊不符。重抽 abstract_format 可补此字段。
+                </p>
+              <% } %>
+              <% if (!_absFilled) { %>
+                <p class="mt-1 text-amber-700">
+                  撰写阶段需要这字段决定摘要是单段还是 PRISMA 结构化 — 建议补抽一次(几秒)。
+                </p>
+              <% } %>
+            </div>
+            <form method="post"
+                  action="/projects/<%= project.id %>/journal-template/backfill-abstract-format"
+                  onsubmit="return confirm('<%= _absFilled ? '已有 abstract_format,确认强制重抽?' : '将再调用一次 LLM 抽 abstract_format(几秒)' %>')">
+              <% if (_absFilled) { %>
+                <input type="hidden" name="force" value="1">
+              <% } %>
+              <button type="submit"
+                      class="rounded-md border <%= _absFilled ? 'border-slate-300 text-slate-700 hover:bg-slate-50' : 'border-amber-400 text-amber-800 hover:bg-amber-100' %> bg-white px-3 py-1 text-xs font-medium whitespace-nowrap">
+                <%= _absFilled ? '↻ 强制重抽' : '✨ 补抽 abstract_format' %>
+              </button>
+            </form>
+          </div>
+        </div>
+
         <!-- Sections 详细表 -->
         <% if (sections.length > 0) { %>
+          <%
+            // 2026-05-26 v3 — 是否至少 1 个 section 有 citation_behavior(决定是否展示该列)
+            const _anyCitationBehavior = sections.some(s => s.citation_behavior && (
+              s.citation_behavior.density || typeof s.citation_behavior.approximate_count === 'number'
+            ))
+            // 引文密度桶 → 颜色 + 中文 label
+            const _densityChip = {
+              none:       { cls: 'bg-slate-100 text-slate-700',    label: '无 (0)' },
+              sparse:     { cls: 'bg-emerald-50 text-emerald-700', label: '稀疏 (1-3)' },
+              moderate:   { cls: 'bg-amber-50 text-amber-800',     label: '中等 (4-10)' },
+              heavy:      { cls: 'bg-rose-50 text-rose-700',       label: '密集 (11-30)' },
+              very_heavy: { cls: 'bg-rose-100 text-rose-900',      label: '非常密 (>30)' },
+            }
+          %>
           <div class="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
             <table class="w-full text-xs">
               <thead class="bg-slate-50 text-slate-500">
@@ -91,11 +203,17 @@
                   <th class="px-3 py-2 text-right font-medium">子节</th>
                   <th class="px-3 py-2 text-center font-medium">图</th>
                   <th class="px-3 py-2 text-center font-medium">表</th>
+                  <% if (_anyCitationBehavior) { %>
+                    <th class="px-3 py-2 text-center font-medium" title="该段在源论文里的实际引文密度(v3 抽取)">引文密度</th>
+                  <% } %>
                   <th class="px-3 py-2 text-left font-medium">关键 moves / 笔记</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
-                <% sections.forEach((s, i) => { %>
+                <% sections.forEach((s, i) => {
+                     const _cb = s.citation_behavior || null
+                     const _bucket = _cb && _cb.density ? _densityChip[_cb.density] : null
+                %>
                   <tr>
                     <td class="px-3 py-2 font-mono text-slate-400"><%= i + 1 %></td>
                     <td class="px-3 py-2 font-medium text-slate-800"><%= s.name %></td>
@@ -103,6 +221,21 @@
                     <td class="px-3 py-2 text-right font-mono text-slate-600"><%= s.subsection_count || 0 %></td>
                     <td class="px-3 py-2 text-center text-slate-600"><%= s.has_figure ? '✓' : '·' %></td>
                     <td class="px-3 py-2 text-center text-slate-600"><%= s.has_table ? '✓' : '·' %></td>
+                    <% if (_anyCitationBehavior) { %>
+                      <td class="px-3 py-2 text-center">
+                        <% if (_bucket) { %>
+                          <span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium <%= _bucket.cls %>"
+                                title="<%= _cb.notes || '' %>">
+                            <%= _bucket.label %>
+                            <% if (typeof _cb.approximate_count === 'number' && _cb.approximate_count > 0) { %>
+                              <span class="ml-0.5 font-mono">· ~<%= _cb.approximate_count %></span>
+                            <% } %>
+                          </span>
+                        <% } else { %>
+                          <span class="text-slate-400">·</span>
+                        <% } %>
+                      </td>
+                    <% } %>
                     <td class="px-3 py-2 text-slate-600">
                       <% if (Array.isArray(s.key_moves) && s.key_moves.length) { %>
                         <p><%= s.key_moves.join(' · ') %></p>
@@ -110,12 +243,24 @@
                       <% if (s.notes) { %>
                         <p class="mt-0.5 text-slate-400"><%= s.notes %></p>
                       <% } %>
+                      <%# 2026-05-26 v3 — 显示该段引文 notes(LLM 实际数到的是什么类型的引用)%>
+                      <% if (_cb && _cb.notes) { %>
+                        <p class="mt-0.5 text-[10px] text-indigo-600">
+                          <span class="font-medium">引用类型:</span> <%= _cb.notes %>
+                        </p>
+                      <% } %>
                     </td>
                   </tr>
                 <% }) %>
               </tbody>
             </table>
           </div>
+          <% if (!_anyCitationBehavior) { %>
+            <p class="mt-2 text-[11px] text-amber-700">
+              ⚠ 本模板未抽 per-section 引文密度(v2 旧抽取)— 撰写时各段按通用默认引用,可能与目标期刊不符。
+              重传模板 PDF 用 v3 抽取(Sonnet 重跑,~10-15 秒)可补此字段。
+            </p>
+          <% } %>
         <% } %>
       </div>
 
@@ -149,12 +294,13 @@
                    class="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:text-slate-700 hover:file:bg-slate-200">
           </div>
           <p class="text-xs text-amber-700 bg-amber-50 rounded px-3 py-2">
-            ⚠ 上传后立刻跑一次 LLM 提取(heavy 模型,约 5-15 秒)。失败会保留 PDF 文件但不写 DB,
-            你可以稍后清除重传。
+            ⚠ 上传后会在后台跑 LLM 抽取(Opus 4.8,通常 <strong>30s-2min</strong>,大 PDF 最多 5-8 min)。
+            <strong>可以关页面</strong>,后台不会中断;完成后再回这页就能看见结果(或者留着开,会自动刷新)。
+            失败会留 PDF 让你重试或换一篇。
           </p>
-          <button type="submit"
+          <button type="submit" id="jt-upload-btn"
                   class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
-            上传并提取
+            上传并启动后台抽取
           </button>
         </form>
       </div>
@@ -178,5 +324,45 @@
     </div>
   </section>
 </div>
+
+<script>
+  // 优化打磨包(M32-g):后台抽取进度轮询 + 5s 自动 reload
+  (function() {
+    var card = document.getElementById('jt-extract-card')
+    if (!card) return
+    var startedISO = card.getAttribute('data-started') || ''
+    var projectId = card.getAttribute('data-project-id')
+    if (!projectId) return
+    var startedMs = startedISO
+      ? Date.parse(String(startedISO).replace(' ', 'T') + (String(startedISO).indexOf('Z') < 0 ? 'Z' : ''))
+      : Date.now()
+    if (!isFinite(startedMs)) startedMs = Date.now()
+    var elEl = document.getElementById('jt-extract-elapsed')
+    function tick() {
+      var s = Math.max(0, Math.floor((Date.now() - startedMs) / 1000))
+      if (elEl) elEl.textContent = s
+    }
+    tick()
+    var tickInt = setInterval(tick, 1000)
+
+    function poll() {
+      fetch('/projects/' + projectId + '/journal-template/extract/status.json',
+            { headers: { 'X-Requested-With': 'fetch' } })
+        .then(function(r) { return r.json() })
+        .then(function(j) {
+          if (!j || !j.ok) return
+          if (!j.in_flight) {
+            clearInterval(tickInt)
+            clearInterval(pollInt)
+            // 完成(无论成功失败)→ reload 让 server 端把状态渲到 UI
+            window.location.reload()
+          }
+        })
+        .catch(function() {})
+    }
+    var pollInt = setInterval(poll, 5000)
+    setTimeout(poll, 2000)
+  })()
+</script>
 
 <%- include('../partials/footer') %>

@@ -37,6 +37,14 @@ const BIN = () => process.env.CODEX_BIN || 'codex'
 // codex 接受的 reasoning_effort 取值
 const OPENAI_VALID_EFFORTS = new Set(['minimal', 'low', 'medium', 'high'])
 
+// Linux execve 单个 argv 元素硬上限 MAX_ARG_STRLEN = 128KB,超过就 E2BIG。
+// Step 6 synthesis 在大项目实测 prompt ~300-400KB,必须 stdin 兜底。
+// 阈值取 96KB(留 32KB 余量给其他 argv)。
+const ARGV_SAFE_BYTES = 96 * 1024
+function bytesLen(s) {
+  return Buffer.byteLength(s || '', 'utf8')
+}
+
 /**
  * 内部:构造 codex exec args。导出供单测使用。
  *
@@ -101,7 +109,13 @@ export function buildExecArgs({ model, fullPrompt, outFile, reasoningEffort, ena
   if (reasoningEffort && OPENAI_VALID_EFFORTS.has(reasoningEffort)) {
     args.push('-c', `model_reasoning_effort="${reasoningEffort}"`)
   }
-  args.push(fullPrompt)
+  // E2BIG 防护:大 prompt 用 '-' 表示从 stdin 读;调用方负责往 stdin 写。
+  // codex CLI 0.132:If `-` is used, instructions are read from stdin.
+  if (bytesLen(fullPrompt) > ARGV_SAFE_BYTES) {
+    args.push('-')
+  } else {
+    args.push(fullPrompt)
+  }
   return args
 }
 
@@ -171,6 +185,9 @@ export async function sendMessage({
     reasoningEffort: OPENAI_VALID_EFFORTS.has(reasoningEffort) ? reasoningEffort : null,
     enabledTools: enabledToolsList,
   })
+  // E2BIG 防护:buildExecArgs 在 prompt 超阈值时会 push '-' 而非 fullPrompt;
+  //   这里再决定 stdin 是否要 pipe(只要末尾是 '-' 就需要 stdin)。
+  const usePromptStdin = args[args.length - 1] === '-'
 
   // 4) env:HOME 隔离
   const env = {
@@ -189,13 +206,22 @@ export async function sendMessage({
       proc = spawn(BIN(), args, {
         cwd: homePath,
         env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        // 大 prompt(buildExecArgs 已把末位换成 '-')时 stdin 走 pipe
+        stdio: [usePromptStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         // detached + 自成进程组 → timeout 时 kill(-pid) 杀整组,防 codex wrapper 的子子进程僵尸
         detached: true,
       })
     } catch (e) {
       cleanupOutFile(outFile)
       return reject(new Error(`spawn_failed: ${e.message}`))
+    }
+
+    if (usePromptStdin) {
+      try {
+        proc.stdin.on('error', () => { /* EPIPE 等让 close handler 报真实错 */ })
+        proc.stdin.write(fullPrompt, 'utf8')
+        proc.stdin.end()
+      } catch { /* 极罕见;让进程自然超时 */ }
     }
 
     let stdout = ''

@@ -253,18 +253,26 @@ export function renderSoFMarkdown(db, projectId) {
     )
   }
   lines.push('')
-  // GRADE downgrade domains sub-table
+  // 2026-05-25 改:GRADE downgrade domains 标记走纯学术风
+  //   旧 `⚠ −1` / `⚠⚠ −2` 在 publication-grade 论文表里显得 emoji-heavy(审稿人嫌不专业);
+  //   新版输出标准 GRADE Handbook §5.2 风格(Cochrane / BMJ 评估表惯用):
+  //     not_serious / undetected      → "Not serious"
+  //     serious / suspected           → "Serious (−1)"
+  //     very_serious / strongly_susp. → "Very serious (−2)"
+  //   表头加脚注解释列含义 + 评估方向。
   lines.push('### GRADE Downgrade Domains')
+  lines.push('')
+  lines.push('*Each domain is rated for risk of bias serious-ness; serious = −1 GRADE level, very serious = −2. Publication bias column: strongly suspected = −2.*')
   lines.push('')
   lines.push('| Outcome | RoB | Inconsistency | Indirectness | Imprecision | Pub. bias |')
   lines.push('|---|---|---|---|---|---|')
   const map = {
-    not_serious: '✓',
-    serious: '⚠ −1',
-    very_serious: '⚠⚠ −2',
-    undetected: '✓',
-    suspected: '⚠ −1',
-    strongly_suspected: '⚠⚠ −2',
+    not_serious:        'Not serious',
+    serious:            'Serious (−1)',
+    very_serious:       'Very serious (−2)',
+    undetected:         'Not detected',
+    suspected:          'Suspected (−1)',
+    strongly_suspected: 'Strongly suspected (−2)',
   }
   for (const r of rows) {
     lines.push(
@@ -276,5 +284,11 @@ export function renderSoFMarkdown(db, projectId) {
 }
 
 function escapePipe(s) {
-  return String(s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ')
+  // 2026-05-25 P2-11:除了 \n → space, \| 也要折叠多连续空白 + trim,
+  //   防止 marked.js GFM 在 cell 里出现 "  " 双空格被识别成额外 row
+  return String(s ?? '')
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }

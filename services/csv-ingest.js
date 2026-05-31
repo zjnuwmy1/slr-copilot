@@ -274,70 +274,168 @@ function splitKeywords(s) {
   return out
 }
 
-/** WoS authors 字段:'Wang, G; Tang, R; Xu, M' → 'Wang G, Tang R, Xu M' 风格 */
-function normalizeWosAuthors(s) {
-  if (!s) return ''
-  // WoS 用 ';' 分作者;每个作者 'Surname, Initial(s)'
-  const parts = String(s)
-    .split(/;/)
-    .map((x) => x.trim())
-    .filter(Boolean)
-  return parts
-    .map((p) => {
-      // 'Wang, G' → 'Wang G' ; 'Wang, Gang' → 'Wang G'(只取首字母)
-      const m = p.match(/^([^,]+),\s*(.+)$/)
-      if (m) {
-        const surname = m[1].trim()
-        const given = m[2].trim()
-        const initial = given ? given.charAt(0).toUpperCase() : ''
-        return initial ? `${surname} ${initial}` : surname
+// ============================================================
+// 2026-05-25 BUG FIX:作者名解析
+// ------------------------------------------------------------
+// 之前的 bug:
+//   - WoS 把 'Wang, Gang' 强行砍成 'Wang G'(丢了完整 given name)
+//   - 输出只有 authors_text(没拆 surname / givenName)
+//   - 下游 citation-format normalizeRecord 把 "Wang G" 按空格 split 后,
+//     最后一个 token "G" 被当成 surname,前面 "Wang" 当 givenName → 完全反了
+//   - 最终引文里作者名 garbled(看起来"只有首字母"或姓名颠倒)
+//
+// 修复后每个 parser 返回 { authors: [{surname, givenName, full, type}], authors_text }
+// authors 数组直接落 records.authors_json,引文输出走结构化路径,正确。
+// authors_text 保留(用作 display + screening prompt)。
+// ============================================================
+
+/** 把单个 author string 拆成 {surname, givenName} */
+function splitAuthorName(s, opts = {}) {
+  if (!s) return null
+  const raw = String(s).trim()
+  if (!raw) return null
+  // 机构作者(含 "Group" / "Society" / "&" 等)
+  if (/\b(Group|Society|Consortium|Collaboration|Association|Committee|Organization)\b/i.test(raw)) {
+    return { surname: '', givenName: '', full: raw, type: 'organization' }
+  }
+  // 形式 A: "Surname, Given" (WoS / Scopus AF / Zotero)
+  //   - "Wang, Gang"
+  //   - "Wang, G"
+  //   - "Wang, G. K."
+  let m = raw.match(/^([^,]+),\s*(.+?)\.?$/)
+  if (m) {
+    const surname = m[1].trim()
+    const given = m[2].trim().replace(/\.$/, '')
+    if (surname) {
+      return {
+        surname,
+        givenName: given,
+        full: given ? `${surname}, ${given}` : surname,
+        type: 'person',
       }
-      return p
-    })
-    .join(', ')
+    }
+  }
+  // 形式 B: "Surname Initials"  e.g. "Wang G", "Wang GK", "Wang G K"
+  //   姓在前 + 后面跟 1-3 个大写首字母(可能有点/空格)
+  m = raw.match(/^([^\s]+(?:\s[^\s]+)*?)\s+([A-Z](?:\.?\s?[A-Z]\.?){0,3})\.?$/)
+  if (m) {
+    const surname = m[1].trim()
+    const initials = m[2].replace(/\./g, '').replace(/\s+/g, '')
+    return {
+      surname,
+      givenName: initials,
+      full: `${surname}, ${initials}`,
+      type: 'person',
+    }
+  }
+  // 形式 C: 完整名字 "Given Surname" 或单 token — fallback
+  const parts = raw.replace(/\.$/, '').split(/\s+/).filter(Boolean)
+  if (parts.length === 1) {
+    return { surname: parts[0], givenName: '', full: parts[0], type: 'person' }
+  }
+  // 多 token:在 opts.lastIsSurname 时把最后一个当 surname,否则把第一个当 surname
+  //   WoS/Scopus 通常 Surname 在前 → 把第一个当 surname(对 "Wang Gang Kun" 也对)
+  //   但 PubMed 偶尔 "Gang Wang" → 启发式:如果第一个 token 是 1-3 个大写字母,认为是 initials,
+  //   surname 在后
+  const isInitial = /^[A-Z]{1,3}\.?$/.test(parts[0])
+  if (isInitial) {
+    return {
+      surname: parts[parts.length - 1],
+      givenName: parts.slice(0, -1).join(' ').replace(/\./g, ''),
+      full: raw,
+      type: 'person',
+    }
+  }
+  return {
+    surname: parts[0],
+    givenName: parts.slice(1).join(' '),
+    full: raw,
+    type: 'person',
+  }
 }
 
-/** Scopus authors:'Wang G., Tang R., Xu M.' — 已经接近我们的格式 */
-function normalizeScopusAuthors(s) {
-  if (!s) return ''
-  return String(s)
-    .split(/,\s*(?=[A-Z一-鿿])/) // 在逗号 + 大写姓首字符处分
-    .map((x) => x.trim().replace(/\.$/, ''))
+/** WoS:优先用 AF (Author Full Names) = "Wang, Gang; Tang, Rong",fallback AU = "Wang, G; Tang, R" */
+function parseWosAuthors(s) {
+  if (!s) return []
+  return String(s).split(/;/).map(x => x.trim()).filter(Boolean).map(splitAuthorName).filter(Boolean)
+}
+
+/** Scopus:'Wang G., Tang R., Xu M.' — 在逗号 + 大写处拆 */
+function parseScopusAuthors(s) {
+  if (!s) return []
+  return String(s).split(/,\s*(?=[A-Z一-鿿])/)
+    .map(x => x.trim().replace(/\.$/, ''))
+    .filter(Boolean)
+    .map(splitAuthorName).filter(Boolean)
+}
+
+/** PubMed:'Wang G, Tang R, Xu M' */
+function parsePubmedAuthors(s) {
+  if (!s) return []
+  return String(s).split(/,/).map(x => x.trim()).filter(Boolean).map(splitAuthorName).filter(Boolean)
+}
+
+/** authors array → "Surname G, Surname2 G2" 风格的 display string */
+function authorsToDisplayText(authors) {
+  return authors
+    .map(a => {
+      if (a.type === 'organization') return a.full
+      if (a.surname && a.givenName) {
+        const init = a.givenName.replace(/[^A-Za-z一-鿿]/g, '').slice(0, 3).toUpperCase()
+        return init ? `${a.surname} ${init}` : a.surname
+      }
+      return a.surname || a.full || ''
+    })
     .filter(Boolean)
     .join(', ')
 }
 
-/** PubMed authors:'Wang G, Tang R, Xu M' — 已经是我们的格式 */
-function normalizePubmedAuthors(s) {
-  if (!s) return ''
-  return String(s).trim()
-}
+// 老 API 兼容(本文件其他地方还会调)— 仍然返回 display string,但内部走新的 parser
+function normalizeWosAuthors(s)    { return authorsToDisplayText(parseWosAuthors(s)) }
+function normalizeScopusAuthors(s) { return authorsToDisplayText(parseScopusAuthors(s)) }
+function normalizePubmedAuthors(s) { return authorsToDisplayText(parsePubmedAuthors(s)) }
 
 function mapWosRow(m) {
   // 2 字母代码 ↔ 完整字段名 两种来源都接
   const title = pick(m, 'ti', 'article title', 'title')
-  const authorsRaw = pick(m, 'au', 'authors', 'author(s)', 'author full names', 'af')
+  // 2026-05-25 BUG FIX:优先用 AF (Author Full Names) = "Wang, Gang; Tang, Rong"
+  //   只在没 AF 时才退到 AU (= "Wang, G"),最大程度保住完整 given name。
+  const authorsFull   = pick(m, 'af', 'author full names')
+  const authorsInit   = pick(m, 'au', 'authors', 'author(s)')
+  const authorsRaw    = authorsFull || authorsInit
   const journal = pick(m, 'so', 'source title', 'journal')
   const yearRaw = pick(m, 'py', 'publication year', 'year published', 'year')
   const doi = pick(m, 'di', 'doi')
   const abstract = pick(m, 'ab', 'abstract')
   const keywords = pick(m, 'de', 'author keywords', 'id', 'keywords plus', 'keywords')
   const language = pick(m, 'la', 'language', 'languages')
+  // 新加:volume / issue / pages — M35 加列后导出引文需要
+  const volume = pick(m, 'vl', 'volume')
+  const issue  = pick(m, 'is', 'issue')
+  const pages  = pick(m, 'pg', 'page range', 'pages') || (pick(m, 'bp', 'beginning page') && pick(m, 'ep', 'ending page') ? `${pick(m,'bp','beginning page')}-${pick(m,'ep','ending page')}` : '')
+  const authors = parseWosAuthors(authorsRaw)
   return {
     title: title || '',
-    authors_text: normalizeWosAuthors(authorsRaw),
+    authors,
+    authors_text: authorsToDisplayText(authors),
     year: parseYearFrom(yearRaw),
     journal: journal || '',
     doi: doi || '',
     abstract: abstract || '',
     keywords: splitKeywords(keywords),
     language: language || '',
+    volume: volume || '',
+    issue: issue || '',
+    pages: pages || '',
   }
 }
 
 function mapScopusRow(m) {
   const title = pick(m, 'title', 'article title')
-  const authorsRaw = pick(m, 'authors', 'author full names')
+  // Scopus "Author full names" 字段比 "Authors" 更全(含中间名)— 优先用
+  const authorsFull = pick(m, 'author full names')
+  const authorsInit = pick(m, 'authors')
+  const authorsRaw  = authorsFull || authorsInit
   const journal = pick(m, 'source title', 'journal')
   const yearRaw = pick(m, 'year', 'publication year')
   const doi = pick(m, 'doi')
@@ -345,15 +443,23 @@ function mapScopusRow(m) {
   const keywords = pick(m, 'author keywords', 'index keywords', 'keywords')
   // Scopus 字段是 "Language of Original Document"
   const language = pick(m, 'language of original document', 'language', 'languages')
+  const volume = pick(m, 'volume')
+  const issue  = pick(m, 'issue')
+  const pages  = pick(m, 'page range', 'pages') || (pick(m, 'page start') && pick(m, 'page end') ? `${pick(m,'page start')}-${pick(m,'page end')}` : '')
+  const authors = parseScopusAuthors(authorsRaw)
   return {
     title: title || '',
-    authors_text: normalizeScopusAuthors(authorsRaw),
+    authors,
+    authors_text: authorsToDisplayText(authors),
     year: parseYearFrom(yearRaw),
     journal: journal || '',
     doi: doi || '',
     abstract: abstract || '',
     keywords: splitKeywords(keywords),
     language: language || '',
+    volume: volume || '',
+    issue: issue || '',
+    pages: pages || '',
   }
 }
 
@@ -365,15 +471,21 @@ function mapPubmedRow(m) {
   const doi = pick(m, 'doi')
   // PubMed CSV 一般不带 abstract / keywords / language;language 一般要去 PubMed [Language] 字段
   const language = pick(m, 'language', 'languages')
+  // PubMed CSV 的 Citation 字段含 vol/issue/pages 但格式不固定;先不抽,留空
+  const authors = parsePubmedAuthors(authorsRaw)
   return {
     title: title || '',
-    authors_text: normalizePubmedAuthors(authorsRaw),
+    authors,
+    authors_text: authorsToDisplayText(authors),
     year: parseYearFrom(yearRaw),
     journal: journal || '',
     doi: doi || '',
     abstract: '',
     keywords: [],
     language: language || '',
+    volume: '',
+    issue: '',
+    pages: '',
   }
 }
 
@@ -464,6 +576,8 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
     if (r.normalized_title) existingByTitle.set(r.normalized_title, entry)
   }
 
+  // 2026-05-25 BUG FIX:加 volume / issue / pages — 让 csv 导入的 records 也填上
+  //   完整引文字段(M35 加列了但 csv-ingest 之前没用)
   const insertStmt = db.prepare(`
     INSERT INTO records (
       id, project_id, package_id,
@@ -471,14 +585,16 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
       title, normalized_title, authors_json, authors_text,
       year, date_text, journal, publisher,
       doi, url, abstract, keywords_json, notes, has_pdf,
-      source_databases, language
+      source_databases, language,
+      volume, issue, pages
     ) VALUES (
       ?, ?, NULL,
       NULL, NULL, ?,
       ?, ?, ?, ?,
       ?, NULL, ?, NULL,
       ?, NULL, ?, ?, NULL, 0,
-      ?, ?
+      ?, ?,
+      ?, ?, ?
     )
   `)
 
@@ -524,6 +640,15 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
       // 新记录
       const id = randomId('rec')
       const dbsArr = [format]
+      // 2026-05-25 BUG FIX:authors 已经是 [{surname, givenName, full, type}] 结构(mapWosRow / mapScopusRow / mapPubmedRow 解析时拆好了),
+      //   直接 stringify 落 authors_json — citation-format normalizeRecord 接收对象后能正确按 style 渲染。
+      //   旧代码用 r.authors_text.split(',') 是错的:每个 "Wang G" 被当成 .full 一字符串,
+      //   下游 normalizeRecord 把空格 split 后 surname/given 颠倒(Wang 当 given,G 当 surname)。
+      const authorsArr = Array.isArray(r.authors) ? r.authors : (
+        r.authors_text
+          ? r.authors_text.split(',').map((x) => ({ full: x.trim(), type: 'person' })).filter((a) => a.full)
+          : []
+      )
       insertStmt.run(
         id,
         projectId,
@@ -531,11 +656,7 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
         'journalArticle',
         title || `(Untitled csv row)`,
         normTitle || null,
-        JSON.stringify(
-          r.authors_text
-            ? r.authors_text.split(',').map((x) => ({ full: x.trim(), type: 'person' })).filter((a) => a.full)
-            : [],
-        ),
+        JSON.stringify(authorsArr),
         r.authors_text || null,
         r.year == null ? null : r.year,
         r.journal || null,
@@ -544,6 +665,9 @@ export function ingestCsv(db, { projectId, userId, csvText, sourceFilename }) {
         JSON.stringify(r.keywords || []),
         JSON.stringify(dbsArr),
         r.language || null,
+        r.volume || null,
+        r.issue || null,
+        r.pages || null,
       )
 
       // 缓存到 map 里,避免本批后续行重复同 DOI/title 再插入

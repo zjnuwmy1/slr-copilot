@@ -241,11 +241,18 @@
                     <span class="text-[11px] text-slate-400"><%= fmtBytes(a.size_bytes) %></span>
                   </div>
                   <p class="mt-1.5 break-all text-xs text-slate-700"><%= a.filename || '(未命名)' %></p>
-                  <a href="/projects/<%= project.id %>/attachments/<%= a.id %>/download"
-                     target="_blank" rel="noopener"
-                     class="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700">
-                    <% if (a.attachment_kind === 'pdf') { %>预览 PDF<% } else { %>下载<% } %>
-                  </a>
+                  <% if (a.pdf_offloaded_at) { %>
+                    <div class="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-center text-[11px] text-slate-500">
+                      🗜 源文件已清理(已解析为 chunks)<br/>
+                      <span class="text-[10px] text-slate-400">全文已存为可检索文本,AI 抽取/综述不受影响。如需原始 PDF 可重新上传。</span>
+                    </div>
+                  <% } else { %>
+                    <a href="/projects/<%= project.id %>/attachments/<%= a.id %>/download"
+                       target="_blank" rel="noopener"
+                       class="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-xs text-white hover:bg-slate-700">
+                      <% if (a.attachment_kind === 'pdf') { %>预览 PDF<% } else { %>下载<% } %>
+                    </a>
+                  <% } %>
                 </li>
               <% }) %>
             </ul>
@@ -278,6 +285,21 @@
                 <p class="text-[10px] text-slate-400">单文件 ≤ 100 MB · 上传会计入你的存储配额(默认 1 GB)</p>
               </form>
             </div>
+            <!-- 2026-05-28:传错 PDF 回滚出口 — 删 PDF + chunks,回容缺 triage 状态 -->
+            <% if (hasPdfAlready) { %>
+              <div class="mt-3 border-t border-rose-100 pt-3">
+                <form method="post"
+                      action="/projects/<%= project.id %>/records/<%= record.id %>/delete-pdf"
+                      onsubmit="return confirm('确认删除这篇论文的 PDF + 所有解析 chunks?\n\n用于 PDF 传错了想纠正,删除后:\n• 物理 PDF 文件会从磁盘清除\n• paper_chunks 全部级联删除\n• has_pdf 回 0,pdf_status 清空(可重新选「标为容缺」或重传)\n\n此操作不可撤销。');"
+                      class="space-y-1">
+                  <button type="submit"
+                          class="w-full rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50">
+                    🗑 删除 PDF + chunks(传错了回滚)
+                  </button>
+                  <p class="text-[10px] text-slate-400">删除后此条目回到"暂无 PDF",可重传或在筛选页标"容缺"</p>
+                </form>
+              </div>
+            <% } %>
           <% } else if (!hasPdfAlready) { %>
             <p class="mt-3 border-t border-slate-100 pt-3 text-[11px] text-slate-400">
               🔒 单篇补传 PDF 需要"高级抽取"权限,请联系管理员。

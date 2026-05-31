@@ -16,7 +16,8 @@
     { "id": "rob", "label": "5. 偏倚风险(Risk of Bias)", "covers": ["11","14","18","21"] },
     { "id": "synthesis", "label": "6. 综合(Synthesis)", "covers": ["12","13a","13b","13c","13d","13e","13f","20a","20b","20c","20d"] },
     { "id": "certainty", "label": "7. 证据强度(Certainty / GRADE)", "covers": ["15","22"] },
-    { "id": "report", "label": "8. 报告(Report / Writing)", "covers": ["1","2","23a","23b","23c","23d","25","26","27"] }
+    { "id": "report", "label": "8. 撰写(Drafting)", "covers": ["1","2","23a","23b","23c","23d","25","26","27"] },
+    { "id": "submission", "label": "9. 投稿(Submission)", "covers": [] }
   ],
   "items": [
     { "item_number": "1", "section": "Title", "topic": "Title", "recommendation": "Identify the report as a systematic review.", "workflow_step": "report" },

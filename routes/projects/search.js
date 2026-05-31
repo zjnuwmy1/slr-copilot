@@ -300,8 +300,9 @@ router.post('/:id/search/generate', async (req, res) => {
       prompt: userPrompt,
       expectJson: true,
       model: 'heavy',
-      maxTokens: 8192,
-      timeoutMs: 480_000,
+      maxTokens: 12288,     // 2026-05-28 bump 8K→12K:6+ DBs × 3 versions JSON envelope 有时 hit max
+      timeoutMs: 900_000,   // 2026-05-28 bump 480s→900s:Sonnet + think_hard 实测 446-471s success,
+                            //   原 480s cap 让 90%+ 跑刚好撞墙 timeout(usage_log #1570 等 3 次连撞)
     })
   } catch (e) {
     console.error('[search/generate] runLlm threw:', e)
@@ -388,9 +389,9 @@ router.post('/:id/search/generate', async (req, res) => {
     }
     // 更新项目 status:protocol_approved → searching(只在第一次)
     if (project.status === 'protocol_approved') {
-      db.prepare(`UPDATE projects SET status = 'searching', updated_at = datetime('now') WHERE id = ?`).run(project.id)
+      db.prepare(`UPDATE projects SET status = 'searching', updated_at = datetime('now', '+8 hours') WHERE id = ?`).run(project.id)
     } else {
-      db.prepare(`UPDATE projects SET updated_at = datetime('now') WHERE id = ?`).run(project.id)
+      db.prepare(`UPDATE projects SET updated_at = datetime('now', '+8 hours') WHERE id = ?`).run(project.id)
     }
     // 存共享 concept_set —— exploration 用 balanced 版本作为"headline"规格
     // (后续 AI 优化主检索时会覆盖为优化后的 concept_set)
@@ -657,7 +658,7 @@ router.post('/:id/search/recommend-best', async (req, res) => {
       prompt: userPrompt,
       expectJson: true,
       // 主检索质量直接影响后续筛选基线 → 锁旗舰,不走 alias
-      model: 'claude-opus-4-7',
+      model: 'claude-opus-4-8',
       maxTokens: 4096,    // optimized_queries × N + rationale + filters,4K 给足
       timeoutMs: 300_000, // 5 分钟:LLM 要消化前面所有命中数 + 重写检索式
     })
@@ -786,10 +787,10 @@ router.post('/:id/search/recommend-best', async (req, res) => {
     // 持久化共享 concept_set 到 projects.search_concept_set_json
     // 这是跨库一致性的 source-of-truth,后续 lock UI / export.md / PRISMA 报告都引用它
     if (normalized.data.concept_set) {
-      db.prepare(`UPDATE projects SET search_concept_set_json = ?, updated_at = datetime('now') WHERE id = ?`)
+      db.prepare(`UPDATE projects SET search_concept_set_json = ?, updated_at = datetime('now', '+8 hours') WHERE id = ?`)
         .run(JSON.stringify(normalized.data.concept_set), project.id)
     } else {
-      db.prepare(`UPDATE projects SET updated_at = datetime('now') WHERE id = ?`).run(project.id)
+      db.prepare(`UPDATE projects SET updated_at = datetime('now', '+8 hours') WHERE id = ?`).run(project.id)
     }
   })
   tx()

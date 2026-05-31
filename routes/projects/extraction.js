@@ -378,7 +378,7 @@ function upsertExtraction(db, { project, record, normalized, model, partial }) {
       UPDATE extractions
       SET extracted_json = ?, model = ?, prompt_version = ?, schema_version = ?,
           requires_manual_check = ?, human_verified = 0,
-          updated_at = datetime('now')
+          updated_at = datetime('now', '+8 hours')
       WHERE id = ?
     `).run(json, model || null, EXTRACTION_PROMPT_VERSION + (partial ? '+partial' : ''),
            EXTRACTION_SCHEMA_VERSION, mc, existing.id)
@@ -407,7 +407,7 @@ function writeFailedExtraction(db, { project, record, reason, model, usageLogId 
     db.prepare(`
       UPDATE extractions
       SET extracted_json = ?, model = ?, requires_manual_check = ?,
-          human_verified = 0, updated_at = datetime('now')
+          human_verified = 0, updated_at = datetime('now', '+8 hours')
       WHERE id = ?
     `).run(sentinel, model || null, JSON.stringify([`extraction_failed:${reason.slice(0, 80)}`]), existing.id)
   } else {
@@ -816,7 +816,7 @@ router.post('/:id/extraction/:recordId/verify', (req, res) => {
 
   db.prepare(`
     UPDATE extractions
-    SET human_verified = ?, human_notes = ?, updated_at = datetime('now')
+    SET human_verified = ?, human_notes = ?, updated_at = datetime('now', '+8 hours')
     WHERE id = ?
   `).run(verified, humanNotes, ext.id)
 
@@ -878,7 +878,7 @@ router.post('/:id/extraction/:recordId/edit', (req, res) => {
     SET extracted_json = ?,
         requires_manual_check = ?,
         prompt_version = COALESCE(prompt_version, ?) || ' +human_edited',
-        updated_at = datetime('now')
+        updated_at = datetime('now', '+8 hours')
     WHERE id = ?
   `).run(
     JSON.stringify(normalized),

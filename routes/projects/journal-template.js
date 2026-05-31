@@ -23,6 +23,7 @@ import {
   extractJournalTemplate,
   getJournalTemplate,
   deleteJournalTemplate,
+  backfillAbstractFormat,
   JOURNAL_TEMPLATE_ROOT,
   MAX_TEMPLATE_PDF_BYTES,
 } from '../../services/journal-template.js'
@@ -107,6 +108,14 @@ router.get('/:id/journal-template', (req, res) => {
   })()
   const stepItems = getChecklistItems().filter((it) => it.workflow_step === 'report')
 
+  // 优化打磨包(M32-g):extract in-flight state
+  const extStarted = project.journal_template_extract_started_at
+  const extStatus = project.journal_template_extract_status
+  const extElapsed = extStarted
+    ? Math.max(0, Math.floor((Date.now() - new Date(extStarted + ' UTC').getTime()) / 1000))
+    : 0
+  const extractInFlight = !!(extStatus === 'running' && extStarted && extElapsed < 15 * 60)
+
   res.render('projects/journal-template', {
     title: `目标期刊模板 · ${project.title}`,
     project,
@@ -116,6 +125,14 @@ router.get('/:id/journal-template', (req, res) => {
     stepLabel: '8. 综述初稿 · 目标期刊模板',
     stepItems,
     maxUploadMb: Math.round(MAX_TEMPLATE_PDF_BYTES / 1024 / 1024),
+    // M32-g
+    extractInFlight,
+    extractStatus: extStatus,
+    extractStarted: extStarted,
+    extractFinished: project.journal_template_extract_finished_at,
+    extractError: project.journal_template_extract_error,
+    extractPendingFilename: project.journal_template_extract_pending_filename,
+    extractElapsedS: extElapsed,
   })
 })
 
@@ -166,63 +183,225 @@ router.post(
       payload: { filename: file.originalname, size: file.size, stored_path: file.path },
     })
 
-    // 跑 LLM 抽结构(同步,5-15s)
-    const result = await extractJournalTemplate(db, {
-      projectId: project.id,
-      userId: req.user.id,
-      pdfPath: file.path,
-      pdfFilename: file.originalname,
-    })
+    // ──────────────────────────────────────────────────────────────
+    // 优化打磨包(M32-g):异步抽取 — 之前同步 await runLlm,大 PDF + Opus 常 30-90s
+    // 超 nginx 60s 就"卡住"。改 setImmediate 后台跑 + status.json 轮询。
+    //
+    // 原子 lock:UPDATE WHERE journal_template_extract_status IS NULL OR != 'running'
+    //          OR started_at < now-15min。lock 拿到才 setImmediate。
+    // ──────────────────────────────────────────────────────────────
+    const projectId = project.id
+    const userId = req.user.id
 
-    if (!result.ok) {
-      audit(db, req, {
-        eventType: 'journal_template_extract_failed',
-        userId: req.user.id,
-        projectId: project.id,
-        payload: { status: result.status, error: (result.error || '').slice(0, 300), usage_log_id: result.usageLogId },
-      })
-      // 失败时:留着 PDF 文件,但不写 DB 行 — 用户可在 /journal-template 看到 flash,
-      // 然后自己 clear 再重传(或换一篇 PDF)
+    const lockAcquired = db.prepare(
+      `UPDATE projects SET
+          journal_template_extract_started_at = datetime('now', '+8 hours'),
+          journal_template_extract_finished_at = NULL,
+          journal_template_extract_status = 'running',
+          journal_template_extract_error = NULL,
+          journal_template_extract_pending_pdf_path = ?,
+          journal_template_extract_pending_filename = ?
+         WHERE id = ?
+           AND (journal_template_extract_status IS NULL
+                OR journal_template_extract_status != 'running'
+                OR journal_template_extract_started_at IS NULL
+                OR journal_template_extract_started_at < datetime('now','-15 minutes'))`
+    ).run(file.path, file.originalname, projectId).changes > 0
+
+    if (!lockAcquired) {
+      try { await fsp.unlink(file.path) } catch {}
       req.session.flash = {
         type: 'error',
-        message: `模板提取失败:${result.status} — ${(result.error || '').slice(0, 200)}`,
+        message: '另一个模板抽取请求正在进行(15 min 内)— 等当前完成或刷新页面看进度',
       }
-      return res.redirect(`/projects/${project.id}/journal-template`)
+      return res.redirect(`/projects/${projectId}/journal-template`)
     }
 
-    // 成功:如果替换了旧模板,把旧 PDF 删掉
-    if (result.replaced_existing && result.old_pdf_path && result.old_pdf_path !== file.path) {
-      try {
-        if (isInsideDataDir(result.old_pdf_path) && fs.existsSync(result.old_pdf_path)) {
-          fs.unlinkSync(result.old_pdf_path)
+    // 立即响应,让用户看到进度卡
+    if (req.get('X-Requested-With') === 'fetch') {
+      res.json({ ok: true, message: '已开始抽取(后台 LLM,通常 30s-2min,可关页面)' })
+    } else {
+      req.session.flash = {
+        type: 'success',
+        message: '✓ PDF 已上传,正在后台抽取章节结构(Opus 4.8,30s-2min,完成后页面自动刷新)',
+      }
+      res.redirect(`/projects/${projectId}/journal-template`)
+    }
+
+    // 后台跑(setImmediate — 不阻塞 res)
+    setImmediate(async () => {
+      const finishExtract = (status, errorMsg) => {
+        try {
+          db.prepare(
+            `UPDATE projects SET
+                journal_template_extract_status = ?,
+                journal_template_extract_finished_at = datetime('now', '+8 hours'),
+                journal_template_extract_error = ?,
+                journal_template_extract_pending_pdf_path = NULL,
+                journal_template_extract_pending_filename = NULL
+               WHERE id = ?`
+          ).run(status, errorMsg ? String(errorMsg).slice(0, 1000) : null, projectId)
+        } catch (e) {
+          console.error('[journal-template] finishExtract update failed:', e)
         }
-      } catch (e) {
-        console.error('[journal-template] failed to delete old pdf:', result.old_pdf_path, e.message)
       }
-    }
+      const bgAudit = (eventType, payload) => {
+        try {
+          audit(db, { user: { id: userId }, ip: '', get: () => '' }, {
+            eventType, userId, projectId, payload,
+          })
+        } catch {}
+      }
 
-    audit(db, req, {
-      eventType: 'journal_template_extracted',
-      userId: req.user.id,
-      projectId: project.id,
-      payload: {
+      let result
+      try {
+        result = await extractJournalTemplate(db, {
+          projectId,
+          userId,
+          pdfPath: file.path,
+          pdfFilename: file.originalname,
+        })
+      } catch (e) {
+        console.error('[journal-template/upload BG] extract threw:', e)
+        finishExtract('failed', e?.message || String(e))
+        bgAudit('journal_template_extract_failed', { reason: 'extract_threw', error: (e?.message || String(e)).slice(0, 300) })
+        return
+      }
+
+      if (!result.ok) {
+        finishExtract('failed', `${result.status}: ${(result.error || '').slice(0, 300)}`)
+        bgAudit('journal_template_extract_failed', {
+          status: result.status, error: (result.error || '').slice(0, 300), usage_log_id: result.usageLogId,
+        })
+        return
+      }
+
+      // 成功:删旧 PDF + audit + finish
+      if (result.replaced_existing && result.old_pdf_path && result.old_pdf_path !== file.path) {
+        try {
+          if (isInsideDataDir(result.old_pdf_path) && fs.existsSync(result.old_pdf_path)) {
+            fs.unlinkSync(result.old_pdf_path)
+          }
+        } catch (e) {
+          console.error('[journal-template BG] failed to delete old pdf:', result.old_pdf_path, e.message)
+        }
+      }
+
+      bgAudit('journal_template_extracted', {
         journal_name: result.template?.journal_name,
         article_title: result.template?.article_title,
         section_count: result.template?.extracted_structure?.sections?.length || 0,
         model: result.model,
         duration_ms: result.durationMs,
         usage_log_id: result.usageLogId,
-      },
+      })
+      finishExtract('success', null)
     })
-
-    const sectionCount = result.template?.extracted_structure?.sections?.length || 0
-    req.session.flash = {
-      type: 'success',
-      message: `期刊模板已提取(${sectionCount} 个章节,${result.model}, ${result.durationMs}ms)。`,
-    }
-    res.redirect(`/projects/${project.id}/journal-template`)
   }
 )
+
+// ────────────────────────────────────────────────────────────
+// GET /:id/journal-template/extract/status.json — 优化打磨包(M32-g)
+// 前端 5s 轮询;后台抽取完成后页面自动 reload。
+// ────────────────────────────────────────────────────────────
+router.get('/:id/journal-template/extract/status.json', (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) return res.status(404).json({ ok: false, error: 'not_found' })
+
+  const started = project.journal_template_extract_started_at
+  const status = project.journal_template_extract_status
+  const finished = project.journal_template_extract_finished_at
+  const error = project.journal_template_extract_error
+  const elapsedS = started
+    ? Math.max(0, Math.floor((Date.now() - new Date(started + ' UTC').getTime()) / 1000))
+    : 0
+  // 15 min 容忍窗口(Opus 4.8 + 大 PDF 最坏 5-8 min,留余量)
+  const inFlight = !!(status === 'running' && started && elapsedS < 15 * 60)
+
+  res.json({
+    ok: true,
+    in_flight: inFlight,
+    status,
+    started_at: started,
+    finished_at: finished,
+    error,
+    elapsed_s: elapsedS,
+    pending_filename: project.journal_template_extract_pending_filename || null,
+  })
+})
+
+// ────────────────────────────────────────────────────────────
+// 2026-05-25 P2-9: POST /:id/journal-template/backfill-abstract-format
+// 老项目当年抽期刊模板没 abstract_format 字段 → 加一个"重抽 abstract_format"
+// 单字段补抽路由。一次 Sonnet 调用,几秒回。drafter 后续 abstract 段就能
+// 按目标期刊真实习惯(单段 / structured headings)输出。
+// ────────────────────────────────────────────────────────────
+router.post('/:id/journal-template/backfill-abstract-format', async (req, res) => {
+  const db = req.app.locals.db
+  const project = ownProjectOr404(db, req.params.id, req.user.id)
+  if (!project) {
+    if (req.xhr || (req.headers.accept || '').includes('json')) {
+      return res.status(404).json({ ok: false, error: 'not_found' })
+    }
+    req.session.flash = { type: 'error', message: '项目不存在或无权访问' }
+    return res.redirect('/projects')
+  }
+
+  const force = String(req.body?.force || req.query?.force || '') === '1'
+
+  let result
+  try {
+    result = await backfillAbstractFormat(db, {
+      projectId: project.id,
+      userId: req.user.id,
+      force,
+    })
+  } catch (e) {
+    audit(db, req, {
+      eventType: 'journal_template_backfill_abstract_format_failed',
+      userId: req.user.id,
+      projectId: project.id,
+      payload: { error: e?.message || String(e) },
+    })
+    if (req.xhr || (req.headers.accept || '').includes('json')) {
+      return res.status(500).json({ ok: false, status: 'exception', error: e?.message || String(e) })
+    }
+    req.session.flash = { type: 'error', message: '补抽 abstract_format 失败:' + (e?.message || '') }
+    return res.redirect(`/projects/${project.id}/journal-template`)
+  }
+
+  audit(db, req, {
+    eventType: result.ok
+      ? 'journal_template_backfill_abstract_format_ok'
+      : 'journal_template_backfill_abstract_format_failed',
+    userId: req.user.id,
+    projectId: project.id,
+    payload: {
+      status: result.status,
+      replaced: !!result.replaced,
+      shape: result.abstract_format?.shape || null,
+      error: result.error || null,
+      usage_log_id: result.usageLogId || null,
+    },
+  })
+
+  if (req.xhr || (req.headers.accept || '').includes('json')) {
+    return res.status(result.ok ? 200 : 400).json(result)
+  }
+
+  if (result.ok) {
+    req.session.flash = {
+      type: 'success',
+      message: result.status === 'already_filled'
+        ? 'abstract_format 已存在,无需补抽(传 force=1 强制重抽)'
+        : `abstract_format 已补抽:shape = ${result.abstract_format?.shape || '?'}`,
+    }
+  } else {
+    req.session.flash = { type: 'error', message: '补抽失败:' + (result.error || result.status) }
+  }
+  res.redirect(`/projects/${project.id}/journal-template`)
+})
 
 // ────────────────────────────────────────────────────────────
 // POST /:id/journal-template/clear

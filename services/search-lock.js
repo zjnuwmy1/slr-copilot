@@ -116,7 +116,7 @@ export function lockSearch(db, projectId, entries, targetDatabases) {
     INSERT INTO final_search_records
       (id, project_id, database_name, used, strategy_id, query_text,
        result_count, search_date, notes, locked_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+8 hours'))
     ON CONFLICT(project_id, database_name) DO UPDATE SET
       used         = excluded.used,
       strategy_id  = excluded.strategy_id,
@@ -153,7 +153,7 @@ export function lockSearch(db, projectId, entries, targetDatabases) {
       written++
     }
 
-    db.prepare(`UPDATE projects SET search_locked_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`)
+    db.prepare(`UPDATE projects SET search_locked_at = datetime('now', '+8 hours'), updated_at = datetime('now', '+8 hours') WHERE id = ?`)
       .run(projectId)
   })
   tx()
@@ -165,7 +165,7 @@ export function lockSearch(db, projectId, entries, targetDatabases) {
  * 解锁(允许用户修改后重锁)。不删 final_search_records,只清 projects.search_locked_at。
  */
 export function unlockSearch(db, projectId) {
-  db.prepare(`UPDATE projects SET search_locked_at = NULL, updated_at = datetime('now') WHERE id = ?`)
+  db.prepare(`UPDATE projects SET search_locked_at = NULL, updated_at = datetime('now', '+8 hours') WHERE id = ?`)
     .run(projectId)
   return { ok: true }
 }

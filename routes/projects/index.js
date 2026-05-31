@@ -365,7 +365,7 @@ router.post('/:id/protocol/generate', async (req, res) => {
     result.model,
   )
 
-  db.prepare(`UPDATE projects SET status = 'protocol_pending', updated_at = datetime('now') WHERE id = ?`).run(project.id)
+  db.prepare(`UPDATE projects SET status = 'protocol_pending', updated_at = datetime('now', '+8 hours') WHERE id = ?`).run(project.id)
 
   audit(db, req, {
     eventType: 'protocol_generated',
@@ -467,8 +467,8 @@ router.post('/:id/protocol/:protocolId/approve', (req, res) => {
   // 审批 — 撤销其他版本,激活本版本
   db.transaction(() => {
     db.prepare('UPDATE protocols SET approved_by_user = 0, approved_at = NULL WHERE project_id = ?').run(project.id)
-    db.prepare(`UPDATE protocols SET approved_by_user = 1, approved_at = datetime('now') WHERE id = ?`).run(row.id)
-    db.prepare(`UPDATE projects SET status = 'protocol_approved', updated_at = datetime('now') WHERE id = ?`).run(project.id)
+    db.prepare(`UPDATE protocols SET approved_by_user = 1, approved_at = datetime('now', '+8 hours') WHERE id = ?`).run(row.id)
+    db.prepare(`UPDATE projects SET status = 'protocol_approved', updated_at = datetime('now', '+8 hours') WHERE id = ?`).run(project.id)
   })()
   audit(db, req, {
     eventType: 'protocol_approved',
@@ -627,12 +627,23 @@ router.post('/:id/rob/unmark', (req, res) => {
 
 // ---------- POST /:id/delete ----------
 // 用户删自己的项目(admin 删别人的走 /admin/projects 的同 endpoint — 见下)
+// 优化打磨包:防误操作 — 必须在 body 里附 confirm_title,且与项目标题严格相等
 router.post('/:id/delete', (req, res) => {
   const db = req.app.locals.db
   const project = ownProjectOr404(db, req.params.id, req.user.id)
   if (!project) {
     req.session.flash = { type: 'error', message: '项目不存在或无权访问' }
     return res.redirect('/projects')
+  }
+
+  // 校验确认输入(防误删)— 必须精确匹配项目标题
+  const confirmTitle = (req.body?.confirm_title || '').trim()
+  if (!confirmTitle || confirmTitle !== (project.title || '').trim()) {
+    req.session.flash = {
+      type: 'error',
+      message: `删除被拒绝:确认输入的项目名称不匹配。请精确输入"${project.title}"`,
+    }
+    return res.redirect(`/projects/${project.id}`)
   }
 
   const result = deleteProject(db, {

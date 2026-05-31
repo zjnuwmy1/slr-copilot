@@ -44,6 +44,7 @@ import projectExtractionRouter from './routes/projects/extraction.js'
 import projectCertaintyRouter from './routes/projects/certainty.js'
 import projectImportCsvRouter from './routes/projects/import-csv.js'
 import projectMatrixRouter from './routes/projects/matrix.js'
+import projectRobRouter from './routes/projects/rob.js'
 import projectJournalTemplateRouter from './routes/projects/journal-template.js'
 import projectIterateRouter from './routes/projects/iterate.js'
 
@@ -207,6 +208,7 @@ app.use('/projects', requireUser, projectExtractionRouter)
 app.use('/projects', requireUser, projectCertaintyRouter)
 app.use('/projects/:id/import/csv', requireUser, projectImportCsvRouter)
 app.use('/projects', requireUser, projectMatrixRouter)
+app.use('/projects', requireUser, projectRobRouter)
 app.use('/projects', requireUser, projectJournalTemplateRouter)
 app.use('/projects', requireUser, projectIterateRouter)
 app.use('/projects', requireUser, projectsRouter)  // 主路由(含 synthesis + report 自挂)放最后
