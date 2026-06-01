@@ -377,6 +377,9 @@ export async function runLlm(db, opts) {
     //   非 anthropic+oauth 路径会静默忽略 — 调用方应只在确认是 claude CLI 时使用
     sessionId = null,
     resumeSession = false,
+    // #251:anthropic-cli only — true 时对 1M-capable Opus 用 --model <name>[1m] 开 1M 长上下文。
+    //   只在已知大输入重型步骤(certainty / synthesis)传;其它路径忽略。
+    context1m = false,
   } = opts
 
   if (!userId) {
@@ -489,6 +492,8 @@ export async function runLlm(db, opts) {
         // 优化打磨包 / Session-continuity:仅 anthropic-cli 路径透传 session 参数
         sessionId: sessionId || null,
         resumeSession: !!resumeSession,
+        // #251:重型大输入步骤(certainty / synthesis)请求 1M context(--model <opus>[1m])
+        context1m: !!context1m,
       })
     } else if (cred.provider === 'openai' && cred.auth_type === 'api_key') {
       providerResult = await withTimeout(

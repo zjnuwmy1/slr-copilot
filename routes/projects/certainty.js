@@ -855,7 +855,10 @@ router.post('/:id/certainty/run-themes', (req, res) => {
   //   M30+ 升级:高级用户(advanced_extraction_enabled)→ 加载 PDF chunks 给 matrix 稀疏 paper 兜底
   //   普通用户没 PDF 上传权限 → paper_chunks 也无数据,无影响
   const isAdvanced = !!(req.user?.advanced_extraction_enabled || req.user?.is_super_admin)
-  const inputs = buildCertaintyInputs(db, project.id, includedRecords, { includePdfChunks: isAdvanced })
+  // #251:主题级 GRADE/CERQual rollup 是 body-of-evidence 聚合判断,不需要每篇全文 PDF chunks
+  //   (那是 matrix 抽取 / RoB deep 的事)。强制 false —— 配合下方 compactProfiles,避免
+  //   7 主题 × 几十篇 × 完整画像 + 全文 = 1.3MB 超 context(prompt_too_long)。
+  const inputs = buildCertaintyInputs(db, project.id, includedRecords, { includePdfChunks: false })
   if (!inputs.protocol) {
     return flashOrJson('error', '协议还没批复 / 先到 Step 1 审批')
   }
@@ -865,7 +868,7 @@ router.post('/:id/certainty/run-themes', (req, res) => {
 
   const budget = tokenizeBudgetForCertainty(inputs)
   if (!budget.fitsSingleCall) {
-    return flashOrJson('error', `主题 / 论文量过大(估 ${(budget.inputTokensEst / 1000).toFixed(0)}K tokens > 700K),Phase 2 才支持分批`)
+    return flashOrJson('error', `主题 / 论文量过大(估 ${(budget.inputTokensEst / 1000).toFixed(0)}K tokens > 160K 安全线)。建议:① 在 /admin/users 切到 Opus 1M context;② 或拆分主题分批跑(Phase 2 将支持自动分批)`)
   }
 
   // M30+ 上游指纹防重复跑(themes / overlay / matrix / RoB / 协议 任一变化都允许重跑)
@@ -917,6 +920,7 @@ router.post('/:id/certainty/run-themes', (req, res) => {
     finalQueries,
     formatPaperProfile,
     overlay: overlayText,
+    compactProfiles: true,   // #251:主题级 rollup 用精简画像(避免超 context)
   })
 
   // 上下文捕获(不能在 setImmediate 闭包里访问 req)
@@ -986,7 +990,8 @@ router.post('/:id/certainty/run-themes', (req, res) => {
         prompt: userPrompt,
         expectJson: true,
         maxTokens: 16000,
-        timeoutMs: 3300_000,    // 55 min(冗余:input 1.3MB + ultrathink,完整 paper profile 比 synthesis 重)
+        context1m: true,        // #251:开 1M 长上下文(精简画像后通常 <60K,但给大项目余量)
+        timeoutMs: 3300_000,    // 55 min(冗余:大项目 + ultrathink)
       })
     } catch (e) {
       console.error('[certainty/run-themes BG] runLlm threw:', e)

@@ -270,11 +270,12 @@ export function tokenizeBudgetForCertainty(inputs) {
       conflicting_findings: t.conflicting_findings,
       evidence_gaps: t.evidence_gaps,
     }).length
-    // 该主题支持论文(从 papersByRid 拉)
+    // 该主题支持论文(#251:主题级 rollup 用精简画像 compactPaperLine,每篇 ~400 char 一行,
+    //   而非旧的完整 formatPaperProfile 2-3KB → 大项目不再超 context)
     for (const rid of t.supporting_record_ids || []) {
       const p = inputs.papersByRid?.get(rid)
       if (!p) continue
-      chars += 2000  // 平均每篇 profile ~ 2K char
+      chars += 400
     }
     // 该主题 evidence points
     const eps = inputs.evidenceByTheme?.get(t.id) || []
@@ -284,7 +285,9 @@ export function tokenizeBudgetForCertainty(inputs) {
   return {
     inputTokensEst,
     chars,
-    fitsSingleCall: inputTokensEst < 700_000,
+    // #251:阈值对齐"最小可能模型 context"(~200K),留 system + 输出 + 余量 → input ≤ 160K。
+    //   精简画像后正常项目远低于此;真·超大(数十主题/数百篇)才会被拦,提示分批/切 1M 是合理的。
+    fitsSingleCall: inputTokensEst < 160_000,
   }
 }
 

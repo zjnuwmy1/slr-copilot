@@ -539,6 +539,7 @@ router.post('/:id/synthesis/run', (req, res) => {
         expectJson: true,
         expectShape: 'object',   // P0.3:期望 themes 对象;错误形状 → data=null → 走 json_parse_failed 兜底
         maxTokens: 16000,
+        context1m: true,         // #251:Step 6 输入大(全量 matrix + RoB),开 1M 长上下文防超窗
         // 45 分钟 — Opus 4.8 + ultrathink + 117 篇 + matrix + RoB + 协议 + overlay
         //   实测前一次 15 min 不够(thinking 还没出 token)。45 min 给充足余量。
         //   lock stale 设 60 min(timeout + 15 min 余量)。

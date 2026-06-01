@@ -829,15 +829,28 @@ LANGUAGE — HARD CONSTRAINT:
 
   const copyHintGeneric = 'Paste into any image-LLM (gpt-image-1, DALL·E, Midjourney, Stable Diffusion, BioRender prompt) OR a vector editor (draw.io, Lucidchart, Figma)'
 
-  // PRISMA flow counts pretty-formatted for prompt injection
+  // PRISMA flow counts pretty-formatted for prompt injection.
+  //   2026-06-01 BUGFIX:computePrismaFlow 返回的 records_identified 是 per-database 对象
+  //   ({wos:172, scopus:181}),不是数字;且无 records_identified_databases_n 字段。
+  //   旧代码 `${counts.records_identified}` → 字符串 "[object Object]","0 database(s)" →
+  //   LLM 收到垃圾输入,索性自己编造 raw records 数(实测某项目编出 N=529)。
+  //   现在:identified 总数用权威字段 records_identified_total;库数/明细从对象算。
+  const byDb = (counts.records_identified && typeof counts.records_identified === 'object')
+    ? counts.records_identified : {}
+  const dbEntries = Object.entries(byDb).filter(([, n]) => Number(n) > 0)
+  const dbCount = dbEntries.length
+  const dbBreakdown = dbEntries.length
+    ? dbEntries.map(([name, n]) => `${String(name).toUpperCase()} n=${n}`).join(', ')
+    : ''
+  const identifiedTotal = counts.records_identified_total || 0
   const prismaFlowText = [
-    `Identification: ${counts.records_identified || 0} records from ${(counts.records_identified_databases_n || 0)} database(s)${counts.records_identified_other_n ? ` + ${counts.records_identified_other_n} from other sources` : ''}`,
+    `Identification — records identified from databases: ${identifiedTotal}${dbCount ? ` (${dbCount} database(s): ${dbBreakdown})` : ''}`,
     `Duplicates removed: ${counts.duplicates_removed || 0}`,
     `Records screened (title/abstract): ${counts.records_screened || 0}`,
     `Records excluded after title/abstract: ${counts.excluded_title_abstract || 0}`,
-    `Full-text articles assessed: ${counts.full_text_assessed || 0}`,
+    `Reports/full-text articles assessed for eligibility: ${counts.full_text_assessed || 0}`,
     `Full-text articles excluded: ${counts.full_text_excluded || 0}`,
-    `Studies included in qualitative synthesis: ${counts.studies_included || 0}`,
+    `Studies included in synthesis: ${counts.studies_included || 0}`,
   ].filter(Boolean).join('\n   ')
 
   return [
@@ -854,12 +867,18 @@ LANGUAGE — HARD CONSTRAINT:
         `Review topic: ${topic}`,
         discipline ? `Discipline: ${discipline}` : '',
         ``,
-        `Use the actual counts from this review (verbatim — do NOT round or invent):`,
+        `Use the actual counts from this review EXACTLY AS GIVEN below.`,
+        `★ HARD CONSTRAINT — these are the ONLY numbers allowed in the figure:`,
         `   ${prismaFlowText}`,
+        ``,
+        `★ Do NOT invent, round, infer, or add any count not listed above (no "raw records",`,
+        `  no fabricated "reports not retrieved", no exclusion counts unless a number is given above).`,
+        `  If a stage's number is 0 or not listed, OMIT that box rather than making one up.`,
+        `  The "records identified" box MUST use ${identifiedTotal} — never a larger "raw" figure.`,
         ``,
         `Layout requirements (publication-grade — the default mermaid render is plain and not journal-quality):`,
         `- Three vertical swimlanes from top to bottom labelled "Identification", "Screening", "Eligibility", "Included".`,
-        `- Each stage is a rounded rectangle with the count + brief label inside (e.g. "Records identified through database search (n = ${counts.records_identified || '?'})").`,
+        `- Each stage is a rounded rectangle with the count + brief label inside (e.g. "Records identified from databases (n = ${identifiedTotal})").`,
         `- Side branches showing exclusions (with reasons) using dashed arrows to a smaller "excluded" box on the right.`,
         `- Use a clean academic style — no shading, no 3D effects, no decorative icons.`,
         `- Connecting arrows are solid black with arrowheads; exclusion arrows are dashed grey.`,

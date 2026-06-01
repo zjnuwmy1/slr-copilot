@@ -132,12 +132,21 @@ export async function sendMessage({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   sessionId = null,
   resumeSession = false,
+  context1m = false,
 }) {
   if (!homePath) throw new Error('anthropic-cli.sendMessage: homePath required')
   if (!model) throw new Error('anthropic-cli.sendMessage: model required')
   if (!prompt) throw new Error('anthropic-cli.sendMessage: prompt required')
 
   const effectivePrompt = withReasoningPrefix(prompt, reasoning)
+
+  // #251:1M context — headless `claude -p --model <name>[1m]` 是官方开 1M 长上下文 beta 的方式
+  //   (claude CLI 剥掉 [1m] 后缀再发 context-1m beta;订阅 Max/Team/Enterprise 的 Opus 含 1M,
+  //   ≤200K 无溢价)。只对 1M-capable 的 Opus 模型 + 调用方显式 context1m=true 时加(重型大输入
+  //   步骤:certainty / synthesis),普通小调用不受影响。已带 [1m] 的不重复加。
+  const modelArg = (context1m && /^claude-opus/.test(model) && !/\[1m\]$/.test(model))
+    ? `${model}[1m]`
+    : model
 
   // E2BIG 防护:超阈值的 prompt 走 stdin(`claude -p` 在 stdin 非 TTY 时读 stdin)。
   // System prompt 一般 < 30KB 直接走 argv;若极少数情况下 system 也超阈值,

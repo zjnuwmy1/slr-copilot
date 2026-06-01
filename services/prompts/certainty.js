@@ -265,9 +265,25 @@ Identify and articulate, in 4-10 short paragraphs of English prose, covering BOT
  * @param {function} args.formatPaperProfile  从 synthesis-helpers import 的完整 paper profile 格式化器
  * @param {string} [args.overlay]     项目专用 overlay 文本(可空)
  */
-export function buildThemeRollupUserPrompt({ protocol, themes, papersByRid, evidenceByTheme, synthesisMeta, finalQueries = [], formatPaperProfile, overlay = '' }) {
-  if (typeof formatPaperProfile !== 'function') {
-    throw new Error('buildThemeRollupUserPrompt requires formatPaperProfile callback')
+export function buildThemeRollupUserPrompt({ protocol, themes, papersByRid, evidenceByTheme, synthesisMeta, finalQueries = [], formatPaperProfile, overlay = '', compactProfiles = false }) {
+  if (!compactProfiles && typeof formatPaperProfile !== 'function') {
+    throw new Error('buildThemeRollupUserPrompt requires formatPaperProfile callback (unless compactProfiles)')
+  }
+  // #251:主题级 GRADE/CERQual rollup 的精简画像 —— body-of-evidence 层面只需
+  //   design / sample / RoB rating / effect 信号(一行/篇,~0.3KB),而非逐篇 2-3KB
+  //   完整 matrix + RoB rationale + 单域评级 + 全文 chunks(那是 outcome 级细评的事)。
+  //   避免大项目(7 主题 × 几十篇 × 完整画像 = 1.3MB)超 context → prompt_too_long。
+  function compactPaperLine(rid) {
+    const p = papersByRid?.get(rid)
+    if (!p || !p.record) return `    - [${rid}] (no data)`
+    const r = p.record
+    const f = (p.matrixData && p.matrixData.fields) || {}
+    const author = String(r.authors_text || '').split(/[,;]/)[0].trim() || '?'
+    const design = f.study_design ? String(f.study_design).replace(/\s+/g, ' ').slice(0, 60) : '—'
+    const sampleN = f.sample_size_total || f.sample_size || null
+    const rob = p.robData ? `${p.robData.tool || 'rob'}=${p.robData.overall_rating || '—'}` : 'not assessed'
+    const finding = String(f.key_findings || f.quantitative_results || '').replace(/\s+/g, ' ').slice(0, 220)
+    return `    - [${rid}] ${author} ${r.year || 'n.d.'} · design: ${design}${sampleN ? ` · N=${sampleN}` : ''} · RoB: ${rob}${finding ? ` · finding: ${finding}` : ''}`
   }
   const lines = []
   lines.push(`# Certainty grading input — ${themes.length} themes`)
@@ -384,25 +400,24 @@ export function buildThemeRollupUserPrompt({ protocol, themes, papersByRid, evid
     //   不再 abridged。30 篇主题 → ~75KB,跟 Step 6 synthesis 一个数量级,Opus 1M 完全装得下
     const supportIds = t.supporting_record_ids || []
     if (supportIds.length) {
-      lines.push(`  - **Supporting papers (${supportIds.length} with FULL matrix + RoB rationale + per-domain ratings)**:`)
-      lines.push('')
-      supportIds.forEach((rid, idx) => {
-        const p = papersByRid?.get(rid)
-        if (!p) {
-          lines.push(`    [missing data for ${rid}]`)
-          return
-        }
-        // 用通用 formatPaperProfile,跟 Step 6 synthesis 同款完整画像
-        //   含 matrix(study_design / recruitment / sample_size / setting / intervention / comparator /
-        //              outcomes / measurement_tools / data_source / analysis_method / key_findings /
-        //              quantitative_results / limitations / ethics_funding / reproducibility / 自定义字段)
-        //   + RoB(tool + overall_rating + overall_rationale 全文 + 单域评级)
-        //   + screening(命中 concepts / criteria / ai_confidence)
-        const profile = formatPaperProfile({ record: p.record, matrixData: p.matrixData, robData: p.robData, screeningData: p.screeningData, idx })
-        // 缩进 4 空格让 markdown 嵌套清晰
-        lines.push(profile.split('\n').map((l) => '    ' + l).join('\n'))
+      if (compactProfiles) {
+        // #251 精简画像(主题级 rollup 默认):每篇一行 design/N/RoB/finding
+        lines.push(`  - **Supporting papers (${supportIds.length}; compact evidence profile — design · sample · RoB rating · key finding)**:`)
+        supportIds.forEach((rid) => lines.push(compactPaperLine(rid)))
+      } else {
+        lines.push(`  - **Supporting papers (${supportIds.length} with FULL matrix + RoB rationale + per-domain ratings)**:`)
         lines.push('')
-      })
+        supportIds.forEach((rid, idx) => {
+          const p = papersByRid?.get(rid)
+          if (!p) {
+            lines.push(`    [missing data for ${rid}]`)
+            return
+          }
+          const profile = formatPaperProfile({ record: p.record, matrixData: p.matrixData, robData: p.robData, screeningData: p.screeningData, idx })
+          lines.push(profile.split('\n').map((l) => '    ' + l).join('\n'))
+          lines.push('')
+        })
+      }
     }
 
     // Evidence points (atomic findings)— 移除 50 截断,主题级 rollup 需要完整一致性/冲突信号
