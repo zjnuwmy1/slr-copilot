@@ -472,8 +472,9 @@ export function summarizeDraftSections(db, projectId, sections) {
 
   for (const s of sections) {
     const name = s.name
-    const row = latestByName.get(name)
+    let row = latestByName.get(name)
     let status, words = 0, model = null, version = 0, updatedAt = null
+    let retryFailedMeta = null   // #2026-06-02:最新版重试失败但已回退到上一个成功版时填
 
     if (s.generated === 'auto') {
       // references / 其它 auto-generated:不进 generated/in_progress/failed/pending,单标 'auto'
@@ -482,20 +483,49 @@ export function summarizeDraftSections(db, projectId, sections) {
       status = 'pending'
       out.pending++
     } else {
+      const runStatus = row.section_run_status
+      const hasContentNow = typeof row.content_markdown === 'string' && row.content_markdown.trim().length > 0
+
+      // 2026-06-02 BUGFIX(失败重试覆盖成功版):最新版失败/中止 + 空内容,但库里有更早的
+      //   成功非空版本 → 回退到那条成功版展示(内容不丢),只记下"上次重试失败"的元信息。
+      if ((runStatus === 'failed' || runStatus === 'aborted_by_restart') && !hasContentNow) {
+        let prevGood = null
+        try {
+          prevGood = db.prepare(
+            `SELECT id, section_name, content_markdown, citation_map, model, version, updated_at,
+                    section_run_status, section_run_error, hallucinated_recs_json, lint_warnings_json
+               FROM draft_sections
+              WHERE project_id = ? AND section_name = ?
+                AND content_markdown IS NOT NULL AND content_markdown != ''
+              ORDER BY version DESC LIMIT 1`
+          ).get(projectId, name)
+        } catch {}
+        if (prevGood) {
+          retryFailedMeta = {
+            retry_failed: true,
+            retry_failed_status: runStatus,
+            retry_failed_error: row.section_run_error || null,
+            retry_failed_version: row.version || 0,
+          }
+          row = prevGood   // 用成功版渲染
+        }
+      }
+
       version = row.version || 0
       model = row.model || null
       updatedAt = row.updated_at || null
       const hasContent = typeof row.content_markdown === 'string' && row.content_markdown.trim().length > 0
       words = hasContent ? countWords(row.content_markdown) : 0
-      const runStatus = row.section_run_status
+      const effRunStatus = row.section_run_status
 
-      if (runStatus === 'running') {
+      if (effRunStatus === 'running') {
         status = 'in_progress'
         out.in_progress++
-      } else if (runStatus === 'failed' || runStatus === 'aborted_by_restart') {
+      } else if ((effRunStatus === 'failed' || effRunStatus === 'aborted_by_restart') && !retryFailedMeta) {
         status = 'failed'
         out.failed++
       } else if (hasContent) {
+        // 含 retry_failed 回退到的成功版:算 generated(有可用内容)
         status = 'generated'
         out.generated++
       } else {
@@ -547,8 +577,11 @@ export function summarizeDraftSections(db, projectId, sections) {
       // ─── 编排器 run 状态(view 用此区分 ✓ 已生成 / ⚠ 失败 / ⏳ 生成中)──
       //   2026-05-25 修:之前没透出,view 误把 version>0 的失败行渲成 ✓ 已生成,
       //   导致上面 job summary 说"method 失败"、下面卡片说"method 已生成"自相矛盾
-      section_run_status: row ? (row.section_run_status || null) : null,
-      section_run_error:  row ? (row.section_run_error || null) : null,
+      //   2026-06-02:retryFailedMeta 存在时,section_run_status 用回退后的成功版(success),
+      //   失败信息单独走 retry_failed_* 字段,view 温和提示而非红色"失败"。
+      section_run_status: retryFailedMeta ? 'success' : (row ? (row.section_run_status || null) : null),
+      section_run_error:  retryFailedMeta ? null : (row ? (row.section_run_error || null) : null),
+      ...(retryFailedMeta || {}),
       // ─── P0-6/P2-13:质量 lint(per-section)──────────────────────────
       hallucinated_recs: hallucinatedRecs,
       hallucinated_count: hallucinatedRecs.length,

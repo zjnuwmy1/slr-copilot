@@ -56,6 +56,30 @@ const QT_LABEL_FOR_PROMPT = {
 
 const VALID_DATABASES = ['wos', 'scopus', 'pubmed']
 
+/**
+ * 召回锚定区间(recall-anchored band)。
+ *
+ * 背景:系统综述以**召回优先**。"主检索"是对 high_recall 探查的**去噪精炼**,
+ * 而不是收窄到 high_precision。但旧实现把约束区间取成 exploration 三个版本的
+ * 全局 [min, max] —— min 来自 high_precision 的≈0 命中,等于**授权优化器塌缩到接近 0**
+ * (实测案例:high_recall=132,优化主检索却塌到 1,且因 1∈[0,132] 而无任何警告)。
+ *
+ * 这里把区间下限**锚定到 high_recall 命中数**(最宽的 exploration),而非全局 min:
+ *   - lo = round(high_recall × 0.5)  —— 主检索召回不得低于 high_recall 的一半
+ *   - hi = max(全局 max, round(high_recall × 1.5))  —— 去噪后允许小幅高于 high_recall
+ *
+ * 返回 { lo, hi, recallCount } 或 null(无数据)。
+ */
+function recallAnchoredBand(r) {
+  if (!r || !Array.isArray(r.hits) || r.hits.length === 0) return null
+  const hr = r.hits.find((h) => h && h.qt === 'high_recall' && Number.isFinite(h.count))
+  const recallCount = hr ? hr.count : (Number.isFinite(r.max) ? r.max : null)
+  if (!Number.isFinite(recallCount)) return null
+  const lo = Math.max(0, Math.round(recallCount * 0.5))
+  const hi = Math.max(Number.isFinite(r.max) ? r.max : 0, Math.round(recallCount * 1.5))
+  return { lo, hi, recallCount }
+}
+
 export function buildRecommendSystem({ targetDatabases }) {
   const dbs = Array.isArray(targetDatabases) && targetDatabases.length
     ? targetDatabases.filter((d) => VALID_DATABASES.includes(d))
@@ -113,11 +137,12 @@ export function buildRecommendSystem({ targetDatabases }) {
    - WoS: 所有概念组放进**同一个 \`TS=(...)\` 块**,组间 AND;**不要换字段**。
    - Scopus: 所有概念组放进**同一个 \`TITLE-ABS-KEY(...)\` 块**,组间 AND。
 
-2. **收紧命中数时不要切到 title-only 字段**(TI / TITLE)。
-   收紧的合法路径:
+2. **收紧只在命中数过多时才做**(例如 high_recall 已 > 1000)。收紧时不要切到 title-only 字段(TI / TITLE)。
+   合法的收紧路径(**仅当 high_recall 命中数很大时**):
    - 删 concept_set 里过宽的同义词(例如砍掉 "AI agent*" "foundation model*")
-   - 把某个概念组缩到核心 1-2 个词
    - 加更具体的概念组(如 "outcome measure" 类)
+   🚫 **当 high_recall 命中数本身已偏低(< 200)时,严禁收窄** —— 这是窄主题,删词会让命中塌到个位数。
+       此时主检索应当**保持甚至放宽召回**(≈high_recall),只去掉明显拼错/重复的词、修语法,不要缩概念组。
    **唯一例外**:当协议明确说"只搜标题"时,才能整体切到 TI / TITLE。
 
 3. **WoS 合法 document type**(常用)— 只用这些,不要发明:
@@ -200,19 +225,22 @@ export function buildRecommendSystem({ targetDatabases }) {
 4. **${N} 条 query_text 的概念词、年份、文献类型允许/排除列表、语言必须完全一致** —
    只允许字段标签和语法不同。请自己在头脑里逐条对照检查后再输出。
 5. database 字段只能是:${dbs.map((k) => `'${k}'`).join(', ')}。
-6. **\`expected_count_estimate\` 必须落在该库 exploration 命中数 [min, max] 之间**(没有用户目标时)。
-   - 若用户给了目标区间,先取 \`intersect(用户目标, [exploration_min, exploration_max])\`,
-     主检索预估必须落在这个交集里。
+6. **\`expected_count_estimate\` 必须落在**召回锚定区间** \`[round(high_recall × 0.5), round(high_recall × 1.5)]\` 之间**(没有用户目标时)。
+   - **召回优先(系统综述铁律)**:主检索是 high_recall 的去噪精炼,预估命中数**绝不能低于 high_recall 的一半**。
+     宁可多筛几十篇,也不能漏检 —— 把主检索做成接近 high_precision 的低命中是**错误**的。
+   - 若用户给了目标区间,先取 \`intersect(用户目标, 召回锚定区间)\`,主检索预估必须落在这个交集里。
    - 若 \`expected_within_explored_range = false\`,你必须在 \`expected_count_basis\` 里**逐条解释**为什么有信心破例
      (例如:"删掉了 high_recall 里专门拉宽用的 \`foundation model*\`,该词在标题摘要里出现 50+ 次,
-     去掉后估算从 130 降到 40")—— 否则系统会拒绝接收。
+     去掉后估算从 130 降到 80,仍 > high_recall 一半")—— 否则系统会拒绝接收。
 7. **词项宇宙**:\`concept_set.concept_groups[*].terms\` 里的每个词,**必须**能在
    \`evidence_analysis.term_universe\` 里找到对应(允许词形变体)。引入未测过的新词 = 输出会被拒绝。
 8. \`based_on_strategy_ids\` **不能为空** — 主检索是 exploration 的演化,必须能引用到具体 id。
 9. 优化方向(全部体现在 concept_set 里,然后同步渲染到所有库):
-   - 命中数 < 30 → 警告(不要凭空加新词,告诉用户 exploration 词项太狭窄需要补充)
-   - 命中数 > 2000 → 从 exploration 里挑过宽的词砍掉
-   - 100-1000 → 接近 sweet spot,小幅微调
+   - **high_recall < 200(窄主题)→ 保召回**:主检索≈high_recall,只去明显噪音 + 修语法,
+     **绝不删概念组、绝不收窄**。若命中数仍太少,在 warnings 里告诉用户 exploration 词项太窄、
+     需要回到协议补充同义词(而不是让你在这里删词)。
+   - 命中数 > 2000 → 才从 exploration 里挑过宽的词砍掉
+   - 200-2000 → 接近 sweet spot,**只做最小幅去噪**,不要大改
 10. rationale 解释 concept_set 相比 exploration 的具体改动 — 必须**引用具体的 strategy_id 和命中数字**。
 11. **绝对不要** 直接复制 exploration 的 query_text — 主检索是基于 concept_set 重新渲染。
 12. **只输出 JSON**,不要前后加解释、Markdown、代码围栏(\`\`\`)。
@@ -434,20 +462,26 @@ export function buildRecommendPrompt({
     }
   }
 
-  // —— 关键约束:每个库的 [min, max] 命中数范围 + 用户目标 ——
+  // —— 关键约束:每个库的**召回锚定**命中数区间 + 用户目标 ——
+  // ⚠ 下限**锚定 high_recall × 0.5**(不是全局 min)。系统综述召回优先:主检索是 high_recall
+  //   的去噪精炼,绝不能塌缩到 high_precision 的近 0 命中。
   const hasRanges = Object.keys(dbHitRanges).length > 0
   if (hasRanges) {
     lines.push('')
-    lines.push('===== 主检索预估命中数的硬约束区间 =====')
-    lines.push('每条 optimized_queries[*].expected_count_estimate **必须落在下面对应库的区间内**:')
+    lines.push('===== 主检索预估命中数的硬约束区间(召回锚定)=====')
+    lines.push('每条 optimized_queries[*].expected_count_estimate **必须落在下面对应库的区间内**。')
+    lines.push('⚠ **召回优先**:下限 = high_recall 命中数 × 0.5。主检索是对 high_recall 的**去噪精炼**,')
+    lines.push('   **不是**收窄到 high_precision —— 预估命中数低于 high_recall 一半 = 过度收窄,会被拒绝/警告。')
     for (const db of dbs) {
       const r = dbHitRanges[db]
       if (!r) {
         lines.push(`  ${DB_LABEL[db] || db}: 无 exploration 数据 → 跳过约束(请保守预估)`)
         continue
       }
-      // 把用户目标和 exploration 范围求交集
-      let lo = r.min, hi = r.max
+      const band = recallAnchoredBand(r)
+      // 召回锚定区间为基准,再和用户目标求交集
+      let lo = band ? band.lo : r.min
+      let hi = band ? band.hi : r.max
       let intersected = false
       if (userTargetHits) {
         const tmin = userTargetHits.min
@@ -455,11 +489,17 @@ export function buildRecommendPrompt({
         if (tmin != null) { lo = Math.max(lo, tmin); intersected = true }
         if (tmax != null) { hi = Math.min(hi, tmax); intersected = true }
       }
+      const recallNote = band ? ` (high_recall=${band.recallCount} → 下限 ${band.lo})` : ''
       const note = lo > hi
-        ? `(⚠ 用户目标 [${userTargetHits.min ?? '∞'}, ${userTargetHits.max ?? '∞'}] 与 exploration [${r.min}, ${r.max}] **无交集** — 在 warnings 里告知用户,然后向 exploration 区间靠拢)`
-        : (intersected ? ' (= 用户目标 ∩ exploration 范围)' : '')
+        ? `(⚠ 用户目标 [${userTargetHits.min ?? '∞'}, ${userTargetHits.max ?? '∞'}] 与召回锚定区间无交集 — 在 warnings 里告知用户,然后向召回区间靠拢)`
+        : (intersected ? ' (= 用户目标 ∩ 召回锚定区间)' : recallNote)
       lines.push(`  ${DB_LABEL[db] || db}: 预估必须 ∈ [${lo}, ${hi}]${note}`)
       lines.push(`     依据数据点:${r.hits.map((h) => `${h.qt}=${h.count}`).join(' / ')}`)
+      const rc = band ? band.recallCount : r.max
+      if (Number.isFinite(rc) && rc < 200) {
+        lines.push(`     ⚠ **窄主题信号**:high_recall 命中仅 ${rc}(<200)。这说明概念组本身已经很严,`)
+        lines.push(`        **保召回**:不要再删词收窄,主检索应≈high_recall(可仅去明显噪音 / 修语法),不要把它做成 high_precision。`)
+      }
     }
     lines.push('')
     lines.push('如果你**确实**有充分把握破例(例如砍掉了一个出现频繁的过宽词,预计降幅可量化),')
@@ -743,8 +783,9 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
     }
   }
 
-  // expected_count_estimate 范围校验 — 把 AI 预估和 exploration 实测对比,偏离太大就 warning
-  // 让用户在 UI 上一眼看出"AI 这次估的数字靠不靠谱"。不阻断,但显眼提示。
+  // expected_count_estimate 范围校验 — 用**召回锚定区间**(下限=high_recall×0.5)对比 AI 预估,
+  // 偏离太大就 warning。关键:旧实现用全局 [min,max],min 来自 high_precision≈0,导致塌缩到 1 也
+  // 落在 [0,max] 内、静默放行。改用召回锚定后,过度收窄(预估 << high_recall 一半)会被显眼警告。
   for (const q of out) {
     const r = hitRanges[q.database]
     if (!r || !Number.isFinite(r.min) || !Number.isFinite(r.max)) continue
@@ -752,25 +793,31 @@ export function normalizeRecommendOutput(raw, { targetDatabases, knownStrategyId
       warnings.push(`⚠ AI 没给 ${q.database.toUpperCase()} 的预估命中数 — 重跑可能改善。`)
       continue
     }
-    let lo = r.min, hi = r.max
+    const band = recallAnchoredBand(r)
+    let lo = band ? band.lo : r.min
+    let hi = band ? band.hi : r.max
     let userClamped = false
     if (userTargetHits) {
       if (userTargetHits.min != null) { lo = Math.max(lo, userTargetHits.min); userClamped = true }
       if (userTargetHits.max != null) { hi = Math.min(hi, userTargetHits.max); userClamped = true }
     }
     if (lo > hi) {
-      // 用户目标与 exploration 范围无交集 — 已经在 prompt 里告知,这里跳过强校验
+      // 用户目标与召回锚定区间无交集 — 已经在 prompt 里告知,这里跳过强校验
       continue
     }
     const est = q.expected_count_estimate
     if (est < lo || est > hi) {
       const within = q.expected_within_explored_range
-      const tag = userClamped ? `用户目标∩exploration=[${lo}, ${hi}]` : `exploration=[${r.min}, ${r.max}]`
-      if (within === false && q.expected_count_basis) {
-        // LLM 已明确破例并给出依据 → 信息级提示
-        warnings.push(`ℹ ${q.database.toUpperCase()} 预估 ${est} 在 ${tag} 之外,AI 已说明依据:${q.expected_count_basis.slice(0, 100)}`)
+      const recallTag = band ? `召回锚定=[${lo}, ${hi}](high_recall=${band.recallCount})` : `区间=[${lo}, ${hi}]`
+      const tag = userClamped ? `用户目标∩召回锚定=[${lo}, ${hi}]` : recallTag
+      // 低于下限 = 过度收窄(召回塌缩),这是最危险的 → 始终警告级,不接受"已说明依据"降级
+      if (est < lo) {
+        warnings.unshift(`⚠ ${q.database.toUpperCase()} 预估 ${est} **低于召回下限** ${tag} — 主检索可能过度收窄/漏检,系统综述应保召回,强烈建议重跑(放宽)或改用 high_recall 探查式。`)
+      } else if (within === false && q.expected_count_basis) {
+        // 高于上限且 LLM 已明确破例并给出依据 → 信息级提示
+        warnings.push(`ℹ ${q.database.toUpperCase()} 预估 ${est} 高于 ${tag},AI 已说明依据:${q.expected_count_basis.slice(0, 100)}`)
       } else {
-        // 没有破例说明 → 警告级
+        // 高于上限、无破例说明 → 警告级
         warnings.unshift(`⚠ ${q.database.toUpperCase()} 预估 ${est} 偏离 ${tag} — AI 未给充分依据,真实命中可能差距较大,建议重跑或人工复核。`)
       }
     }

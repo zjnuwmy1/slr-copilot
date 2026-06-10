@@ -22,6 +22,9 @@ import {
   getAllStepReasonings,
   getSetting,
   setSetting,
+  getGlobalModelOverride,
+  GLOBAL_MODEL_OVERRIDE_KEY,
+  GLOBAL_OVERRIDE_PRESETS,
 } from '../../services/settings.js'
 import { audit } from '../../services/audit.js'
 
@@ -83,7 +86,56 @@ router.get('/', (req, res) => {
     currentReasoning,
     configuredCount,
     totalCount: STEP_KEYS.length,
+    globalOverride: getGlobalModelOverride(db),  // { mode, provider, model, label }
+    isSuperAdmin: !!(req.user && req.user.is_super_admin),  // 全局开关只对超管展示
   })
+})
+
+// ============================================================
+// POST /global-model — 全局一键开关(凌驾所有步骤配置)
+//   body.mode ∈ { 'off' | 'codex' | 'claude' }
+// ============================================================
+
+router.post('/global-model', (req, res) => {
+  const db = req.app.locals.db
+  // 全局开关决定全平台用哪套订阅凭证 → 与平台凭证同级,仅超级管理员可改。
+  if (!(req.user && req.user.is_super_admin)) {
+    flash(req, 'error', '只有超级管理员可以修改全局模型开关。')
+    return res.redirect('/admin/settings')
+  }
+  const mode = String((req.body && req.body.mode) || '').trim().toLowerCase()
+  if (!['off', 'codex', 'claude'].includes(mode)) {
+    flash(req, 'error', `非法的全局开关值:${mode}`)
+    return res.redirect('/admin/settings')
+  }
+
+  const before = getGlobalModelOverride(db)
+  try {
+    if (mode === 'off') {
+      db.prepare('DELETE FROM system_settings WHERE key = ?').run(GLOBAL_MODEL_OVERRIDE_KEY)
+    } else {
+      setSetting(db, { key: GLOBAL_MODEL_OVERRIDE_KEY, value: mode, updatedByUserId: req.user.id })
+    }
+  } catch (e) {
+    console.error('[admin/settings] global-model save failed:', e.message)
+    flash(req, 'error', '保存失败:' + e.message)
+    return res.redirect('/admin/settings')
+  }
+
+  audit(db, req, {
+    eventType: 'admin_global_model_override_changed',
+    userId: req.user.id,
+    actorUserId: req.user.id,
+    payload: { from: before.mode, to: mode },
+  })
+
+  const labels = {
+    off: '已关闭全局开关 — 恢复按各步骤配置',
+    codex: `已全平台强制 → ${GLOBAL_OVERRIDE_PRESETS.codex.label}(LaTeX 文件填充仍走 Claude)`,
+    claude: `已全平台强制 → ${GLOBAL_OVERRIDE_PRESETS.claude.label}`,
+  }
+  flash(req, 'success', labels[mode])
+  res.redirect('/admin/settings')
 })
 
 // ============================================================

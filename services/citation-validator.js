@@ -33,6 +33,87 @@
 const REC_PLACEHOLDER_RE = /\[(rec_[A-Za-z0-9_,;\s-]+)\]/g
 const REC_TOKEN_RE = /^rec_[A-Za-z0-9_-]+$/
 
+// ----------------------------------------------------------------------------
+// 2026-06-10 — 引文 ID 抄写纠错(transcription recovery)
+//   record_id 是 `rec_` + 32 位随机 hex。LLM 抄这种长随机串时偶尔会丢/错位几位
+//   (实测:把 rec_02117d7ff6c4dfebd8088917c106d2ab 中间 8 位漏掉,写成
+//    rec_02117d7ff8088917c106d2ab),导致精确比对判它"幻觉"——但其实是真纳入文献。
+//   既然两条不同真 id 的编辑距离 ~25+,而抄错版与其真源只差几位,做"唯一近似回收"
+//   极其安全:只在与某条 include 记录编辑距离很小、且明显唯一时,才纠正成真 id。
+// ----------------------------------------------------------------------------
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length
+  if (!m) return n
+  if (!n) return m
+  let prev = new Array(n + 1)
+  for (let j = 0; j <= n; j++) prev[j] = j
+  for (let i = 1; i <= m; i++) {
+    const cur = new Array(n + 1)
+    cur[0] = i
+    const ca = a.charCodeAt(i - 1)
+    for (let j = 1; j <= n; j++) {
+      const cost = ca === b.charCodeAt(j - 1) ? 0 : 1
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+    }
+    prev = cur
+  }
+  return prev[n]
+}
+
+/**
+ * 把"看似幻觉"的 token 尝试回收成 include 集里唯一近似的真 id。
+ * @param {Iterable<string>} tokens         待回收的 rec token
+ * @param {Set<string>|Array<string>} includeSet  合法 include id
+ * @returns {{ corrections: Record<string,string>, stillHallucinated: string[] }}
+ */
+export function recoverHallucinatedRecs(tokens, includeSet) {
+  const corrections = {}
+  const stillHallucinated = []
+  const includeArr = includeSet instanceof Set
+    ? Array.from(includeSet)
+    : (Array.isArray(includeSet) ? includeSet : [])
+  const okSet = includeSet instanceof Set ? includeSet : new Set(includeArr)
+  const toks = Array.from(new Set(Array.from(tokens || []).map((t) => String(t))))
+  if (!includeArr.length) return { corrections, stillHallucinated: toks }
+
+  const includeHex = includeArr.map((id) => ({ id, hex: id.replace(/^rec_/, '') }))
+
+  for (const tok of toks) {
+    if (okSet.has(tok)) continue   // 已合法
+    const hex = tok.replace(/^rec_/, '')
+    // 太短的 token 歧义太大,不回收(避免误纠)
+    if (hex.length < 16) { stillHallucinated.push(tok); continue }
+    let best = null, bestDist = Infinity, secondDist = Infinity
+    for (const cand of includeHex) {
+      if (Math.abs(cand.hex.length - hex.length) > 14) continue   // 长度差太大不可能是抄错
+      const d = levenshtein(hex, cand.hex)
+      if (d < bestDist) { secondDist = bestDist; bestDist = d; best = cand }
+      else if (d < secondDist) { secondDist = d }
+    }
+    // 阈值:与最佳 ≤ maxDist,且明显唯一(次佳比最佳远 ≥ 6,因随机 hex 互距 ~25+,真源永远孤立)
+    const maxDist = best ? Math.min(12, Math.ceil(best.hex.length * 0.45)) : 12
+    if (best && bestDist <= maxDist && (secondDist - bestDist) >= 6) {
+      corrections[tok] = best.id
+    } else {
+      stillHallucinated.push(tok)
+    }
+  }
+  return { corrections, stillHallucinated }
+}
+
+/** 把 content 里抄错的 rec id 整词替换成真 id。corrections: { 错id: 真id } */
+export function applyRecCorrections(content, corrections) {
+  if (typeof content !== 'string' || !content || !corrections) return content
+  let out = content
+  for (const bad of Object.keys(corrections)) {
+    const good = corrections[bad]
+    if (!bad || !good || bad === good) continue
+    out = out.split(bad).join(good)   // bad 是长唯一串,直接整串替换安全
+  }
+  return out
+}
+
 /**
  * @param {string} content      LLM content_markdown
  * @param {Set<string>|Array<string>} includeSet  合法 rec_id 集合
@@ -84,9 +165,14 @@ export function validateCitationsAgainstInclude(content, includeSet, citationMap
     }
   }
 
+  // 2026-06-10 — 对"看似幻觉"的做抄写纠错回收:与某条 include 唯一近似的 → 视为合法 + 记纠正映射
+  const { corrections, stillHallucinated } = recoverHallucinatedRecs(hallucinatedSet, okSet)
+  for (const bad of Object.keys(corrections)) legitimateSet.add(corrections[bad])
+
   // 去重 + 排序输出
   out.legitimate = Array.from(legitimateSet).sort()
-  out.hallucinated = Array.from(hallucinatedSet).sort()
+  out.hallucinated = Array.from(new Set(stillHallucinated)).sort()
+  out.corrections = corrections           // { 抄错id: 真id } — 供调用方改写 content
   out.in_text_count = count
   out.citation_map_orphans = Array.from(new Set(out.citation_map_orphans)).sort()
   return out

@@ -1245,8 +1245,16 @@ const pdfStorageDir = path.resolve(DATA_DIR, 'pdfs')
 const pdfUpload = multer({
   storage: multer.diskStorage({
     destination(req, _file, cb) {
-      try { fs.mkdirSync(pdfStorageDir, { recursive: true }) } catch {}
-      cb(null, pdfStorageDir)
+      // 2026-06-10 审计修复:mkdir 失败(权限/磁盘满)以前被空 catch 吞掉,
+      // multer 接着写文件失败但 attachment 行照常 INSERT → 下载 404、配额算错。
+      // 现在失败直接回给 multer → 上传请求返回 500,用户可感知。
+      try {
+        fs.mkdirSync(pdfStorageDir, { recursive: true })
+        cb(null, pdfStorageDir)
+      } catch (e) {
+        console.error('[records/pdf-upload] mkdir failed:', pdfStorageDir, e?.message)
+        cb(e)
+      }
     },
     filename(req, _file, cb) {
       // 直接用 record_id.pdf — 同 record 只会有一份单篇补传 PDF

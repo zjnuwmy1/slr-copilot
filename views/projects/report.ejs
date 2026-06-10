@@ -2896,7 +2896,10 @@
              //   "method 失败"自相矛盾
              const sRunStatus = (summary && summary.section_run_status) || null
              const sRunning = sRunStatus === 'running'
-             const sFailed = sRunStatus === 'failed' || sRunStatus === 'aborted_by_restart'
+             // 2026-06-02:retry_failed = 最新版重试失败但已回退到上一个成功版(内容仍在)。
+             //   这种情况不算"失败"(有可用内容),只温和提示;sFailed 只留给"真没内容"的失败。
+             const sRetryFailed = !!(summary && summary.retry_failed)
+             const sFailed = (sRunStatus === 'failed' || sRunStatus === 'aborted_by_restart') && !sRetryFailed
              const generated = !!(summary && (summary.version || 0) > 0
                                   && summary.status === 'generated'
                                   && !sFailed)
@@ -3010,6 +3013,10 @@
                 <% if (sFailed && summary) { %>
                   <div class="rounded-lg border border-rose-200 bg-rose-50/40 px-3 py-2 text-xs text-rose-800">
                     ⚠ 上次生成失败<% if (summary.section_run_error) { %>:<span class="font-mono"><%= summary.section_run_error %></span><% } %>。点 ↻ 重写按钮重试,或编辑章节名(避免 LLM 把不认识的 section 标 config_error)。
+                  </div>
+                <% } else if (sRetryFailed && summary) { %>
+                  <div class="rounded-lg border border-amber-200 bg-amber-50/50 px-3 py-2 text-xs text-amber-800">
+                    ↺ 上次重写失败<% if (summary.retry_failed_error) { %>(<span class="font-mono"><%= summary.retry_failed_error %></span>)<% } %>,已保留上一个成功版本(v<%= summary.version %>,内容如下)。可再点 ↻ 重试,内容不会丢。
                   </div>
                 <% } %>
                 <% if (generated && summary && summary.content_markdown) { %>

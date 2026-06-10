@@ -76,7 +76,7 @@ import {
   buildFigureUrl,
 } from '../../services/figure-assets.js'
 import { renderTableExport } from '../../services/review-tables.js'
-import { validateCitationsAgainstInclude } from '../../services/citation-validator.js'
+import { validateCitationsAgainstInclude, applyRecCorrections } from '../../services/citation-validator.js'
 import {
   loadCapabilities,
   saveCapabilities,
@@ -393,6 +393,8 @@ function listIncludedRecords(db, projectId) {
 // =============================================================================
 function computeCitationLintForSection(db, projectId, contentMarkdown, citationMap) {
   let hallucinatedRecs = []
+  let correctedContent = contentMarkdown   // 默认原样;若有抄写纠错则替换
+  let correctionCount = 0
   try {
     const included = listIncludedRecords(db, projectId)
     const includeSet = new Set(included.map((rec) => rec.id))
@@ -402,6 +404,13 @@ function computeCitationLintForSection(db, projectId, contentMarkdown, citationM
       Array.isArray(citationMap) ? citationMap : [],
     )
     hallucinatedRecs = result.hallucinated || []
+    // 2026-06-10 — 抄写纠错:把"抄错几位但唯一对应某条 include"的 [rec_xxx] 改写成真 id,
+    //   既清掉假"幻觉"告警,又让导出/预览能正常替换成正式引文。
+    const corrections = result.corrections || {}
+    if (Object.keys(corrections).length > 0) {
+      correctedContent = applyRecCorrections(contentMarkdown || '', corrections)
+      correctionCount = Object.keys(corrections).length
+    }
   } catch (e) {
     console.warn('[computeCitationLintForSection] citation validation failed:', e?.message)
   }
@@ -435,7 +444,7 @@ function computeCitationLintForSection(db, projectId, contentMarkdown, citationM
     console.warn('[computeCitationLintForSection] lint scan failed:', e?.message)
   }
 
-  return { hallucinatedRecs, lintWarnings }
+  return { hallucinatedRecs, lintWarnings, correctedContent, correctionCount }
 }
 
 function shortRecordLabel(r) {
@@ -471,12 +480,67 @@ function listLatestSections(db, projectId) {
   `).all(projectId, projectId)
   const map = {}
   for (const r of rows) {
-    map[r.section_name] = {
+    let entry = {
       ...r,
       citation_map: parseJsonArrayField(r.citation_map),
     }
+    // 2026-06-02 BUGFIX(失败重试覆盖成功版):若最新版是失败/空(重试 timeout / config_error
+    //   留下的空占位行),但存在更早的成功非空版本 → 内容回退到那条成功版,
+    //   只保留"上次重试失败"的提示信息(retry_failed_*),不让空失败行把可见内容挡住。
+    const latestIsBadEmpty = (!r.content_markdown || !String(r.content_markdown).trim())
+      && (r.section_run_status === 'failed' || r.section_run_status === 'aborted_by_restart')
+    if (latestIsBadEmpty) {
+      const prevGood = db.prepare(`
+        SELECT * FROM draft_sections
+         WHERE project_id = ? AND section_name = ?
+           AND content_markdown IS NOT NULL AND content_markdown != ''
+         ORDER BY version DESC LIMIT 1
+      `).get(projectId, r.section_name)
+      if (prevGood) {
+        entry = {
+          ...prevGood,
+          citation_map: parseJsonArrayField(prevGood.citation_map),
+          // 成功内容来自 prevGood,但记下最新一次重试失败的元信息供 UI 提示
+          retry_failed: true,
+          retry_failed_status: r.section_run_status,
+          retry_failed_error: r.section_run_error || null,
+          retry_failed_at: r.section_run_finished_at || r.section_run_started_at || null,
+          retry_failed_version: r.version,
+        }
+      }
+    }
+    map[r.section_name] = entry
   }
   return map
+}
+
+/**
+ * 2026-06-02 BUGFIX(导出丢章节):export.md / preview 过去硬编码 9 章
+ *   (title→abstract→intro→methods→results→discussion→limitations→conclusion),
+ *   用自定义 / 期刊模板章节名的项目(如 7 个主题章节)中间正文全被跳过 →
+ *   论文 introduction 直接跳到 discussion。
+ *
+ * buildManuscriptSectionOrder — 返回本项目"导出用的有序章节名列表",
+ *   权威顺序来自 getCustomSections(loadSectionsForProject:custom > journal template > fallback),
+ *   与 Step 8 生成时用的章节集合一致。references 不在内(由 exportReferencesSection 单出)。
+ *
+ * 返回 [{ name, isAnchor }]:isAnchor=true 表示是带"特殊插入物"的标准锚点章节
+ *   (methods 后插 PRISMA flow、results 后插 SoF 表);其余正文章节正常输出。
+ */
+const SCAN_ANCHOR_SECTIONS = ['title', 'abstract', 'introduction', 'methods', 'results', 'discussion', 'limitations', 'conclusion', 'declarations']
+function buildManuscriptSectionOrder(db, projectId) {
+  let names = []
+  try {
+    const cs = getCustomSections(db, projectId)
+    names = (Array.isArray(cs) ? cs : []).map((s) => s && s.name).filter(Boolean)
+  } catch { names = [] }
+  // references 单独渲染,排除
+  names = names.filter((n) => n !== 'references')
+  // 兜底:loadSectionsForProject 异常时回退标准锚点顺序(去 references)
+  if (names.length === 0) {
+    names = SCAN_ANCHOR_SECTIONS.slice()
+  }
+  return names
 }
 
 /**
@@ -4407,9 +4471,12 @@ router.post('/:id/report/generate-section/:section', (req, res) => {
         // P0.2 (2026-05-31):单章节直接生成也跑引文幻觉校验 + 占位 lint(与
         //   orchestrator 路径一致),把结果落 hallucinated_recs_json / lint_warnings_json,
         //   并把计数并进 section_run_meta,让 view / preview / export 都能 surface。
-        const { hallucinatedRecs, lintWarnings } = computeCitationLintForSection(
+        const { hallucinatedRecs, lintWarnings, correctedContent, correctionCount } = computeCitationLintForSection(
           db, projectId, contentMarkdown, citationMap,
         )
+        if (correctionCount > 0) {
+          console.warn(`[report/generate-section] section=${section} 抄写纠错 ${correctionCount} 个引文 id(抄错→真 id)`)
+        }
         if (hallucinatedRecs.length > 0) {
           console.warn(`[report/generate-section] section=${section} 检测到 ${hallucinatedRecs.length} 个幻觉引文:`, hallucinatedRecs)
         }
@@ -4419,10 +4486,11 @@ router.post('/:id/report/generate-section/:section', (req, res) => {
         const metaWithLint = {
           ...(meta || {}),
           hallucinated_count: hallucinatedRecs.length,
+          citation_corrections: correctionCount,
           lint_unknown_tables: lintWarnings?.unknown_tables?.length || 0,
           lint_unknown_figures: lintWarnings?.unknown_figures?.length || 0,
         }
-        // UPDATE 同一行(把 placeholder 填实)
+        // UPDATE 同一行(把 placeholder 填实)。写入**纠错后**的 content。
         db.prepare(
           `UPDATE draft_sections
               SET content_markdown = ?,
@@ -4439,7 +4507,7 @@ router.post('/:id/report/generate-section/:section', (req, res) => {
                   lint_warnings_json = ?
             WHERE id = ?`
         ).run(
-          contentMarkdown,
+          correctedContent,
           JSON.stringify(citationMap || []),
           model || null,
           promptVersion || null,
@@ -5291,11 +5359,13 @@ router.get('/:id/report/export.md', (req, res) => {
   const prismaMermaid = renderPrismaMermaid(prismaCounts).trim()
 
   // ── Phase D: 取每段正文 → 拼 combined 扫占位 → 拿编号映射 + 附录 ──
-  // 2026-05-26 加 declarations(PRISMA 24-27)— 让 [tbl:xxx]/[fig:xxx] 占位扫描也覆盖该段
-  const SECTION_ORDER_FOR_SCAN = [
-    'title', 'abstract', 'introduction', 'methods',
-    'results', 'discussion', 'limitations', 'conclusion', 'declarations',
-  ]
+  // 2026-06-02 BUGFIX:章节顺序改用动态 buildManuscriptSectionOrder(含自定义/期刊模板
+  //   章节名),不再硬编码 9 章 — 否则非标准主体章节(主题章节)会被整段丢掉。
+  //   扫描集合 = 动态正文章节 ∪ declarations(PRISMA 24-27 占位也要扫)。
+  const SECTION_ORDER_FOR_SCAN = Array.from(new Set([
+    ...buildManuscriptSectionOrder(db, project.id),
+    'declarations',
+  ]))
   const sectionTexts = {}
   for (const k of SECTION_ORDER_FOR_SCAN) {
     sectionTexts[k] = (sections[k]?.content_markdown || '').toString()
@@ -5340,75 +5410,52 @@ router.get('/:id/report/export.md', (req, res) => {
   }
   parts.push('')
 
-  // Title
-  if (trSections.title) {
-    parts.push(trSections.title)
-  } else {
-    parts.push(`# ${project.title}`)
+  // ── 2026-06-02:按动态章节顺序输出全部正文(修"自定义章节被丢"bug)──
+  //   特殊插入物:methods 段后插 PRISMA flow;results 段后插 SoF 表。
+  //   若项目没有显式 methods/results 章节(综述常把方法/结果融进主题章节),
+  //   则 PRISMA flow 在 introduction 后兜底插一次、SoF 在 discussion 前兜底插一次。
+  const bodyOrder = buildManuscriptSectionOrder(db, project.id)
+  let prismaInserted = false
+  let sofInserted = false
+  const pushPrismaFlow = () => {
+    parts.push('### PRISMA Flow Diagram'); parts.push('')
+    parts.push('```mermaid'); parts.push(prismaMermaid); parts.push('```'); parts.push('')
+    parts.push(renderPrismaTextSummary(prismaCounts, { lang: 'en' })); parts.push('')
+    prismaInserted = true
   }
+  const pushSoF = () => {
+    try {
+      const sofMd = renderSoFMarkdown(db, project.id)
+      if (sofMd && sofMd.trim()) { parts.push(sofMd); parts.push('') }
+    } catch (e) { console.error('[report/export.md] SoF render failed:', e.message) }
+    sofInserted = true
+  }
+
+  // Title 永远先(没有 title 章节时用 project.title 兜底)
+  if (trSections.title) parts.push(trSections.title)
+  else parts.push(`# ${project.title}`)
   parts.push('')
 
-  // Abstract
-  if (trSections.abstract) {
-    parts.push(trSections.abstract)
-    parts.push('')
-  }
-
-  // Introduction
-  if (trSections.introduction) {
-    parts.push(trSections.introduction)
-    parts.push('')
-  }
-
-  // Methods + PRISMA flow
-  if (trSections.methods) {
-    parts.push(trSections.methods)
-    parts.push('')
-  }
-  // PRISMA flow:Mermaid 块 + 文字表
-  parts.push('### PRISMA Flow Diagram')
-  parts.push('')
-  parts.push('```mermaid')
-  parts.push(prismaMermaid)
-  parts.push('```')
-  parts.push('')
-  parts.push(renderPrismaTextSummary(prismaCounts, { lang: 'en' }))
-  parts.push('')
-
-  // Results
-  if (trSections.results) {
-    parts.push(trSections.results)
-    parts.push('')
-  }
-
-  // Summary of Findings — GRADE 详细评估表(Phase 6.5)
-  try {
-    const sofMd = renderSoFMarkdown(db, project.id)
-    if (sofMd && sofMd.trim()) {
-      parts.push(sofMd)
+  for (const name of bodyOrder) {
+    if (name === 'title') continue   // 已单独处理
+    const tx = trSections[name]
+    // SoF 在 discussion 之前兜底插(若 results 锚点没出现过)
+    if (name === 'discussion' && !sofInserted) pushSoF()
+    if (tx && tx.trim()) {
+      parts.push(tx)
       parts.push('')
     }
-  } catch (e) {
-    console.error('[report/export.md] SoF render failed:', e.message)
+    // PRISMA flow:methods 后插;无 methods 时 introduction 后兜底
+    if ((name === 'methods' || (name === 'introduction')) && !prismaInserted) {
+      // methods 优先;若当前是 introduction 但后面还有 methods,则等 methods
+      if (name === 'methods' || !bodyOrder.includes('methods')) pushPrismaFlow()
+    }
+    // SoF:results 后插
+    if (name === 'results' && !sofInserted) pushSoF()
   }
-
-  // Discussion
-  if (trSections.discussion) {
-    parts.push(trSections.discussion)
-    parts.push('')
-  }
-
-  // Limitations
-  if (trSections.limitations) {
-    parts.push(trSections.limitations)
-    parts.push('')
-  }
-
-  // Conclusion
-  if (trSections.conclusion) {
-    parts.push(trSections.conclusion)
-    parts.push('')
-  }
+  // 兜底:整篇都没触发 PRISMA flow(无 intro/methods 章节)→ 在正文后补一次
+  if (!prismaInserted) pushPrismaFlow()
+  if (!sofInserted) pushSoF()
 
   // ── Phase D: Tables + Figures appendices(置于 References 之前)──
   if (postProc.tablesAppendix) {
@@ -5580,11 +5627,11 @@ router.get('/:id/report/preview', (req, res) => {
   const prismaMermaid = renderPrismaMermaid(prismaCounts).trim()
 
   // Phase D — post-process [tbl:]/[fig:] 占位
-  // 2026-05-26 加 declarations(PRISMA 24-27)— 让 [tbl:xxx]/[fig:xxx] 占位扫描也覆盖该段
-  const SECTION_ORDER_FOR_SCAN = [
-    'title', 'abstract', 'introduction', 'methods',
-    'results', 'discussion', 'limitations', 'conclusion', 'declarations',
-  ]
+  // 2026-06-02 BUGFIX:同 export.md — 用动态章节顺序,不再硬编码 9 章。
+  const SECTION_ORDER_FOR_SCAN = Array.from(new Set([
+    ...buildManuscriptSectionOrder(db, project.id),
+    'declarations',
+  ]))
   const sectionTexts = {}
   for (const k of SECTION_ORDER_FOR_SCAN) {
     sectionTexts[k] = (sections[k]?.content_markdown || '').toString()
@@ -5616,31 +5663,39 @@ router.get('/:id/report/preview', (req, res) => {
     trSections[k] = replaceFigTblInSection(sectionTexts[k], postProc.tableNum, postProc.figureNum)
   }
 
-  // 构造完整 markdown(跟 export.md 一致 — 不要发散)
+  // 构造完整 markdown(跟 export.md 一致 — 动态章节顺序,修"自定义章节被丢"bug)
   const parts = []
+  const bodyOrder = buildManuscriptSectionOrder(db, project.id)
+  let prismaInserted = false
+  let sofInserted = false
+  const pushPrismaFlow = () => {
+    parts.push('### PRISMA Flow Diagram'); parts.push('')
+    parts.push('```mermaid'); parts.push(prismaMermaid); parts.push('```'); parts.push('')
+    parts.push(renderPrismaTextSummary(prismaCounts, { lang: 'en' })); parts.push('')
+    prismaInserted = true
+  }
+  const pushSoF = () => {
+    try {
+      const sofMd = renderSoFMarkdown(db, project.id)
+      if (sofMd && sofMd.trim()) { parts.push(sofMd); parts.push('') }
+    } catch (e) { console.warn('[report/preview] SoF render failed:', e?.message) }
+    sofInserted = true
+  }
   if (trSections.title) parts.push(trSections.title)
   else parts.push(`# ${project.title}`)
   parts.push('')
-  if (trSections.abstract) { parts.push(trSections.abstract); parts.push('') }
-  if (trSections.introduction) { parts.push(trSections.introduction); parts.push('') }
-  if (trSections.methods) { parts.push(trSections.methods); parts.push('') }
-  parts.push('### PRISMA Flow Diagram')
-  parts.push('')
-  parts.push('```mermaid')
-  parts.push(prismaMermaid)
-  parts.push('```')
-  parts.push('')
-  parts.push(renderPrismaTextSummary(prismaCounts, { lang: 'en' }))
-  parts.push('')
-  if (trSections.results) { parts.push(trSections.results); parts.push('') }
-  // SoF (outcome-level GRADE summary)
-  try {
-    const sofMd = renderSoFMarkdown(db, project.id)
-    if (sofMd && sofMd.trim()) { parts.push(sofMd); parts.push('') }
-  } catch (e) { console.warn('[report/preview] SoF render failed:', e?.message) }
-  if (trSections.discussion) { parts.push(trSections.discussion); parts.push('') }
-  if (trSections.limitations) { parts.push(trSections.limitations); parts.push('') }
-  if (trSections.conclusion) { parts.push(trSections.conclusion); parts.push('') }
+  for (const name of bodyOrder) {
+    if (name === 'title') continue
+    const tx = trSections[name]
+    if (name === 'discussion' && !sofInserted) pushSoF()
+    if (tx && tx.trim()) { parts.push(tx); parts.push('') }
+    if ((name === 'methods' || name === 'introduction') && !prismaInserted) {
+      if (name === 'methods' || !bodyOrder.includes('methods')) pushPrismaFlow()
+    }
+    if (name === 'results' && !sofInserted) pushSoF()
+  }
+  if (!prismaInserted) pushPrismaFlow()
+  if (!sofInserted) pushSoF()
   if (postProc.tablesAppendix) { parts.push(postProc.tablesAppendix); parts.push('') }
   if (postProc.figuresAppendix) { parts.push(postProc.figuresAppendix); parts.push('') }
   // 2026-05-25 P2-16:支持 ?style=apa|ieee|chicago|mla|gbt7714 切换引文格式
@@ -6358,9 +6413,12 @@ async function runSectionInOrchestrator(db, { project, projectId, userId, sectio
       // 2026-05-25 P0-6 → 2026-05-31 P0.2:LLM 返回后立刻校验引文幻觉 + [tbl:]/[fig:]
       //   占位 lint。两件事都抽到 computeCitationLintForSection 共享 helper,
       //   单章节直接生成路径走同一套(见 finishSection)。
-      const { hallucinatedRecs, lintWarnings } = computeCitationLintForSection(
+      const { hallucinatedRecs, lintWarnings, correctedContent, correctionCount } = computeCitationLintForSection(
         db, projectId, r.contentMarkdown || '', r.citationMap,
       )
+      if (correctionCount > 0) {
+        console.warn(`[runSectionInOrchestrator] section=${section} 抄写纠错 ${correctionCount} 个引文 id(抄错→真 id)`)
+      }
       if (hallucinatedRecs.length > 0) {
         console.warn(`[runSectionInOrchestrator] section=${section} 检测到 ${hallucinatedRecs.length} 个幻觉引文:`, hallucinatedRecs)
       }
@@ -6384,7 +6442,7 @@ async function runSectionInOrchestrator(db, { project, projectId, userId, sectio
                 lint_warnings_json = ?
           WHERE id = ?`
       ).run(
-        r.contentMarkdown,
+        correctedContent,
         JSON.stringify(r.citationMap || []),
         r.model || null,
         r.promptVersion || null,
@@ -6397,6 +6455,7 @@ async function runSectionInOrchestrator(db, { project, projectId, userId, sectio
           from_orchestrator: true,
           drafting_system_version: r.systemVersion || null,
           hallucinated_count: hallucinatedRecs.length,
+          citation_corrections: correctionCount,
           lint_unknown_tables: lintWarnings?.unknown_tables?.length || 0,
           lint_unknown_figures: lintWarnings?.unknown_figures?.length || 0,
         }),
@@ -8217,6 +8276,45 @@ router.post('/:id/report/latex/render', (req, res) => {
         console.warn('[latex/render BG] defensive image opts injection threw:', e?.message)
       }
 
+      // 2026-06-02 — defensive: 去重 \bibliographystyle(修真实渲染"假失败")
+      //   症状:bibtex 报 "Illegal, another \bibstyle command" → 返回非零 → latexmk exit 12
+      //   判失败,尽管 PDF 已正确生成。根因:MDPI 等模板的 .cls 已内置
+      //   \bibliographystyle{Definitions/mdpi}(\documentclass{mdpi} 自动调用),Claude 在
+      //   正文又写了一个 \bibliographystyle{mdpi} → main.aux 出现两条 \bibstyle。
+      //   策略:若模板用 MDPI class / .cls 已设 bibstyle,删掉 Claude 在 body 里写的所有
+      //   \bibliographystyle{...};否则(模板没 class 内置)只保留第一个,删多余的。
+      try {
+        const bibStyleRe = /^[ \t]*\\bibliographystyle\s*\{[^}]*\}[ \t]*\r?\n?/gm
+        const occurrences = (texToWrite.match(bibStyleRe) || [])
+        // class 内置 bibstyle 的迹象(MDPI Definitions/mdpi 是最常见;通用 mdpi class 也算)
+        const classProvidesBibStyle =
+          /\\documentclass(\[[^\]]*\])?\{\s*mdpi\s*\}/.test(texToWrite) ||
+          /Definitions\/mdpi/.test(texToWrite)
+        let bibStyleStrips = 0
+        if (occurrences.length > 0 && classProvidesBibStyle) {
+          // class 已提供 → 删掉 body 里所有显式 \bibliographystyle
+          texToWrite = texToWrite.replace(bibStyleRe, () => { bibStyleStrips++; return '' })
+        } else if (occurrences.length > 1) {
+          // 无 class 内置但写了多个 → 只留第一个,删其余
+          let seen = false
+          texToWrite = texToWrite.replace(bibStyleRe, (m) => {
+            if (!seen) { seen = true; return m }
+            bibStyleStrips++; return ''
+          })
+        }
+        if (bibStyleStrips > 0) {
+          console.log(`[latex/render BG] defensive bibstyle dedup: removed ${bibStyleStrips} duplicate \\bibliographystyle (class_provides=${classProvidesBibStyle})`)
+          auditBg('latex_render_bibstyle_dedup', {
+            render_id: renderId,
+            removed_n: bibStyleStrips,
+            class_provides_bibstyle: classProvidesBibStyle,
+            occurrences_total: occurrences.length,
+          })
+        }
+      } catch (e) {
+        console.warn('[latex/render BG] defensive bibstyle dedup threw:', e?.message)
+      }
+
       // 2026-05-27 v6.1 — defensive: strip "Table 1a. / Table 1b. ..." prefix from
       //   longtable in-table sub-section dividers. 数据源 tables/table1.md 用
       //   "### Table 1a / 1b / ..." 给 sub-themes 命名,Claude 容易 verbatim 写进
@@ -8478,6 +8576,12 @@ router.post('/:id/report/latex/render', (req, res) => {
       const ALLOWED_TPL_EXTS = ['.cls', '.sty', '.bst', '.bib', '.def', '.clo',
                                 '.eps', '.pdf', '.png', '.jpg', '.jpeg', '.tex',
                                 '.fd', '.cfg', '.ldf', '.dfu']
+      // 2026-06-09 — 类/宏包/字体定义类文件 LaTeX 按**名字**在 main.tex 同级目录(或 TEXINPUTS)
+      //   找,不会进子目录找。很多期刊模板 zip 把所有文件套在一个顶层子目录里
+      //   (如 Optimal-Design-layout/USG.cls),保留结构复制会让 USG.cls 落到 workDir 子目录,
+      //   而 main.tex 在 workDir 根 → \documentclass{USG} 找不到 USG.cls → pdflatex fatal。
+      //   修复:这些"必须按名可寻"的文件**额外平铺一份到 workDir 根**(图片仍按相对路径保留嵌套)。
+      const FLATTEN_TO_ROOT_EXTS = new Set(['.cls', '.sty', '.bst', '.def', '.clo', '.fd', '.cfg', '.ldf', '.dfu', '.bib'])
       const RESERVED_NAMES = new Set(['main.tex', 'references.bib'])    // 不覆盖
       async function copyTemplateTree(srcDir, dstDir, relPrefix = '') {
         let entries = []
@@ -8502,6 +8606,15 @@ router.post('/:id/report/latex/render', (req, res) => {
           } catch (e) {
             console.warn(`[latex/render] copy template asset failed: ${relName}`, e?.message)
           }
+          // 额外:类/宏包类文件平铺一份到 workDir 根(若它本来就在根则跳过,避免自拷自)
+          if (FLATTEN_TO_ROOT_EXTS.has(ext) && path.resolve(dstDir) !== path.resolve(workDir) && !RESERVED_NAMES.has(entry.name)) {
+            try {
+              const rootDst = path.join(workDir, entry.name)
+              if (!fs.existsSync(rootDst)) await fsp.copyFile(srcPath, rootDst)
+            } catch (e) {
+              console.warn(`[latex/render] flatten template asset to root failed: ${relName}`, e?.message)
+            }
+          }
         }
       }
       try {
@@ -8513,6 +8626,69 @@ router.post('/:id/report/latex/render', (req, res) => {
         console.warn('[latex/render] copy template static assets failed:', e?.message)
       }
 
+      // ── 6b. 解决"模板套在单层子目录里"的相对路径问题 ──
+      //   2026-06-09 — 期刊模板 zip 常把所有文件(.cls / .sty / images/ / Fonts/)
+      //   套在一个顶层子目录里(如 Optimal-Design-layout/)。上面 copyTemplateTree 保留结构复制,
+      //   会让 USG.cls 落到 workDir/Optimal-Design-layout/USG.cls、logo 落到
+      //   workDir/Optimal-Design-layout/images/Wiley_logo.eps —— 而 main.tex 在 workDir 根,
+      //   \documentclass{USG} 找不到 .cls、\includegraphics{Wiley_logo.eps}(\graphicspath
+      //   {./images/})也找不到图 → pdflatex fatal。
+      //   修复:找到**含 .cls 的目录**,把它的全部内容(保留内部 images/ Fonts/ 结构)
+      //   平铺一份到 workDir 根(no-clobber,不覆盖已生成的 main.tex / figures / references.bib)。
+      //   这样 .cls 在 main.tex 同级、模板自带 images/ 落到 ./images/(匹配 graphicspath)。
+      try {
+        const srcRoot = project.latex_template_extract_dir
+        if (srcRoot && fs.existsSync(srcRoot)) {
+          const SKIP_DIRS = new Set(['__MACOSX', '.git', 'node_modules'])
+          // 收集所有含 .cls 的目录
+          const clsDirs = []
+          const findClsDirs = (dir) => {
+            let ents = []
+            try { ents = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+            let hasCls = false
+            for (const e of ents) {
+              if (e.isDirectory()) {
+                if (SKIP_DIRS.has(e.name)) continue
+                findClsDirs(path.join(dir, e.name))
+              } else if (e.isFile() && path.extname(e.name).toLowerCase() === '.cls') {
+                hasCls = true
+              }
+            }
+            if (hasCls) clsDirs.push(dir)
+          }
+          findClsDirs(srcRoot)
+          // 把每个 .cls 所在目录的内容平铺到 workDir 根(保留内部子目录结构)
+          const RESERVED = new Set(['main.tex', 'references.bib'])
+          const copyContentsNoClobber = async (src, dst) => {
+            let ents = []
+            try { ents = fs.readdirSync(src, { withFileTypes: true }) } catch { return }
+            for (const e of ents) {
+              if (SKIP_DIRS.has(e.name)) continue
+              const s = path.join(src, e.name)
+              const d = path.join(dst, e.name)
+              if (e.isDirectory()) {
+                try { await ensureLatexDir(d) } catch {}
+                await copyContentsNoClobber(s, d)
+              } else if (e.isFile()) {
+                if (dst === workDir && RESERVED.has(e.name)) continue
+                if (fs.existsSync(d)) continue   // no-clobber:不覆盖已生成内容
+                try { await fsp.copyFile(s, d) } catch (e2) { /* 单文件失败不阻断 */ }
+              }
+            }
+          }
+          for (const cd of clsDirs) {
+            // .cls 已在 srcRoot 顶层 → copyTemplateTree 已把它放到 workDir 根,无需再平铺
+            if (path.resolve(cd) === path.resolve(srcRoot)) continue
+            await copyContentsNoClobber(cd, workDir)
+          }
+          if (clsDirs.some((cd) => path.resolve(cd) !== path.resolve(srcRoot))) {
+            console.log(`[latex/render BG] flattened nested template dir(s) to workDir root: ${clsDirs.map((c) => path.basename(c)).join(', ')}`)
+          }
+        }
+      } catch (e) {
+        console.warn('[latex/render] flatten nested template dir failed:', e?.message)
+      }
+
       // ── 7. Run pdflatex ──
       const pdfRes = await runPdflatex({
         workDir,
@@ -8520,7 +8696,31 @@ router.post('/:id/report/latex/render', (req, res) => {
         timeoutMs: 120_000,
       })
 
-      if (!pdfRes.ok) {
+      // 2026-06-02 / 2026-06-09 — "假失败"兜底:latexmk 退出码非零,但 **main.pdf 文件已生成**。
+      //   关键判据改为"PDF 是否真的产出",而不是"log 里有没有 `! ` 行":
+      //   - 真正致命的错误(如 \documentclass 缺失 / 图片找不到)会让 pdflatex
+      //     "Fatal error occurred, no output PDF file produced" → **不留 main.pdf** → pdfPath 为空 → 不降级(正确判失败)。
+      //   - 可恢复错误(表格 Extra alignment tab、undefined citation、bibtex .bst 警告等)
+      //     会留下 `! ` 行**但 PDF 照样产出** → 应当降级为 success(版式可能有小瑕疵),不浪费整次渲染。
+      //   因此:只要 main.pdf 存在 + 非超时 + 非缺工具链,就降级;若 log 有 `! ` 行,附带"版式可能有瑕疵"警告。
+      let salvagedSuccess = false
+      let salvageHasRecoverable = false
+      if (!pdfRes.ok && pdfRes.pdfPath && !pdfRes.killed && !pdfRes.missing_toolchain) {
+        try {
+          if (pdfRes.logPath) {
+            const logTxt = await fsp.readFile(pdfRes.logPath, 'utf8')
+            salvageHasRecoverable = /\n!\s/.test('\n' + logTxt)
+          }
+        } catch { /* 读不到 log 不影响降级判定 — PDF 已存在 */ }
+        salvagedSuccess = true
+        console.warn(`[latex/render BG] latexmk exit=${pdfRes.exitCode} but main.pdf exists → salvaging as success (recoverableErrors=${salvageHasRecoverable}, render ${renderId})`)
+        auditBg('latex_render_salvaged', {
+          render_id: renderId, exit_code: pdfRes.exitCode,
+          note: salvageHasRecoverable ? 'pdf_ok_with_recoverable_errors' : 'pdf_ok_nonzero_exit_no_fatal',
+        })
+      }
+
+      if (!pdfRes.ok && !salvagedSuccess) {
         const errPrefix = pdfRes.missing_toolchain
           ? 'pdflatex / latexmk 未安装(prod 需要 TeX Live 2023)\n'
           : (pdfRes.killed ? 'pdflatex 超时(>120s)被强杀\n' : `pdflatex 失败 exit=${pdfRes.exitCode}\n`)

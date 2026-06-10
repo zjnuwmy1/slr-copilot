@@ -95,7 +95,7 @@ The user uploaded the full text of one published article from a target journal t
    - NO markdown code fence (no \`\`\`json … \`\`\`).
    - NO text before or after the JSON.
 3. **No fabrication.** Only output what the supplied PDF text actually contains. If a field cannot be determined (e.g. no figures present), emit empty string or empty array — never fake values.
-4. **sections array** lists the article's actual top-level sections in the order they appear (typically Abstract / Introduction / (Literature Review) / Methods / Results / Discussion / (Limitations) / Conclusion / References; some journals merge or split). Use the journal's actual section names (translated to English), not a generic IMRaD assumption.
+4. **sections array** lists the article's actual top-level sections in the order they appear (typically Abstract / Introduction / (Literature Review) / Methods / Results / Discussion / (Limitations) / Conclusion / References; some journals merge or split). Use the journal's actual section names (translated to English), not a generic IMRaD assumption. **List EVERY top-level numbered section from the first through the final Conclusion — do NOT stop early and do NOT omit later sections even when they structurally resemble an earlier one** (e.g. a second/third Case Study, multiple sub-studies, an additional Discussion). If the supplied text appears truncated before the end, still emit every section you can see and note the truncation in \`structure_notes\`.
 5. **Cross-discipline.** Do not assume any specific discipline. Adapt section vocabulary to whatever the source article uses (e.g. "Materials and Methods" vs "Methods"; "Theoretical Framework" vs "Literature Review").
 6. **word_count_estimate** is integer words of body prose in that section (exclude headings, captions, in-text citations as standalone words). 0 if you cannot estimate.
 7. **citation_behavior (per-section)** — Count in-text citation markers in each section yourself ([N] / (Author, YYYY) / superscript). \`density\` buckets: none = 0, sparse = 1-3, moderate = 4-10, heavy = 11-30, very_heavy = >30. This is CRITICAL because different journals have very different per-section conventions:
@@ -181,8 +181,12 @@ export async function extractJournalTemplate(db, { projectId, userId, pdfPath, p
     }
   }
 
-  // 控制送 LLM 的字符上限(避免长 PDF 把 prompt 撑爆)
-  const MAX_CHARS = 60_000   // ~15K tokens 估算
+  // 控制送 LLM 的字符上限(避免超长 PDF 把 prompt 撑爆)。
+  // 2026-06-10 — 旧值 60K 太保守:18 页双栏密排论文全文 > 60K,前 60K 大约只到正文一半,
+  //   导致后段章节(如第二个案例研究 + Conclusions)整段被截掉、LLM 根本没看到 → sections 漏抽。
+  //   现在抽取走 model:'heavy'(Claude Opus 4.8 / gpt-5.5,均为超长上下文),200K 字符
+  //   (~50K tokens)对它们毫无压力,足以容纳 30+ 页论文全文。
+  const MAX_CHARS = 200_000
   const fullText = parsed.text.length > MAX_CHARS
     ? parsed.text.slice(0, MAX_CHARS) + '\n\n[... 后文已截断,原 PDF 共 ' + parsed.text.length + ' 字符 ...]'
     : parsed.text

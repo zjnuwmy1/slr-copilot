@@ -13,6 +13,9 @@ export function initDb() {
   const db = new Database(DB_PATH)
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
+  // 2026-06-10 审计修复:better-sqlite3 默认 busy_timeout=0,后台 LLM 任务与网页请求
+  // 并发写时会立刻抛 SQLITE_BUSY("database is locked")。等 5s 再失败,配合 WAL 消除偶发锁错。
+  db.pragma('busy_timeout = 5000')
 
   const schema = fs.readFileSync(SCHEMA_PATH, 'utf8')
   db.exec(schema)
@@ -1216,4 +1219,16 @@ function runMigrations(db) {
     if (!pcols.includes('webhook_url'))
       db.exec(`ALTER TABLE projects ADD COLUMN webhook_url TEXT`)
   } catch (e) { console.warn('[M38 projects autonomous_mode/webhook_url]:', e?.message) }
+
+  // ── M39 (2026-06-10 性能审计):高频查询缺索引,全表扫随数据增长线性变慢 ──
+  //   draft_sections(project_id, section_name):报告页/编排器按节取最新 version 的主路径
+  //   usage_logs(project_id, started_at):配额/用量统计按项目+时间倒序
+  //   usage_logs(user_id, started_at):per-user 用量视图
+  //   screening_decisions(project_id, stage, human_decision):筛选进度统计 COUNT
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_draft_sections_proj_name ON draft_sections(project_id, section_name)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_logs_proj_started ON usage_logs(project_id, started_at)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_usage_logs_user_started ON usage_logs(user_id, started_at)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_screening_proj_stage_decision ON screening_decisions(project_id, stage, human_decision)`)
+  } catch (e) { console.warn('[M39 perf indexes]:', e?.message) }
 }

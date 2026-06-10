@@ -48,7 +48,7 @@ const LIGHT_MODEL = {
   openai: process.env.OPENAI_MODEL_LIGHT || 'gpt-5.4-mini',
 }
 
-import { resolveStepModel, resolveStepReasoning, getSetting, inferProviderFromModelName } from './settings.js'
+import { resolveStepModel, resolveStepReasoning, getSetting, inferProviderFromModelName, getGlobalModelOverride } from './settings.js'
 import { getEffectiveConfigForUser as stepPresetsGetEffectiveConfigForUser } from './step-presets.js'
 
 /**
@@ -398,10 +398,20 @@ export async function runLlm(db, opts) {
   //    否则 pickCredential 会默认拿 anthropic,后续 resolveStepModel 看到
   //    gpt-5.5 不在 anthropic 列表 → 跨 provider 翻译成 claude-opus 系列,
   //    用户的 OpenAI 选择被静默改成 Claude。
+  // 全局模型开关(一键切换整平台 provider/model)。读一次,贯穿凭证选择 + 模型解析。
+  // mode='codex'  → 强制 openai + gpt-5.5;mode='claude' → 强制 anthropic + claude-opus-4-8;
+  // mode='off'    → 走原有 preset / step_model 解析(默认)。凌驾一切(含调用方硬编码 model)。
+  const globalOverride = (() => {
+    try { return getGlobalModelOverride(db) } catch { return { mode: 'off', provider: null, model: null } }
+  })()
+
   // 决定 effective preferredProvider — 用于 pickCredential 优先抓哪家凭证。
-  // 优先级:调用方显式 preferredProvider > 用户 preset 配置的模型推断 > 旧 system_settings 推断
+  // 优先级:全局开关 > 调用方显式 preferredProvider > 用户 preset 配置的模型推断 > 旧 system_settings 推断
   let effectivePreferredProvider = preferredProvider
-  if (!effectivePreferredProvider && actionType) {
+  if (globalOverride.mode !== 'off') {
+    // 全局开关最高优先 — 直接钉死目标 provider(覆盖调用方传入的 preferredProvider)
+    effectivePreferredProvider = globalOverride.provider
+  } else if (!effectivePreferredProvider && actionType) {
     try {
       // 1) 用户 preset 里这个 step 配的什么型号?反查 provider
       if (userId) {
@@ -469,7 +479,13 @@ export async function runLlm(db, opts) {
 
   // 4. 解析模型 + 思考强度(后者会自动按 provider 翻译)
   //    传 userId — 解析时会优先看用户的 step_model preset(高性能/平衡/经济)
-  const model = resolveModel(db, { model: modelHint, provider: cred.provider, actionType, userId })
+  let model = resolveModel(db, { model: modelHint, provider: cred.provider, actionType, userId })
+  // 全局开关:若开启且选中的凭证 provider 与目标一致,强制钉死模型(凌驾 alias / 硬编码具体型号)。
+  //   只有 cred.provider 真的匹配时才覆盖 —— 防御 pickCredential 因目标 provider 凭证缺失而回退到
+  //   另一家时,不会把 gpt-5.5 误塞给 anthropic 凭证(那会直接报错)。
+  if (globalOverride.mode !== 'off' && globalOverride.model && cred.provider === globalOverride.provider) {
+    model = globalOverride.model
+  }
   const reasoning = (() => {
     try { return resolveStepReasoning(db, { actionType, provider: cred.provider, userId }) }
     catch { return null }

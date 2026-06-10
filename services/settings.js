@@ -156,6 +156,37 @@ export function listAllSettings(db) {
 }
 
 // ============================================================
+// 全局模型开关(一键切换整平台 LLM 生成 provider/model)
+// ============================================================
+//
+// system_settings.global_model_override ∈ { '' | 'off' | 'codex' | 'claude' }
+//   - 'codex'  → 全平台强制 OpenAI Codex GPT-5.5(凌驾所有 preset / step_model / 硬编码 model)
+//   - 'claude' → 全平台强制 Anthropic Claude Opus 4.8
+//   - ''/'off' → 关闭,按各步骤原有 preset / step_model 配置解析(默认)
+//
+// ⚠ 唯一豁免:LaTeX 文件填充(runFileOpsLlm)结构上锁定 Claude CLI file-ops,
+//   不受此开关影响(codex 没有等价的文件操作适配器)。这是排版步骤,非内容生成。
+
+export const GLOBAL_MODEL_OVERRIDE_KEY = 'global_model_override'
+
+export const GLOBAL_OVERRIDE_PRESETS = {
+  codex: { provider: 'openai', model: 'gpt-5.5', label: 'Codex GPT-5.5' },
+  claude: { provider: 'anthropic', model: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+}
+
+/**
+ * 读全局模型开关。永不 throw。
+ * @returns {{ mode: 'off'|'codex'|'claude', provider: string|null, model: string|null, label: string|null }}
+ */
+export function getGlobalModelOverride(db) {
+  let v = ''
+  try { v = (getSetting(db, GLOBAL_MODEL_OVERRIDE_KEY) || '').trim().toLowerCase() } catch { /* 表缺失 → off */ }
+  const preset = GLOBAL_OVERRIDE_PRESETS[v]
+  if (preset) return { mode: v, provider: preset.provider, model: preset.model, label: preset.label }
+  return { mode: 'off', provider: null, model: null, label: null }
+}
+
+// ============================================================
 // Step model resolver — 这是 llm.js 真正调的
 // ============================================================
 

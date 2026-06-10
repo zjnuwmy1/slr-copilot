@@ -604,13 +604,36 @@ function bibSanitize(s) {
     }
   }
 
-  return txt
+  txt = txt
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/\\/g, '\\textbackslash{}')
     .replace(/([&%#$_])/g, '\\$1')
     .replace(/\{/g, '\\{')
     .replace(/\}/g, '\\}')
-    .trim()
+
+  // 2026-06-03 \u2014 \u901a\u7528\u975e Latin-1 \u7b26\u53f7\u6e05\u6d17\u3002pdflatex(\u9ed8\u8ba4\u5f15\u64ce\uff0c\u65e0 unicode-math)\u5bf9
+  //   \u4efb\u4f55 U+0100 \u4ee5\u4e0a\u5b57\u7b26\u90fd\u4f1a fatal \"Unicode character X not set up for use with LaTeX\"\u3002
+  //   WoS/Scopus \u6807\u9898\u91cc\u5e38\u89c1 \u2606 \u2605 \u2020 \u2021 \u00a7(\u671f\u520a\u7528\u4f5c open-access / footnote \u6807\u8bb0)\u3002
+  //   \u9ad8\u9891\u5b66\u672f\u7b26\u53f7 \u2192 LaTeX \u5b89\u5168\u7b49\u4ef7\u7269\uff1b\u5176\u4f59\u975e Latin-1 \u4e00\u5f8b\u5265\u6210\u7a7a\u683c\u3002
+  const SYMBOL_MAP = {
+    '\u2606': '', '\u2605': '', '\u2726': '', '\u2736': '', '\u22c6': '',
+    '\u2020': '\\dag{}', '\u2021': '\\ddag{}', '\u00a7': '\\S{}', '\u00b6': '\\P{}',
+    '\u2014': '---', '\u2013': '--', '\u2212': '-', '\u2010': '-', '\u2011': '-',
+    '\u201c': '``', '\u201d': "''", '\u2018': '`', '\u2019': "'", '\u201e': ',,',
+    '\u00ab': '``', '\u00bb': "''",
+    '\u2026': '...', '\u2022': '\\textbullet{}', '\u00b7': '\\textperiodcentered{}',
+    '\u00d7': '\\texttimes{}', '\u00f7': '\\textdiv{}', '\u00b1': '\\textpm{}',
+    '\u00b0': '\\textdegree{}', '\u2032': "'", '\u2033': "''", '\u20ac': '\\texteuro{}',
+    '\u2192': '$\\rightarrow$', '\u2190': '$\\leftarrow$', '\u2194': '$\\leftrightarrow$',
+    '\u2248': '$\\approx$', '\u2264': '$\\leq$', '\u2265': '$\\geq$', '\u2260': '$\\neq$',
+    '\u00a0': ' ', '\u200b': '', '\u200c': '', '\u200d': '', '\ufeff': '',
+  }
+  txt = txt.replace(/[^\u0000-\u00ff]/g, (ch) => {
+    if (Object.prototype.hasOwnProperty.call(SYMBOL_MAP, ch)) return SYMBOL_MAP[ch]
+    return ' '   // \u5176\u4f59\u4efb\u4f55\u975e Latin-1 \u5b57\u7b26\uff1a\u5265\u6210\u7a7a\u683c\uff0c\u7edd\u4e0d\u8ba9 pdflatex \u649e fatal
+  })
+
+  return txt.replace(/\s+/g, ' ').trim()
 }
 
 function formatAuthorsForBib(authorsJson, authorsText) {
@@ -919,9 +942,7 @@ export function assembleSectionsIntoTemplate({
     warnings.push('Template has no \\begin{document} — using whole template as preamble')
   }
 
-  // 2) Check if preamble has \bibliographystyle / \bibliography — if not, we'll add at end
-  const hasBibStyle = /\\bibliographystyle\s*\{/.test(preamble)
-  const hasBibliography = /\\bibliography\s*\{/.test(tpl) || /\\printbibliography/.test(tpl)
+  // 2) Bibliography 检测下移到 §4(统一计算,避免重复 \bibliographystyle)。
 
   // 3) Compose body
   const bodyLines = []
@@ -940,30 +961,38 @@ export function assembleSectionsIntoTemplate({
   }
 
   // 4) Bibliography section
-  if (!hasBibliography) {
-    bodyLines.push('% ============================================================')
-    bodyLines.push('% References (auto-appended; runner writes references.bib)')
-    bodyLines.push('% ============================================================')
-    if (!hasBibStyle) {
-      bodyLines.push(`\\bibliographystyle{${bibStyle}}`)
-    }
-    bodyLines.push('\\bibliography{references}')
-    bodyLines.push('')
+  //   2026-06-02 BUGFIX(假失败 "Illegal, another \bibstyle command"):
+  //     旧逻辑在"模板已有 bibliography"分支里仍无条件再 push 一组
+  //     \bibliographystyle + \bibliography → main.aux 出现两条 \bibstyle → bibtex 报
+  //     illegal、返回非零 → latexmk exit 12 判失败(尽管 PDF 已正确生成 15 页)。
+  //     而且 MDPI 等模板的 \bibliographystyle 写在 .cls 类文件里(\documentclass{mdpi}
+  //     自动 \bibliographystyle{Definitions/mdpi}),preamble 文本里检测不到 → hasBibStyle=false
+  //     → 又叠加一个。
+  //   规则:body 重新生成,所以 \bibliography 必须有(没有就不会有参考文献);
+  //     但 \bibliographystyle 只在「模板自身没有(class 内置 / preamble / 正文都没有)」时才补,
+  //     且最多补一次。检测扩展到整模板 + .cls 内置常见情形。
+  const tplHasBibStyle =
+    /\\bibliographystyle\s*\{/.test(tpl) ||                       // 模板任意位置显式声明
+    /\\documentclass[^]*\{\s*mdpi\s*\}/.test(tpl) ||             // MDPI class 内置 bibstyle
+    /Definitions\/mdpi/.test(tpl)                                // MDPI Definitions 路径迹象
+  const usesBiblatex = /\\usepackage(\[[^\]]*\])?\{\s*biblatex\s*\}/.test(tpl) || /\\printbibliography/.test(tpl)
+
+  bodyLines.push('% ============================================================')
+  bodyLines.push('% References (assembler-managed; runner writes references.bib)')
+  bodyLines.push('% ============================================================')
+  if (usesBiblatex) {
+    // biblatex 流:用 \printbibliography(只在模板没自带时补)
+    if (!/\\printbibliography/.test(tpl)) bodyLines.push('\\printbibliography')
   } else {
-    // Template already has bibliography commands somewhere — we trust it
-    // But the per-section emit won't have included them, so we still need to.
-    // Search preamble for inline bib; if found there, skip.
-    if (!hasBibliography) {
-      warnings.push('Template references bibliography but neither \\bibliography{} nor \\printbibliography found — adding fallback')
+    // 传统 bibtex 流:\bibliographystyle 仅当模板/class 都没有时补,且只补一次
+    if (!tplHasBibStyle) {
       bodyLines.push(`\\bibliographystyle{${bibStyle}}`)
-      bodyLines.push('\\bibliography{references}')
+    } else {
+      warnings.push('Template/class already sets \\bibliographystyle — not duplicating (avoids bibtex "Illegal, another \\bibstyle").')
     }
-    // Otherwise: assume template has it — but template's bib reference was BEFORE \end{document},
-    //   which we're now generating fresh. So always re-add to be safe.
-    bodyLines.push(`\\bibliographystyle{${bibStyle}}`)
     bodyLines.push('\\bibliography{references}')
-    bodyLines.push('')
   }
+  bodyLines.push('')
 
   // 5) Final assembly
   const out = []

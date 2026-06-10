@@ -357,6 +357,22 @@ app.use((err, req, res, _next) => {
   res.status(500).render('error', { title: 'Server Error', message: '服务器内部错误', requestId: reqId })
 })
 
+// ── 2026-06-10 审计修复:进程级兜底 ──
+//   后台 setImmediate 闭包(screening/matrix/rob/synthesis 批量、LaTeX 渲染)若内部漏了
+//   try-catch,async 异常会变成 unhandledRejection —— Node ≥15 默认直接杀进程,
+//   所有 in-flight 任务戛然而止且无日志。这里:
+//   - unhandledRejection:记日志 + 继续运行(单个后台任务失败不应拖死整个服务;
+//     卡 running 的 batch_jobs 行由用户重试或下次重启的 boot_id 收尸逻辑处理)
+//   - uncaughtException:记日志 + 退出(同步异常后进程状态不可信,交给 systemd 拉起,
+//     启动时 M20 boot_id 逻辑会把 stale running 任务标 aborted_by_restart + can_retry)
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] unhandledRejection:', reason?.stack || reason)
+})
+process.on('uncaughtException', (err) => {
+  console.error('[process] uncaughtException (exiting, systemd will restart):', err?.stack || err)
+  process.exit(1)
+})
+
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`[slr-copilot] listening on 127.0.0.1:${PORT}`)
 })
