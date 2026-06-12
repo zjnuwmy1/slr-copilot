@@ -846,6 +846,9 @@ LANGUAGE — HARD CONSTRAINT:
   const prismaFlowText = [
     `Identification — records identified from databases: ${identifiedTotal}${dbCount ? ` (${dbCount} database(s): ${dbBreakdown})` : ''}`,
     `Duplicates removed: ${counts.duplicates_removed || 0}`,
+    (counts.records_not_retrieved || 0) > 0
+      ? `Records removed before screening — not retrieved/exported: ${counts.records_not_retrieved}`
+      : '',
     `Records screened (title/abstract): ${counts.records_screened || 0}`,
     `Records excluded after title/abstract: ${counts.excluded_title_abstract || 0}`,
     `Reports/full-text articles assessed for eligibility: ${counts.full_text_assessed || 0}`,
@@ -953,7 +956,7 @@ LANGUAGE — HARD CONSTRAINT:
         `Draw a "study selection funnel" for a systematic literature review, visualising the PRISMA 2020 numbers:`,
         ``,
         `1. Records identified: ${counts.records_identified_total}`,
-        `2. After duplicates removed: ${counts.records_screened} (removed ${counts.duplicates_removed})`,
+        `2. After duplicates removed: ${counts.records_screened} (duplicates ${counts.duplicates_removed}${(counts.records_not_retrieved || 0) > 0 ? `, not retrieved ${counts.records_not_retrieved}` : ''})`,
         `3. Title / abstract excluded: ${counts.excluded_title_abstract}`,
         `4. Full-text assessed: ${counts.full_text_assessed}`,
         `5. Full-text excluded: ${counts.full_text_excluded}`,

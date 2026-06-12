@@ -7837,6 +7837,12 @@ router.post('/:id/report/latex/render', (req, res) => {
       function normalizeSectionKey(s) {
         return String(s || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ')
       }
+      // 自定义章节名 → 文件名安全的桶名(截断防超长文件名)
+      function sanitizeBucketName(rawName) {
+        const s = String(rawName || '').trim().toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60)
+        return s || null
+      }
       function resolveBucket(rawName) {
         if (!rawName) return null
         // 1) raw 直接命中
@@ -7849,7 +7855,12 @@ router.post('/:id/report/latex/render', (req, res) => {
         if (SECTION_ALIAS_MAP[norm]) return SECTION_ALIAS_MAP[norm]
         // 4) 兜底:如果是 SECTION_FILL_ORDER 里的标准名,直传
         if (SECTION_FILL_ORDER.includes(norm)) return norm
-        return null   // 完全识别不出 → 丢弃(避免污染)
+        // 5) 2026-06-10(#254 孪生 bug 修复):自定义章节(主题章 / literature_context /
+        //    case study 等)以前 return null 直接丢弃 → PDF 整章缺失(实测一次丢 1.6 万字符)。
+        //    现在以 sanitize 后的自身名作为独立桶直传 —— INSTRUCTIONS.md 是按
+        //    sections/*.md 文件清单动态生成的("Process every section file"),
+        //    Claude 会按文件名生成对应 \section{...},无需额外适配。
+        return sanitizeBucketName(rawName)
       }
 
       // 把 draftSections array 按 bucket 聚合
@@ -7912,9 +7923,30 @@ router.post('/:id/report/latex/render', (req, res) => {
       }
 
       // A2. write sections/<bucket>.md(每桶一个文件,多源 concat with sub-header)
+      // 2026-06-10:桶处理顺序 = **项目真实章节顺序**(custom_sections > journal template >
+      //   fallback,经 resolveBucket 归并、按首现去重)。以前固定遍历 SECTION_FILL_ORDER,
+      //   自定义桶(literature_context / case study / 主题章)永远轮不到 → 整章不进 PDF。
+      //   SECTION_FILL_ORDER 仍作兜底 append(防 buildManuscriptSectionOrder 异常);
+      //   最后再把聚合结果里漏网的桶补上,保证"有内容必 stage"。
+      const bucketOrder = []
+      try {
+        for (const name of buildManuscriptSectionOrder(db, projectId)) {
+          const b = resolveBucket(name)
+          if (b && !bucketOrder.includes(b)) bucketOrder.push(b)
+        }
+      } catch (e) { console.warn('[latex/render BG] buildManuscriptSectionOrder failed, fallback to standard order:', e?.message) }
+      for (const b of SECTION_FILL_ORDER) { if (!bucketOrder.includes(b)) bucketOrder.push(b) }
+      for (const b of Object.keys(draftSectionsByBucket)) { if (!bucketOrder.includes(b)) bucketOrder.push(b) }
+      // title / abstract 锚定队首:项目章节顺序按写作依赖排(abstract 依赖全文所以靠后),
+      // 但填充处理顺序里它们应最先(对应模板 front-matter 槽位)。
+      for (const head of ['abstract', 'title']) {
+        const i = bucketOrder.indexOf(head)
+        if (i > 0) { bucketOrder.splice(i, 1); bucketOrder.unshift(head) }
+      }
+
       const stagedSectionFilenames = []   // 给 INSTRUCTIONS.md 的 sectionFilenames
-      const stagedBuckets = []            // 给 INSTRUCTIONS.md 的处理顺序(保留 SECTION_FILL_ORDER 顺序)
-      for (const bucket of SECTION_FILL_ORDER) {
+      const stagedBuckets = []            // 给 INSTRUCTIONS.md 的处理顺序(项目真实章节顺序)
+      for (const bucket of bucketOrder) {
         const entries = draftSectionsByBucket[bucket]
         if (!entries || entries.length === 0) {
           console.log(`[latex/render BG] skip empty bucket: ${bucket}`)

@@ -254,14 +254,31 @@ export function computePrismaFlow(db, projectId) {
     ).get(projectId)
     recordsUniqueInDb = r?.n || 0
   } catch (e) { _degradedQueries.push('records_unique'); console.warn('[prisma-flow] records_unique count failed:', e.message) }
+  // 2026-06-10 语义修正:duplicates_removed 以前 = identifiedTotal - recordsUniqueInDb(凑差),
+  //   把"声称命中但根本没导出/导入"的缺口也吞进了"去重"——用户在导入页看到的真实去重数
+  //   (records 表 duplicate_of_record_id 标记)和 PRISMA 图永远对不上。
+  //   现在:duplicates_removed = records 表真实标记数;缺口单列 records_not_retrieved
+  //   (PRISMA 2020 "records removed before screening — other reasons / not retrieved")。
+  //   数学仍平衡:identified = duplicates_removed + records_not_retrieved + records_screened。
+  let dupMarkedInDb = 0
+  try {
+    const r = db.prepare(
+      `SELECT COUNT(*) AS n FROM records WHERE project_id = ? AND duplicate_of_record_id IS NOT NULL AND duplicate_of_record_id != ''`
+    ).get(projectId)
+    dupMarkedInDb = r?.n || 0
+  } catch (e) { _degradedQueries.push('records_dup_marked'); console.warn('[prisma-flow] records_dup_marked count failed:', e.message) }
+  const totalRecordsInDb = recordsUniqueInDb + dupMarkedInDb
   // 兜底:records 表为空(早期 phase)时回退老逻辑;否则用 records 真值
   const screenedTotal = recordsUniqueInDb > 0
     ? recordsUniqueInDb
     : Math.max(0, identifiedTotal - dupTotal)
-  // 同步重算 duplicates_removed:差 = identified - 真实唯一论文
   const duplicatesRemovedDerived = recordsUniqueInDb > 0
-    ? Math.max(0, identifiedTotal - recordsUniqueInDb)
+    ? dupMarkedInDb
     : dupTotal
+  // 命中数与实际导入量的缺口(只有锁定检索式声称命中 > 实际导入时才 > 0)
+  const notRetrieved = recordsUniqueInDb > 0
+    ? Math.max(0, identifiedTotal - totalRecordsInDb)
+    : 0
 
   return {
     records_identified: byDb,
@@ -269,6 +286,9 @@ export function computePrismaFlow(db, projectId) {
     records_identified_source: identifiedSource,    // M32-a:'locked_search_strategies' | 'zotero_packages'
     duplicates_removed: duplicatesRemovedDerived,
     duplicates_removed_zotero_metadata: dupTotal,   // 诊断:zotero RDF 自报的 dup 数(可能 ≠ records 表真值)
+    // 声称命中数与实际导入量的缺口(命中 162 但只导入 147 → 15)。
+    // PRISMA 2020 归入 "records removed before screening — other reasons / not retrieved"。
+    records_not_retrieved: notRetrieved,
     records_screened: screenedTotal,
     excluded_title_abstract: taExcluded,
     full_text_assessed: ftAssessed,
@@ -290,6 +310,7 @@ function emptyFlow() {
     records_identified: {},
     records_identified_total: 0,
     duplicates_removed: 0,
+    records_not_retrieved: 0,
     records_screened: 0,
     excluded_title_abstract: 0,
     full_text_assessed: 0,
@@ -355,7 +376,10 @@ export function renderPrismaMermaid(counts) {
     sourceIds.push('S0')
   }
   nodeDecls.push(`  AGG["Records identified from databases<br/><b>(combined n = ${c.records_identified_total})</b>"]`)
-  nodeDecls.push(`  DEDUP["Records after duplicates removed<br/>(n = ${c.records_screened})<br/><i>${c.duplicates_removed} duplicates removed</i>"]`)
+  // 2026-06-10:去重数 = records 表真实标记;命中-导入缺口单列 "not retrieved"(>0 时)
+  const removedParts = [`${c.duplicates_removed} duplicates removed`]
+  if ((c.records_not_retrieved || 0) > 0) removedParts.push(`${c.records_not_retrieved} records not retrieved`)
+  nodeDecls.push(`  DEDUP["Records after duplicates removed<br/>(n = ${c.records_screened})<br/><i>${removedParts.join(' · ')}</i>"]`)
   nodeDecls.push(`  SCR["Records screened<br/>by title/abstract<br/>(n = ${c.records_screened})"]`)
   nodeDecls.push(`  FT["Full-text articles assessed<br/>for eligibility<br/>(n = ${c.full_text_assessed})"]`)
 
