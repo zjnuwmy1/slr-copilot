@@ -148,12 +148,10 @@ Key `.env` variables: `PORT=3001` / `DB_PATH=/var/lib/slr/db/slr.db` / `SESSION_
 
 ## License
 
-Private project. No license is granted. All rights reserved by the project owner.
+Released under the [MIT License](./LICENSE). © 2026 Mingyu
 
 ---
 
 ## Contact
 
 File issues and change requests through this repository.
-
-Co-developed with Claude.

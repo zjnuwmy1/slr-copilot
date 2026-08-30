@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "AI-assisted systematic literature review platform",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "slr": "bin/slr.js"

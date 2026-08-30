@@ -148,12 +148,10 @@ certbot --nginx -d slr.yourai.asia --redirect
 
 ## License
 
-私人项目,无 license。代码版权归项目所有者。
+本项目采用 [MIT 协议](./LICENSE) 开源。© 2026 Mingyu
 
 ---
 
 ## 联系
 
 Issues / 改动建议直接通过本仓库的 issue 反馈。
-
-Co-developed with Claude.
